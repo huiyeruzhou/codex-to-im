@@ -1508,6 +1508,7 @@ function renderHtml(): string {
                   <div class="command-item"><div class="command-col-command"><code>直接发送文本</code></div><div class="command-col-original">—</div><div class="command-col-desc">继续当前已绑定会话；未绑定时会自动进入临时草稿线程。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/his</code></div><div class="command-col-original"><code>/history</code></div><div class="command-col-desc">查看最近 N 条原始消息。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/his raw</code></div><div class="command-col-original"><code>/history raw</code></div><div class="command-col-desc">查看最近 N 条原始消息（兼容别名）。</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>/his json</code></div><div class="command-col-original"><code>/history json</code></div><div class="command-col-desc">导出最近 N 条原始消息为 JSON 文件并发送。</div></div>
                 </div>
               </section>
 

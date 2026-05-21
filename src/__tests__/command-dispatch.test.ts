@@ -128,6 +128,41 @@ describe('command-dispatch', () => {
     assert.match(response, /第一条助手回复/);
   });
 
+  it('exports /history json as an attachment', async () => {
+    const store = initTestContext();
+    const sent: any[] = [];
+    const adapter: any = {
+      channelType: 'feishu-default',
+      provider: 'feishu',
+      send: async (message: any) => {
+        sent.push(message);
+        return { ok: true, messageId: `reply-${sent.length}` };
+      },
+    };
+    const address = { channelType: 'feishu-default', chatId: 'chat-history-json' } as const;
+    const binding = router.createBinding(address, 'D:\\workspace\\history-json');
+    store.addMessage(binding.codepilotSessionId, 'user', '第一条用户消息');
+    store.addMessage(binding.codepilotSessionId, 'assistant', '第一条助手回复');
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/history json',
+        messageId: 'incoming-history-json',
+      } as any,
+      '/history json',
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      },
+    );
+
+    assert.ok(sent.some((m) => Array.isArray(m.attachments) && m.attachments.length === 1));
+    assert.match(String(sent.at(-1)?.text || ''), /已发送历史 JSON：/);
+  });
+
   it('updates session sandbox and network overrides with slash commands', async () => {
     const store = initTestContext();
     const sent: string[] = [];

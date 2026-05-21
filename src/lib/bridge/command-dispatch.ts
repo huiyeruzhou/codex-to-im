@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getOrCreateDraftSession } from '../../internal-sessions.js';
 import { isCliOnlyCodexModel, readConfiguredCodexModel } from '../../codex-models.js';
+import { CTI_HOME } from '../../config.js';
 import {
   buildHealthCommandResponse,
   buildHealthListResponse,
@@ -810,6 +811,18 @@ export async function handleBridgeCommand(
         break;
       }
 
+      const historyArg = args.trim().toLowerCase();
+      if (historyArg && historyArg !== 'raw' && historyArg !== 'json' && historyArg !== 'file') {
+        response = [
+          '用法：/his [raw|json]',
+          '示例：',
+          '- /his',
+          '- /his raw',
+          '- /his json',
+        ].join('\n');
+        break;
+      }
+
       const limit = getHistoryMessageLimit();
       const session = store.getSession(currentBinding.codepilotSessionId);
       const desktopThreadId = getExplicitDesktopThreadId(session);
@@ -823,17 +836,63 @@ export async function handleBridgeCommand(
         break;
       }
       const threadTitle = getDesktopThreadTitle(desktopThreadId);
+      const messageSource = desktopMessages.length > 0 ? '桌面线程' : 'Bridge 缓存';
+
+      if (historyArg === 'json' || historyArg === 'file') {
+        const exportedAt = new Date().toISOString();
+        const payload = {
+          exportedAt,
+          sessionId: currentBinding.codepilotSessionId,
+          threadTitle: threadTitle || getSessionDisplayName(session, currentBinding.workingDirectory),
+          source: messageSource,
+          limit,
+          messages,
+        };
+
+        const exportDir = path.join(CTI_HOME, 'data', 'exports');
+        fs.mkdirSync(exportDir, { recursive: true });
+        const safeStem = (payload.threadTitle || 'history')
+          .replace(/[^\p{L}\p{N}_-]+/gu, '_')
+          .replace(/^_+|_+$/g, '')
+          .slice(0, 48) || 'history';
+        const safeTime = exportedAt.replace(/[:.]/g, '-');
+        const fileName = `${safeStem}-${safeTime}.json`;
+        const filePath = path.join(exportDir, fileName);
+
+        try {
+          fs.writeFileSync(filePath, JSON.stringify(payload, null, 2), 'utf-8');
+          const attachment: OutboundAttachment = {
+            kind: 'file',
+            path: filePath,
+            name: fileName,
+          };
+          const result = await deliverResponse(
+            adapter,
+            msg.address,
+            '',
+            currentBinding.codepilotSessionId,
+            msg.messageId,
+            [attachment],
+          );
+          response = result.ok ? `已发送历史 JSON：${fileName}` : `发送失败：${result.error || '未知错误'}`;
+        } catch (error) {
+          response = `导出失败：${error instanceof Error ? error.message : String(error)}`;
+        } finally {
+          try { fs.unlinkSync(filePath); } catch { /* best effort */ }
+        }
+        break;
+      }
 
       const header = buildCommandFields(
         '最近对话（raw）',
         [
           ['标题', threadTitle || getSessionDisplayName(session, currentBinding.workingDirectory)],
-          ['来源', desktopMessages.length > 0 ? '桌面线程' : 'Bridge 缓存'],
+          ['来源', messageSource],
           ['返回条数', `${messages.length} / 配置 ${limit}`],
         ],
-        args === 'raw'
+        historyArg === 'raw'
           ? []
-          : ['`/history` 当前直接返回原始记录；`/history raw` 仍可继续使用。'],
+          : ['`/his` 查看最近原始记录；`/his json` 可导出为 JSON 文件。'],
         responseParseMode === 'Markdown',
       );
       const body = messages.map((message, index) => {
@@ -1050,6 +1109,7 @@ export async function handleBridgeCommand(
         '- `/n proj1` 在默认工作空间下新建项目会话',
         '- 直接发文本：继续当前会话；未绑定时进入临时草稿线程',
         '- `/his` 最近原始记录',
+        '- `/his json` 导出最近原始记录为 JSON 文件并发送',
         '',
         '**设置**',
         '- `/m` 查看模式；可用 `code | plan | ask`',
@@ -1064,6 +1124,7 @@ export async function handleBridgeCommand(
         '',
         '**其它**',
         '- `/his raw` 最近原始记录（兼容别名）',
+        '- `/his json` 导出最近原始记录 JSON（兼容别名）',
         '- `/perm allow|allow_session|deny <id>` 或 `1 / 2 / 3` 处理权限',
         '- `/cat <path> [start] [end]` 打印文件内容（默认前 200 行）',
         '- `/file <path>` 直接发送本地文件',

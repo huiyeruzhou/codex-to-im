@@ -769,6 +769,11 @@ export async function runInteractiveMessage(
           taskState.mirrorSuppressionId = deps.beginMirrorSuppression(binding.codepilotSessionId, preparedPrompt);
         }
       },
+      {
+        streamPreview: {
+          includeToolSnippets: !hasStreamingCards,
+        },
+      },
     );
     let raced: {
       kind: 'process';

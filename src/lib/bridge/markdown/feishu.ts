@@ -135,7 +135,7 @@ export function buildToolProgressMarkdown(
   for (const tool of slice) {
     const statusLabel = tool.status === 'running' ? '运行中' : tool.status === 'error' ? '异常' : '完成';
     const icon = tool.status === 'running' ? '🔄' : tool.status === 'error' ? '❌' : '✅';
-    const header = `${icon} \`${tool.name || 'tool'}\`（${statusLabel}）`;
+    const header = `#### ${icon} \`${tool.name || 'tool'}\`（${statusLabel}）`;
     const details: string[] = [];
     const isEditTool = /^edit$/i.test(tool.name || '');
     const isBashTool = /^(bash|shell_command)$/i.test(tool.name || '');

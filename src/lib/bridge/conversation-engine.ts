@@ -176,11 +176,15 @@ function summarizeToolInputForInline(input: unknown): string {
 
 function buildInlineToolBlock(params: {
   name: string;
+  status?: 'running' | 'complete' | 'error';
   input?: unknown;
   output?: string;
   isError?: boolean;
 }): string {
-  const title = `${params.isError ? '❌' : '🔧'} \`${params.name || 'tool'}\``;
+  const status = params.status || (params.isError ? 'error' : (typeof params.output === 'string' ? 'complete' : 'running'));
+  const statusLabel = status === 'running' ? '运行中' : status === 'error' ? '异常' : '完成';
+  const icon = status === 'running' ? '🔧' : status === 'error' ? '❌' : '✅';
+  const title = `#### ${icon} \`${params.name || 'tool'}\`（${statusLabel}）`;
   const sections: string[] = [title];
 
   const isEditTool = /^edit$/i.test(params.name || '');
@@ -221,6 +225,11 @@ export async function processMessage(
   onTaskEvent?: OnTaskEvent,
   onStatusNote?: OnStatusNote,
   onPromptPrepared?: (promptText: string) => void,
+  options?: {
+    streamPreview?: {
+      includeToolSnippets?: boolean;
+    };
+  },
 ): Promise<ConversationResult> {
   const { store, llm } = getBridgeContext();
   const sessionId = binding.codepilotSessionId;
@@ -366,6 +375,7 @@ export async function processMessage(
       onToolEvent,
       onTaskEvent,
       onStatusNote,
+      options,
     );
   } finally {
     clearInterval(renewalInterval);
@@ -386,6 +396,11 @@ async function consumeStream(
   onToolEvent?: OnToolEvent,
   onTaskEvent?: OnTaskEvent,
   onStatusNote?: OnStatusNote,
+  options?: {
+    streamPreview?: {
+      includeToolSnippets?: boolean;
+    };
+  },
 ): Promise<ConversationResult> {
   const { store } = getBridgeContext();
   const contentBlocks: MessageContentBlock[] = [];
@@ -393,6 +408,7 @@ async function consumeStream(
   /** Monotonically accumulated text for streaming preview — never resets on tool_use. */
   let previewText = '';
   let separateNextPreviewText = false;
+  const includeToolSnippets = options?.streamPreview?.includeToolSnippets !== false;
   let tokenUsage: TokenUsage | null = null;
   let hasError = false;
   let errorMessage = '';
@@ -434,8 +450,8 @@ async function consumeStream(
                 onToolEvent(toolData.id, toolData.name, 'running', { input: toolData.input });
               } catch { /* non-critical */ }
             }
-            if (onPartialText) {
-              const snippet = buildInlineToolBlock({ name: toolData.name, input: toolData.input });
+            if (onPartialText && includeToolSnippets) {
+              const snippet = buildInlineToolBlock({ name: toolData.name, status: 'running', input: toolData.input });
               previewText = appendStreamPreviewChunk(previewText, snippet, true);
               separateNextPreviewText = false;
               try { onPartialText(previewText); } catch { /* non-critical */ }
@@ -473,13 +489,13 @@ async function consumeStream(
                 );
               } catch { /* non-critical */ }
             }
-            if (onPartialText) {
+            if (onPartialText && includeToolSnippets) {
               const prior = toolPreview.get(resultData.tool_use_id);
               const snippet = buildInlineToolBlock({
                 name: prior?.name || 'tool',
-                input: prior?.input,
                 output: String(resultData.content || ''),
                 isError: Boolean(resultData.is_error),
+                status: resultData.is_error ? 'error' : 'complete',
               });
               previewText = appendStreamPreviewChunk(previewText, snippet, true);
               separateNextPreviewText = false;
