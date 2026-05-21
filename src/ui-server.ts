@@ -1692,6 +1692,7 @@ function renderHtml(): string {
         activeSessionRenameTargetKey: '',
         activeSessionConfigTargetKey: '',
         sourceDisplayByTargetKey: {},
+        channelEditorDrafts: {},
         weixinLoginPollers: {},
         pageRefreshTimer: null,
         pageRefreshInFlight: {},
@@ -2182,12 +2183,54 @@ function renderHtml(): string {
         if (state.channelDraft) {
           channels.push(state.channelDraft);
         }
-        return channels;
+        return channels.map((channel) => applyChannelEditorDraft(channel));
       }
 
       function getChannelById(channelId) {
-        if (state.channelDraft && state.channelDraft.id === channelId) return state.channelDraft;
-        return configuredChannels().find((channel) => channel.id === channelId) || null;
+        const channel = state.channelDraft && state.channelDraft.id === channelId
+          ? state.channelDraft
+          : configuredChannels().find((item) => item.id === channelId) || null;
+        return channel ? applyChannelEditorDraft(channel) : null;
+      }
+
+      function applyChannelEditorDraft(channel) {
+        if (!channel || !channel.id) return channel;
+        const draft = state.channelEditorDrafts[channel.id];
+        if (!draft || draft.provider !== channel.provider) return channel;
+
+        const next = Object.assign({}, channel, {
+          alias: typeof draft.alias === 'string' ? draft.alias : channel.alias,
+          enabled: typeof draft.enabled === 'boolean' ? draft.enabled : channel.enabled,
+        });
+
+        if (channel.provider === 'feishu') {
+          next.config = Object.assign({}, channel.config || {}, {
+            appId: typeof draft.appId === 'string' ? draft.appId : (channel.config || {}).appId,
+            appSecret: typeof draft.appSecret === 'string' ? draft.appSecret : (channel.config || {}).appSecret,
+            site: typeof draft.site === 'string' ? draft.site : (channel.config || {}).site,
+            allowedUsers: typeof draft.allowedUsers === 'string'
+              ? draft.allowedUsers.split(',').map((item) => item.trim()).filter(Boolean)
+              : (channel.config || {}).allowedUsers,
+            streamingEnabled: typeof draft.streamingEnabled === 'boolean'
+              ? draft.streamingEnabled
+              : (channel.config || {}).streamingEnabled,
+            feedbackMarkdownEnabled: typeof draft.feedbackMarkdownEnabled === 'boolean'
+              ? draft.feedbackMarkdownEnabled
+              : (channel.config || {}).feedbackMarkdownEnabled,
+          });
+          return next;
+        }
+
+        next.config = Object.assign({}, channel.config || {}, {
+          accountId: typeof draft.accountId === 'string' ? draft.accountId : (channel.config || {}).accountId,
+          baseUrl: typeof draft.baseUrl === 'string' ? draft.baseUrl : (channel.config || {}).baseUrl,
+          cdnBaseUrl: typeof draft.cdnBaseUrl === 'string' ? draft.cdnBaseUrl : (channel.config || {}).cdnBaseUrl,
+          mediaEnabled: typeof draft.mediaEnabled === 'boolean' ? draft.mediaEnabled : (channel.config || {}).mediaEnabled,
+          feedbackMarkdownEnabled: typeof draft.feedbackMarkdownEnabled === 'boolean'
+            ? draft.feedbackMarkdownEnabled
+            : (channel.config || {}).feedbackMarkdownEnabled,
+        });
+        return next;
       }
 
       function adapterStatuses() {
@@ -2389,14 +2432,11 @@ function renderHtml(): string {
       }
 
       function renderSessionChannelControl(session) {
-        const bindings = state.bindings || [];
-        if (!bindings.length) return '';
-
         const targetKey = sessionTargetKey(session);
         return iconButton(
           'open-session-channel-modal',
           'swap',
-          '转换通道',
+          '切换通道',
           'data-target-key="' + escapeHtml(targetKey) + '"',
           'swap-icon'
         );
@@ -3207,9 +3247,7 @@ function renderHtml(): string {
           throw new Error('当前没有选中的会话。');
         }
         const bindings = state.bindings || [];
-        if (!bindings.length) {
-          throw new Error('当前没有可指定的通道绑定。');
-        }
+        const channels = visibleChannels().filter((channel) => !String(channel.id || '').startsWith('__draft__:'));
 
         const session = findSessionSummaryByTargetKey(targetKey);
         const modal = document.getElementById('sessionChannelModal');
@@ -3217,7 +3255,8 @@ function renderHtml(): string {
         const subtitle = document.getElementById('sessionChannelModalSubtitle');
         modal.dataset.targetKey = targetKey;
         subtitle.textContent = '目标会话：' + ((session && session.title) ? session.title : targetKey);
-        list.innerHTML = bindings.map((binding) => {
+
+        const bindingItems = bindings.map((binding) => {
           const isCurrent = binding.currentTargetKey === targetKey;
           const currentLabel = binding.currentTargetLabel || binding.currentSessionName || binding.currentSessionId || '';
           return ''
@@ -3225,7 +3264,30 @@ function renderHtml(): string {
             +   '<span class="modal-list-title">' + escapeHtml(formatBindingAccount(binding)) + '</span>'
             +   '<span class="modal-list-meta">' + escapeHtml(isCurrent ? '当前已绑定到此会话' : (currentLabel ? '当前：' + currentLabel : '未绑定会话')) + '</span>'
             + '</button>';
-        }).join('');
+        });
+
+        const unconnectedChannels = channels
+          .filter((channel) => !bindings.some((binding) => binding.channelType === channel.id))
+          .map((channel) => (
+            ''
+              + '<button type="button" class="modal-list-item" disabled>'
+              +   '<span class="modal-list-title">' + escapeHtml(channel.alias) + ' · ' + escapeHtml(providerLabel(channel.provider)) + '</span>'
+              +   '<span class="modal-list-meta">该通道还没有已连接聊天。先让机器人收到一条消息，再回来切换到这个通道。</span>'
+              + '</button>'
+          ));
+
+        if (bindingItems.length === 0 && unconnectedChannels.length === 0) {
+          list.innerHTML = '<div class="binding-empty">当前没有可用通道实例。请先创建并保存一个通道。</div>';
+        } else if (bindingItems.length === 0) {
+          list.innerHTML = ''
+            + '<div class="binding-empty">当前没有已连接聊天的通道，暂时不能直接切换。请先让目标机器人收到一条消息建立绑定。</div>'
+            + unconnectedChannels.join('');
+        } else {
+          list.innerHTML = bindingItems.join('')
+            + (unconnectedChannels.length > 0
+              ? '<div class="binding-empty">以下通道尚未连接聊天，暂时不能切换：</div>' + unconnectedChannels.join('')
+              : '');
+        }
         modal.hidden = false;
       }
 
@@ -3412,11 +3474,20 @@ function renderHtml(): string {
         return payload;
       }
 
+      function syncActiveChannelDraftFromEditor() {
+        const channel = getChannelById(state.activeChannelId);
+        if (!channel) return;
+        if (!document.getElementById('channelAliasInput')) return;
+        state.channelEditorDrafts[channel.id] = currentChannelEditorPayload(channel);
+      }
+
       async function saveChannel(channel) {
         const result = await api('/api/channels/save', {
           method: 'POST',
           body: JSON.stringify(currentChannelEditorPayload(channel)),
         });
+        delete state.channelEditorDrafts[channel.id];
+        delete state.channelEditorDrafts[result.channel.id];
         state.channelDraft = null;
         fillForm(result.config);
         renderBindings(result);
@@ -3426,6 +3497,7 @@ function renderHtml(): string {
 
       async function deleteCurrentChannel(channel) {
         if (String(channel.id || '').startsWith('__draft__:')) {
+          delete state.channelEditorDrafts[channel.id];
           state.channelDraft = null;
           state.activeChannelId = '';
           renderChannelsWorkspace();
@@ -3437,6 +3509,7 @@ function renderHtml(): string {
           method: 'POST',
           body: JSON.stringify({ channelId: channel.id }),
         });
+        delete state.channelEditorDrafts[channel.id];
         state.channelDraft = null;
         fillForm(result.config);
         renderBindings(result);
@@ -3769,6 +3842,12 @@ function renderHtml(): string {
 
       document.getElementById('channelEditor').addEventListener('click', (event) => {
         handleChannelEditorAction(event);
+      });
+      document.getElementById('channelEditor').addEventListener('input', () => {
+        syncActiveChannelDraftFromEditor();
+      });
+      document.getElementById('channelEditor').addEventListener('change', () => {
+        syncActiveChannelDraftFromEditor();
       });
 
       async function handleSessionListAction(event) {

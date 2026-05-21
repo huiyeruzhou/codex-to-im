@@ -247,6 +247,67 @@ export class FeishuAdapter extends BaseChannelAdapter {
     return streamKey?.trim() || chatId;
   }
 
+  private previewLogValue(value: unknown, maxLength = 240): string {
+    let raw = '';
+    if (typeof value === 'string') {
+      raw = value;
+    } else {
+      try {
+        raw = JSON.stringify(value);
+      } catch {
+        raw = String(value);
+      }
+    }
+    const normalized = raw.replace(/\s+/g, ' ').trim();
+    if (normalized.length <= maxLength) return normalized;
+    return `${normalized.slice(0, maxLength)}...`;
+  }
+
+  private summarizeSenderIds(sender: FeishuMessageEventData['sender']): string[] {
+    return [
+      sender.sender_id?.open_id,
+      sender.sender_id?.user_id,
+      sender.sender_id?.union_id,
+    ].filter((value): value is string => Boolean(value));
+  }
+
+  private logIncomingMessageEvent(data: FeishuMessageEventData): void {
+    const mentions = Array.isArray(data.message.mentions)
+      ? data.message.mentions.map((mention) =>
+        mention.id?.open_id || mention.id?.user_id || mention.id?.union_id || mention.name || mention.key)
+      : [];
+    console.log('[feishu-adapter] Incoming message event:', {
+      messageId: data.message.message_id,
+      chatId: data.message.chat_id,
+      chatType: data.message.chat_type,
+      messageType: data.message.message_type,
+      senderType: data.sender.sender_type,
+      senderIds: this.summarizeSenderIds(data.sender),
+      mentionCount: mentions.length,
+      mentions,
+      createTime: data.message.create_time,
+      rawContentPreview: this.previewLogValue(data.message.content),
+    });
+  }
+
+  private logQueuedInboundMessage(params: {
+    messageId: string;
+    chatId: string;
+    messageType: string;
+    text: string;
+    attachmentCount: number;
+    callbackData?: string;
+  }): void {
+    console.log('[feishu-adapter] Enqueued inbound message:', {
+      messageId: params.messageId,
+      chatId: params.chatId,
+      messageType: params.messageType,
+      attachmentCount: params.attachmentCount,
+      callbackData: params.callbackData || '',
+      textPreview: this.previewLogValue(params.text),
+    });
+  }
+
   // ── Lifecycle ───────────────────────────────────────────────
 
   async start(): Promise<void> {
@@ -408,6 +469,13 @@ export class FeishuAdapter extends BaseChannelAdapter {
       const messageId = event?.context?.open_message_id || event?.open_message_id || '';
       const userId = event?.operator?.open_id || event?.open_id || '';
 
+      console.log('[feishu-adapter] Incoming card action event:', {
+        chatId,
+        messageId,
+        userId,
+        callbackData: this.previewLogValue(callbackData),
+      });
+
       if (!chatId) return FALLBACK_TOAST;
 
       const callbackMsg: import('../types.js').InboundMessage = {
@@ -425,6 +493,14 @@ export class FeishuAdapter extends BaseChannelAdapter {
         callbackMessageId: messageId,
       };
       this.enqueueInboundMessage(callbackMsg);
+      this.logQueuedInboundMessage({
+        messageId: callbackMsg.messageId,
+        chatId,
+        messageType: 'card.action.trigger',
+        text: callbackMsg.text,
+        attachmentCount: 0,
+        callbackData,
+      });
 
       return { toast: { type: 'info' as const, content: '已收到，正在处理...' } };
     } catch (err) {
@@ -1570,6 +1646,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
   // ── Incoming event handler ──────────────────────────────────
 
   private async handleIncomingEvent(data: FeishuMessageEventData): Promise<void> {
+    this.logIncomingMessageEvent(data);
     try {
       await this.processIncomingEvent(data);
     } catch (err) {
@@ -1781,6 +1858,13 @@ export class FeishuAdapter extends BaseChannelAdapter {
     } catch { /* best effort */ }
 
     this.enqueueInboundMessage(inbound);
+    this.logQueuedInboundMessage({
+      messageId: inbound.messageId,
+      chatId,
+      messageType,
+      text: inbound.text,
+      attachmentCount: attachments.length,
+    });
   }
 
   // ── Content parsing ─────────────────────────────────────────

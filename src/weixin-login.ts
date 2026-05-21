@@ -66,6 +66,7 @@ export function buildQrHtml(qrSvg: string): string {
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="refresh" content="5" />
     <title>Codex-to-IM WeChat Login</title>
     <style>
       :root { color-scheme: light; }
@@ -130,7 +131,7 @@ export function buildQrHtml(qrSvg: string): string {
       <div class="card">
         <h1>微信扫码登录 Codex-to-IM</h1>
         <p>请用手机微信扫描下面的二维码，并在手机上确认登录授权。</p>
-        <p class="muted">如果二维码过期，CLI 会自动刷新这个页面内容；如果浏览器没有更新，请手动刷新一次。</p>
+        <p class="muted">如果二维码过期，CLI 会更新当前 HTML 文件；页面每 5 秒会自动刷新一次以加载最新二维码。</p>
         <div class="qr">
           <div id="qrcode">${qrSvg}</div>
         </div>
@@ -472,8 +473,10 @@ async function createRefreshedSession(previous: LoginSession, baseUrl?: string):
 async function refreshCliSession(previous: LoginSession, baseUrl?: string): Promise<LoginSession> {
   const next = await createRefreshedSession(previous, baseUrl);
   await writeQrHtml(next);
-  openQrHtml();
-  console.log(`[weixin-login] QR code refreshed (${next.refreshCount}/${MAX_REFRESHES})`);
+  console.log(
+    `[weixin-login] QR code refreshed (${next.refreshCount}/${MAX_REFRESHES}). `
+      + 'Updated the existing login page without reopening the browser window.',
+  );
   return next;
 }
 
