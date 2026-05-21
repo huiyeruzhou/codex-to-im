@@ -172,6 +172,7 @@ export async function processMessage(
     const workDir = binding.workingDirectory || session?.working_directory || '';
     const sandboxMode = normalizeSandboxMode(store.getSetting('bridge_codex_sandbox_mode'));
     const modelReasoningEffort = resolveReasoningEffort(store, session);
+    const skipGitRepoCheck = (store.getSetting('bridge_codex_skip_git_repo_check') || '').toLowerCase() === 'true';
 
     // Save user message — persist file attachments to disk using the same
     // <!--files:JSON--> format as the desktop chat route, so the UI can render them.
@@ -256,6 +257,7 @@ export async function processMessage(
       forceModel: !binding.sdkSessionId && Boolean(effectiveModel),
       sandboxMode,
       modelReasoningEffort,
+      skipGitRepoCheck,
       systemPrompt: session?.system_prompt || undefined,
       workingDirectory: workDir || undefined,
       abortController,

@@ -707,7 +707,7 @@ describe('CodexProvider', () => {
     }
   });
 
-  it('retries with fresh thread when resume fails before any events', async () => {
+  it('does not start a fresh thread when resume fails before any events', async () => {
     const { CodexProvider } = await import('../codex-provider.js');
     const { PendingPermissions } = await import('../permission-gateway.js');
     const provider = new CodexProvider(new PendingPermissions());
@@ -719,14 +719,6 @@ describe('CodexProvider', () => {
         throw new Error('resuming session with different model');
       },
     };
-    const freshThread = {
-      runStreamed: () => ({
-        events: (async function* () {
-          yield { type: 'turn.completed', usage: { input_tokens: 2, output_tokens: 3, cached_input_tokens: 0 } };
-        })(),
-      }),
-    };
-
     (provider as any).sdk = { Codex: class { constructor() {} } };
     (provider as any).codex = {
       resumeThread: () => {
@@ -735,7 +727,7 @@ describe('CodexProvider', () => {
       },
       startThread: () => {
         startCalls += 1;
-        return freshThread;
+        throw new Error('startThread should not be called');
       },
     };
 
@@ -752,9 +744,10 @@ describe('CodexProvider', () => {
     const resultEvent = events.find(e => e.type === 'result');
 
     assert.equal(resumeCalls, 1, 'Should attempt resume once');
-    assert.equal(startCalls, 1, 'Should fall back to a fresh thread');
-    assert.ok(!errorEvent, 'Retry success should not emit error');
-    assert.ok(resultEvent, 'Retry success should emit result');
+    assert.equal(startCalls, 0, 'Should not fall back to a fresh thread');
+    assert.ok(errorEvent, 'Resume failure should emit error');
+    assert.ok(errorEvent!.data.includes('different model'));
+    assert.ok(!resultEvent, 'Resume failure should not emit result');
   });
 });
 
@@ -965,6 +958,7 @@ describe('CodexProvider image input', () => {
 
     assert.equal(capturedStartOptions?.sandboxMode, 'danger-full-access');
     assert.equal(capturedStartOptions?.modelReasoningEffort, 'xhigh');
+    assert.equal(capturedStartOptions?.approvalPolicy, 'on-request');
   });
 });
 
@@ -999,7 +993,9 @@ describe('CodexProvider error events', () => {
     const events = parseSSEChunks(chunks);
     const errorEvent = events.find(e => e.type === 'error');
     assert.ok(errorEvent, 'Should emit an error event');
-    assert.equal(errorEvent!.data, 'Rate limit exceeded');
+    assert.match(errorEvent!.data, /Rate limit exceeded/);
+    assert.match(errorEvent!.data, /phase: turn\.failed/);
+    assert.match(errorEvent!.data, /bridge_session_id: err-session-1/);
   });
 
   it('normalizes reconnect-style turn failures to a user-visible resume hint', async () => {
@@ -1272,7 +1268,9 @@ describe('CodexProvider error events', () => {
     const events = parseSSEChunks(chunks);
     const errorEvent = events.find(e => e.type === 'error');
     assert.ok(errorEvent, 'Should emit an error event');
-    assert.equal(errorEvent!.data, 'Connection lost');
+    assert.match(errorEvent!.data, /Connection lost/);
+    assert.match(errorEvent!.data, /phase: thread\.error/);
+    assert.match(errorEvent!.data, /bridge_session_id: err-session-2/);
   });
 
   it('falls back to default message when message field is absent', async () => {
@@ -1303,7 +1301,7 @@ describe('CodexProvider error events', () => {
     const events = parseSSEChunks(chunks);
     const errorEvent = events.find(e => e.type === 'error');
     assert.ok(errorEvent);
-    assert.equal(errorEvent!.data, 'Turn failed');
+    assert.match(errorEvent!.data, /Turn failed/);
+    assert.match(errorEvent!.data, /phase: turn\.failed/);
   });
 });
-

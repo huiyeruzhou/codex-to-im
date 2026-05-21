@@ -43,14 +43,14 @@ type ThreadInstance = any;
 
 /**
  * Map bridge permission modes to Codex approval policies.
- * - 'acceptEdits' (code mode) → 'on-failure' (auto-approve most things)
+ * - 'acceptEdits' (code mode) → 'on-request' (allow IM users to approve escalations)
  * - 'plan' → 'on-request' (ask before executing)
  * - 'default' (ask mode) → 'on-request'
  */
 function toApprovalPolicy(permissionMode?: string): string {
   switch (permissionMode) {
     case 'never': return 'never';
-    case 'acceptEdits': return 'on-failure';
+    case 'acceptEdits': return 'on-request';
     case 'plan': return 'on-request';
     case 'default': return 'on-request';
     default: return 'on-request';
@@ -58,17 +58,8 @@ function toApprovalPolicy(permissionMode?: string): string {
 }
 
 /** Allow Codex to run outside a trusted Git repository when explicitly enabled. */
-function shouldSkipGitRepoCheck(): boolean {
-  return process.env.CTI_CODEX_SKIP_GIT_REPO_CHECK === 'true';
-}
-
-function shouldRetryFreshThread(message: string): boolean {
-  const lower = message.toLowerCase();
-  return (
-    lower.includes('resuming session with different model') ||
-    lower.includes('no such session') ||
-    (lower.includes('resume') && lower.includes('session'))
-  );
+function shouldSkipGitRepoCheck(params: StreamChatParams): boolean {
+  return params.skipGitRepoCheck === true || process.env.CTI_CODEX_SKIP_GIT_REPO_CHECK === 'true';
 }
 
 function normalizeCodexErrorMessage(message: string | null | undefined): string {
@@ -86,12 +77,51 @@ function normalizeCodexErrorMessage(message: string | null | undefined): string 
   return trimmed;
 }
 
+interface CodexErrorContext {
+  phase: string;
+  bridgeSessionId: string;
+  codexThreadId?: string;
+  workingDirectory?: string;
+  sandboxMode?: string;
+  approvalPolicy?: string;
+  permissionMode?: string;
+}
+
+function formatCodexErrorMessage(
+  message: string | null | undefined,
+  context?: CodexErrorContext,
+): string {
+  const normalized = normalizeCodexErrorMessage(message);
+  if (!context) return normalized;
+
+  return [
+    normalized,
+    '',
+    'Codex context:',
+    `- phase: ${context.phase}`,
+    `- bridge_session_id: ${context.bridgeSessionId}`,
+    context.codexThreadId ? `- codex_thread_id: ${context.codexThreadId}` : undefined,
+    context.workingDirectory ? `- cwd: ${context.workingDirectory}` : undefined,
+    context.sandboxMode ? `- sandbox_mode: ${context.sandboxMode}` : undefined,
+    context.approvalPolicy ? `- approval_policy: ${context.approvalPolicy}` : undefined,
+    context.permissionMode ? `- permission_mode: ${context.permissionMode}` : undefined,
+  ].filter(Boolean).join('\n');
+}
+
 function getTerminalDrainTimeoutMs(): number {
   const configured = parseInt(process.env.CTI_CODEX_TERMINAL_DRAIN_TIMEOUT_MS || '', 10);
   if (Number.isFinite(configured) && configured >= 10) {
     return configured;
   }
   return DEFAULT_TERMINAL_DRAIN_TIMEOUT_MS;
+}
+
+function buildCodexChildEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined) env[key] = value;
+  }
+  return env;
 }
 
 function isAbortError(error: unknown): boolean {
@@ -201,6 +231,7 @@ export class CodexProvider implements LLMProvider {
 
     const CodexClass = this.sdk.Codex;
     this.codex = new CodexClass({
+      env: buildCodexChildEnv(),
       ...(apiKey ? { apiKey } : {}),
       ...(baseUrl ? { baseUrl } : {}),
     });
@@ -220,7 +251,7 @@ export class CodexProvider implements LLMProvider {
 
             // Resolve or create thread
             const inMemoryThreadId = self.threadIds.get(params.sessionId);
-            let savedThreadId = inMemoryThreadId || params.sdkSessionId || undefined;
+            const savedThreadId = inMemoryThreadId || params.sdkSessionId || undefined;
 
             const approvalPolicy = toApprovalPolicy(params.permissionMode);
             const sandboxMode = normalizeSandboxMode(params.sandboxMode) as CodexSandboxMode;
@@ -229,11 +260,20 @@ export class CodexProvider implements LLMProvider {
             const threadOptions: Record<string, unknown> = {
               ...(params.forceModel && params.model ? { model: params.model } : {}),
               ...(params.workingDirectory ? { workingDirectory: params.workingDirectory } : {}),
-              ...(shouldSkipGitRepoCheck() ? { skipGitRepoCheck: true } : {}),
+              ...(shouldSkipGitRepoCheck(params) ? { skipGitRepoCheck: true } : {}),
               sandboxMode,
               ...(modelReasoningEffort ? { modelReasoningEffort } : {}),
               approvalPolicy,
             };
+            const buildErrorContext = (phase: string): CodexErrorContext => ({
+              phase,
+              bridgeSessionId: params.sessionId,
+              codexThreadId: self.threadIds.get(params.sessionId) || savedThreadId,
+              workingDirectory: params.workingDirectory,
+              sandboxMode,
+              approvalPolicy,
+              permissionMode: params.permissionMode,
+            });
 
             // Build input: Codex SDK UserInput supports { type: "text" } and
             // { type: "local_image", path: string }. We write base64 data to
@@ -264,22 +304,16 @@ export class CodexProvider implements LLMProvider {
               input = params.prompt;
             }
 
-            let retryFresh = false;
             const emittedToolStarts = new Set<string>();
 
             while (true) {
               let thread: ThreadInstance;
               if (savedThreadId) {
-                try {
-                  thread = codex.resumeThread(savedThreadId, threadOptions);
-                } catch {
-                  thread = codex.startThread(threadOptions);
-                }
+                thread = codex.resumeThread(savedThreadId, threadOptions);
               } else {
                 thread = codex.startThread(threadOptions);
               }
 
-              let sawAnyEvent = false;
               let sawTerminalEvent = false;
               let sawCompletedAssistantContent = false;
               const runAbortController = new AbortController();
@@ -315,7 +349,6 @@ export class CodexProvider implements LLMProvider {
                 });
 
                 for await (const event of events as AsyncGenerator<ThreadEvent>) {
-                  sawAnyEvent = true;
                   if (params.abortController?.signal.aborted) {
                     break;
                   }
@@ -381,7 +414,10 @@ export class CodexProvider implements LLMProvider {
                     case 'turn.failed': {
                       const error = (event as { error?: { message?: string } }).error?.message;
                       self.clearCachedThreadId(params.sessionId);
-                      controller.enqueue(sseEvent('error', normalizeCodexErrorMessage(error || 'Turn failed')));
+                      controller.enqueue(sseEvent('error', formatCodexErrorMessage(
+                        error || 'Turn failed',
+                        buildErrorContext('turn.failed'),
+                      )));
                       sawTerminalEvent = true;
                       break;
                     }
@@ -389,7 +425,10 @@ export class CodexProvider implements LLMProvider {
                     case 'error': {
                       const error = (event as { message?: string }).message;
                       self.clearCachedThreadId(params.sessionId);
-                      controller.enqueue(sseEvent('error', normalizeCodexErrorMessage(error || 'Thread error')));
+                      controller.enqueue(sseEvent('error', formatCodexErrorMessage(
+                        error || 'Thread error',
+                        buildErrorContext('thread.error'),
+                      )));
                       sawTerminalEvent = true;
                       break;
                     }
@@ -431,13 +470,6 @@ export class CodexProvider implements LLMProvider {
                   console.warn('[codex-provider] Suppressed Codex SDK Windows process cleanup parse noise:', message);
                   break;
                 }
-                if (savedThreadId && !retryFresh && !sawAnyEvent && shouldRetryFreshThread(message)) {
-                  console.warn('[codex-provider] Resume failed, retrying with a fresh thread:', message);
-                  self.clearCachedThreadId(params.sessionId);
-                  savedThreadId = undefined;
-                  retryFresh = true;
-                  continue;
-                }
                 self.clearCachedThreadId(params.sessionId);
                 throw err;
               } finally {
@@ -452,7 +484,13 @@ export class CodexProvider implements LLMProvider {
             console.error('[codex-provider] Error:', err instanceof Error ? err.stack || err.message : err);
             self.clearCachedThreadId(params.sessionId);
             try {
-              controller.enqueue(sseEvent('error', normalizeCodexErrorMessage(message)));
+              controller.enqueue(sseEvent('error', formatCodexErrorMessage(message, {
+                phase: 'stream.exception',
+                bridgeSessionId: params.sessionId,
+                codexThreadId: params.sdkSessionId,
+                workingDirectory: params.workingDirectory,
+                permissionMode: params.permissionMode,
+              })));
               controller.close();
             } catch {
               // Controller already closed

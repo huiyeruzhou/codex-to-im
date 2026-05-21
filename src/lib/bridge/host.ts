@@ -284,6 +284,7 @@ export interface StreamChatParams {
   forceModel?: boolean;
   sandboxMode?: CodexSandboxMode;
   modelReasoningEffort?: CodexReasoningEffort;
+  skipGitRepoCheck?: boolean;
   systemPrompt?: string;
   workingDirectory?: string;
   abortController?: AbortController;
