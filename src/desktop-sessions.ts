@@ -429,7 +429,6 @@ function loadVisibleDesktopThreads(limit?: number): VisibleDesktopThreadRow[] | 
       SELECT id, updated_at
       FROM threads
       WHERE archived = 0
-        AND source != 'exec'
       ORDER BY updated_at DESC
       ${hasLimit ? 'LIMIT ?' : ''}
     `;
