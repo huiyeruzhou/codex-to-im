@@ -20,7 +20,13 @@ import {
   type WeixinChannelConfig,
 } from './config.js';
 import { normalizeChannelId } from './runtime-options.js';
-import { getCodexSessionsRoot, listDesktopSessions } from './desktop-sessions.js';
+import {
+  archiveDesktopSession,
+  getCodexSessionsRoot,
+  getDesktopSessionByThreadId,
+  listDesktopSessions,
+  readDesktopSessionEventStream,
+} from './desktop-sessions.js';
 import {
   type BindingSummary,
   listBindingSummaries,
@@ -51,6 +57,8 @@ import {
 } from './weixin-login.js';
 import { listWeixinAccounts } from './weixin-store.js';
 import { listSelectableCodexModels, readConfiguredCodexModel } from './codex-models.js';
+import type { BridgeSession } from './lib/bridge/host.js';
+import { getCodexThreadId } from './lib/bridge/turns/turn-classifier.js';
 
 let port = 4781;
 const serverStartTime = new Date().toISOString();
@@ -215,6 +223,199 @@ function assertWeixinAccountAvailable(
 
 function createUiStore(): JsonFileStore {
   return new JsonFileStore(configToSettings(loadConfig()));
+}
+
+interface UiSessionSummary {
+  targetKey: string;
+  kind: 'bridge' | 'desktop';
+  sessionId?: string;
+  threadId: string;
+  title: string;
+  cwd: string;
+  originator: string;
+  source: string;
+  lastEventAt: string;
+}
+
+interface UiSessionHistoryMessage {
+  role: string;
+  content: string;
+  timestamp: string;
+}
+
+function getBridgeSessionTitle(session: BridgeSession): string {
+  if (session.name?.trim()) return session.name.trim();
+  if (session.working_directory) {
+    const parts = session.working_directory.split(/[\\/]+/).filter(Boolean);
+    return parts[parts.length - 1] || session.id.slice(0, 8);
+  }
+  return session.id.slice(0, 8);
+}
+
+function listUiSessions(store: JsonFileStore, limit?: number): UiSessionSummary[] {
+  const bridgeSessions = store.listSessions()
+    .filter((session) => session.hidden !== true && session.session_type !== 'draft')
+    .filter((session) => !session.desktop_thread_id)
+    .map((session) => ({
+      targetKey: `session:${session.id}`,
+      kind: 'bridge' as const,
+      sessionId: session.id,
+      threadId: getCodexThreadId(session) || '',
+      title: getBridgeSessionTitle(session),
+      cwd: session.working_directory || '',
+      originator: 'Bridge / IM',
+      source: 'bridge',
+      lastEventAt: session.updated_at || session.created_at || '',
+    }));
+
+  const desktopSessions = listDesktopSessions(limit).map((session) => ({
+    targetKey: `desktop:${session.threadId}`,
+    kind: 'desktop' as const,
+    threadId: session.threadId,
+    title: session.title,
+    cwd: session.cwd,
+    originator: session.originator || 'Codex Desktop',
+    source: 'desktop',
+    lastEventAt: session.lastEventAt,
+  }));
+
+  const combined = [...bridgeSessions, ...desktopSessions]
+    .sort((left, right) => (right.lastEventAt || '').localeCompare(left.lastEventAt || ''));
+
+  return typeof limit === 'number' && Number.isFinite(limit) && limit > 0
+    ? combined.slice(0, Math.floor(limit))
+    : combined;
+}
+
+function bridgeSessionToSummary(session: BridgeSession): UiSessionSummary {
+  return {
+    targetKey: `session:${session.id}`,
+    kind: 'bridge',
+    sessionId: session.id,
+    threadId: getCodexThreadId(session) || '',
+    title: getBridgeSessionTitle(session),
+    cwd: session.working_directory || '',
+    originator: 'Bridge / IM',
+    source: 'bridge',
+    lastEventAt: session.updated_at || session.created_at || '',
+  };
+}
+
+function desktopSessionToSummary(threadId: string): UiSessionSummary | null {
+  const session = getDesktopSessionByThreadId(threadId);
+  if (!session) return null;
+  return {
+    targetKey: `desktop:${session.threadId}`,
+    kind: 'desktop',
+    threadId: session.threadId,
+    title: session.title,
+    cwd: session.cwd,
+    originator: session.originator || 'Codex Desktop',
+    source: 'desktop',
+    lastEventAt: session.lastEventAt,
+  };
+}
+
+function getUiSessionHistory(store: JsonFileStore, targetKey: string): {
+  session: UiSessionSummary;
+  source: string;
+  messages: UiSessionHistoryMessage[];
+} {
+  if (targetKey.startsWith('session:')) {
+    const sessionId = targetKey.slice('session:'.length);
+    const session = store.getSession(sessionId);
+    if (!session || session.hidden === true || session.session_type === 'draft') {
+      throw new Error('指定的 Bridge 会话不存在。');
+    }
+
+    const desktopThreadId = session.desktop_thread_id || '';
+    if (desktopThreadId) {
+      const desktopSummary = desktopSessionToSummary(desktopThreadId);
+      const events = readDesktopSessionEventStream(desktopThreadId);
+      return {
+        session: desktopSummary || bridgeSessionToSummary(session),
+        source: 'desktop',
+        messages: events.map((event) => ({
+          role: event.role,
+          content: event.content,
+          timestamp: event.timestamp,
+        })),
+      };
+    }
+
+    const { messages } = store.getMessages(session.id);
+    return {
+      session: bridgeSessionToSummary(session),
+      source: 'bridge',
+      messages: messages.map((message) => ({
+        role: message.role,
+        content: message.content,
+        timestamp: '',
+      })),
+    };
+  }
+
+  if (targetKey.startsWith('desktop:')) {
+    const threadId = targetKey.slice('desktop:'.length);
+    const summary = desktopSessionToSummary(threadId);
+    if (!summary) {
+      throw new Error('指定的 Desktop 会话不存在。');
+    }
+
+    const events = readDesktopSessionEventStream(threadId);
+    return {
+      session: summary,
+      source: 'desktop',
+      messages: events.map((event) => ({
+        role: event.role,
+        content: event.content,
+        timestamp: event.timestamp,
+      })),
+    };
+  }
+
+  throw new Error('不支持的会话目标。');
+}
+
+function deleteUiSession(store: JsonFileStore, targetKey: string): { deleted: UiSessionSummary; deletedBridgeSessionIds: string[] } {
+  if (targetKey.startsWith('session:')) {
+    const sessionId = targetKey.slice('session:'.length);
+    const session = store.getSession(sessionId);
+    if (!session || session.hidden === true || session.session_type === 'draft') {
+      throw new Error('指定的 Bridge 会话不存在。');
+    }
+    const summary = bridgeSessionToSummary(session);
+    store.deleteSession(session.id);
+    return { deleted: summary, deletedBridgeSessionIds: [session.id] };
+  }
+
+  if (targetKey.startsWith('desktop:')) {
+    const threadId = targetKey.slice('desktop:'.length);
+    const summary = desktopSessionToSummary(threadId);
+    if (!summary) {
+      throw new Error('指定的 Desktop 会话不存在。');
+    }
+
+    const archived = archiveDesktopSession(threadId);
+    if (!archived) {
+      throw new Error('指定的 Desktop 会话不存在。');
+    }
+
+    const linkedSessionIds = store.listSessions()
+      .filter((session) => (
+        session.desktop_thread_id === threadId
+        || session.codex_thread_id === threadId
+        || session.sdk_session_id === threadId
+      ))
+      .map((session) => session.id);
+    for (const sessionId of linkedSessionIds) {
+      store.deleteSession(sessionId);
+    }
+
+    return { deleted: summary, deletedBridgeSessionIds: linkedSessionIds };
+  }
+
+  throw new Error('不支持的会话目标。');
 }
 
 function cloneChannel(channel: ChannelInstance): ChannelInstance {
@@ -1520,10 +1721,21 @@ function renderHtml(): string {
         align-items: center;
         padding: 14px 16px;
         border-top: 1px solid var(--border);
+        cursor: pointer;
       }
 
       .session-simple-item:first-child {
         border-top: 0;
+      }
+
+      .session-simple-item:hover,
+      .session-card.session-openable:hover {
+        background: rgba(22, 119, 255, 0.04);
+        border-color: rgba(22, 119, 255, 0.24);
+      }
+
+      .session-card.session-openable {
+        cursor: pointer;
       }
 
       .session-simple-main {
@@ -1549,6 +1761,70 @@ function renderHtml(): string {
         min-width: 0;
         display: grid;
         gap: 4px;
+      }
+
+      .session-history-layout {
+        display: grid;
+        gap: 16px;
+      }
+
+      .session-history-summary {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .session-history-stat {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--surface-soft);
+        padding: 12px 14px;
+        min-width: 0;
+      }
+
+      .session-history-stat strong {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+        margin-bottom: 4px;
+      }
+
+      .session-history-stat span {
+        display: block;
+        font-weight: 700;
+        word-break: break-word;
+      }
+
+      .chat-history-list {
+        display: grid;
+        gap: 12px;
+      }
+
+      .chat-history-message {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--surface-soft);
+        padding: 12px 14px;
+      }
+
+      .chat-history-message-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 12px;
+        margin-bottom: 8px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .chat-history-role {
+        color: var(--text);
+        font-weight: 700;
+      }
+
+      .chat-history-content {
+        white-space: pre-wrap;
+        word-break: break-word;
       }
 
       .panel-block {
@@ -2010,6 +2286,31 @@ function renderHtml(): string {
         font-size: 12px;
       }
 
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        margin-left: 8px;
+        padding: 1px 8px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 700;
+        border: 1px solid var(--border);
+        background: #ffffff;
+        color: var(--muted);
+      }
+
+      .pill-bridge {
+        border-color: rgba(22, 119, 255, 0.30);
+        background: rgba(22, 119, 255, 0.08);
+        color: var(--primary);
+      }
+
+      .pill-desktop {
+        border-color: rgba(16, 185, 129, 0.35);
+        background: rgba(16, 185, 129, 0.10);
+        color: #047857;
+      }
+
       .binding-target-btn {
         border: 1px solid var(--border);
         border-radius: 8px;
@@ -2074,6 +2375,7 @@ function renderHtml(): string {
         .command-list-head,
         .binding-controls { grid-template-columns: 1fr; }
         .status-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .session-history-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       }
 
       @media (max-width: 720px) {
@@ -2093,6 +2395,7 @@ function renderHtml(): string {
         .channel-action-row select { width: 100%; }
         .session-head { grid-template-columns: 1fr; }
         .session-simple-item { grid-template-columns: 1fr; }
+        .session-history-summary { grid-template-columns: 1fr; }
         .session-actions { justify-content: flex-start; }
       }
     </style>
@@ -2141,7 +2444,7 @@ function renderHtml(): string {
               <div class="status-value" id="runtimeStatus">-</div>
             </div>
             <div class="status-card">
-              <strong>桌面会话</strong>
+              <strong>Codex 会话</strong>
               <div class="status-value" id="desktopSessionCount">-</div>
             </div>
             <div class="status-card">
@@ -2167,7 +2470,7 @@ function renderHtml(): string {
 
               <div class="panel-block">
                 <p class="panel-subtitle">当前能力</p>
-                <div class="notice">已接通：保存配置、后台启停、飞书凭据测试、微信扫码、桌面会话发现、IM 绑定查看与网页侧切换。</div>
+                <div class="notice">已接通：保存配置、后台启停、飞书凭据测试、微信扫码、Codex 会话发现、IM 绑定查看与网页侧切换。</div>
               </div>
 
               <div class="panel-block">
@@ -2206,12 +2509,12 @@ function renderHtml(): string {
                   <div class="mono" id="overviewHomeStatus">-</div>
                 </div>
                 <div class="info-item">
-                  <strong>桌面会话根目录</strong>
+                  <strong>Codex 会话根目录</strong>
                   <div class="mono" id="desktopRootStatus">-</div>
                 </div>
                 <div class="info-item">
                   <strong>界面说明</strong>
-                  <div>左侧切换页面；“会话”管理桌面 thread；“通道”里查看飞书/微信当前绑定并直接切换。</div>
+                  <div>左侧切换页面；“会话”管理 Bridge/IM 会话和 Desktop thread；“通道”里查看飞书/微信当前绑定并直接切换。</div>
                 </div>
               </div>
             </section>
@@ -2222,16 +2525,16 @@ function renderHtml(): string {
           <div class="page-header">
             <div>
               <h1 class="page-title">会话</h1>
-              <p class="page-copy">先看当前已经绑定到聊天的会话，再查看全部桌面会话列表。</p>
+              <p class="page-copy">点击任意会话可以查看 chat_history，也可以直接删除不需要的会话。</p>
             </div>
             <div class="toolbar">
-              <button id="refreshDesktopBtn">刷新桌面会话</button>
+              <button id="refreshDesktopBtn">刷新会话</button>
             </div>
           </div>
 
           <section class="panel" id="desktop">
-            <div class="notice">这里只展示在 Codex 桌面索引里有名字的线程，和 Codex Desktop App 左侧列表保持一致。</div>
-            <div class="notice" style="margin-top: 12px;">最短路径：找到目标 thread，然后把 <code>/thread 019d1da4</code> 这样的命令发给飞书机器人，或直接到“通道”页切换绑定。</div>
+            <div class="notice">这里展示 Bridge/IM 本地会话和 Codex Desktop 会话；不再只依赖 Desktop 左侧列表。</div>
+            <div class="notice" style="margin-top: 12px;">最短路径：找到目标会话后到“通道”页切换绑定；如果会话已有 thread，也可以复制 <code>/thread 019d1da4</code> 这样的命令发给机器人。</div>
             <div class="small" id="desktopSessionMeta" style="margin: 14px 0 16px;">正在加载…</div>
             <div class="session-list">
               <section class="session-section">
@@ -2250,6 +2553,28 @@ function renderHtml(): string {
               </section>
             </div>
             <div class="message" id="desktopMessage"></div>
+          </section>
+        </section>
+
+        <section class="page" data-page="session-history">
+          <div class="page-header">
+            <div>
+              <h1 class="page-title" id="sessionHistoryTitle">会话历史</h1>
+              <p class="page-copy" id="sessionHistorySubtitle">查看当前 session 的 chat_history。</p>
+            </div>
+            <div class="toolbar">
+              <button id="backToSessionsBtn">返回会话列表</button>
+              <button id="refreshSessionHistoryBtn">刷新历史</button>
+              <button class="danger" id="deleteSessionBtn">删除会话</button>
+            </div>
+          </div>
+
+          <section class="panel session-history-layout">
+            <div class="session-history-summary" id="sessionHistorySummary"></div>
+            <div class="chat-history-list" id="sessionHistoryList">
+              <div class="notice">请选择一个会话查看历史。</div>
+            </div>
+            <div class="message" id="sessionHistoryMessage"></div>
           </section>
         </section>
 
@@ -2329,7 +2654,7 @@ function renderHtml(): string {
                   </select>
                 </label>
               </div>
-              <div class="small">未绑定的 IM 聊天会先进入临时草稿线程（等同 <code>/t 0</code>）；“默认工作空间”只用于 <code>/new proj1</code> 这类相对项目名。留空时会按当前系统自动回退到 <code>~/cx2im</code>。默认模型候选项来自启动时读取的 Codex 模型缓存：隐藏模型不会展示，CLI only 模型会标成“仅 IM / CLI”。留空则继续跟随 Codex 当前默认模型。文件系统权限是全局默认值，思考级别可在 IM 会话里再单独覆盖。上次响应距今配置只影响飞书长任务底部“上次响应距今 X”的出现时机。</div>
+              <div class="small">未绑定的 IM 聊天会先进入临时草稿线程（等同 <code>/t 0</code>）；“默认工作空间”只用于 <code>/new proj1</code> 这类相对项目名。留空时会按当前系统自动回退到 <code>~/cx2im</code>。默认模型候选项来自启动时读取的 Codex 模型缓存：隐藏模型不会展示，Desktop 不支持的模型会标成“仅 IM”。留空则继续跟随 Codex 当前默认模型。文件系统权限是全局默认值，思考级别可在 IM 会话里再单独覆盖。上次响应距今配置只影响飞书长任务底部“上次响应距今 X”的出现时机。</div>
               <div class="small">当前需要重启 Bridge 的配置：<code>Runtime</code>、<code>允许在未信任 Git 目录运行 Codex</code>。通道实例的接入配置请在“通道”页维护。</div>
               <div class="checkbox-row">
                 <label class="checkbox"><input id="codexSkipGitRepoCheck" type="checkbox" checked /> 允许在未信任 Git 目录运行 Codex</label>
@@ -2405,7 +2730,7 @@ function renderHtml(): string {
                   <div class="command-list-head"><div>命令</div><div>原始命令</div><div>说明</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/m</code></div><div class="command-col-original"><code>/mode</code></div><div class="command-col-desc">查看当前模式；可选 <code>code</code>、<code>plan</code>、<code>ask</code>。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/r</code></div><div class="command-col-original"><code>/reasoning</code></div><div class="command-col-desc">查看当前思考级别；可选 <code>1=minimal</code>、<code>2=low</code>、<code>3=medium</code>、<code>4=high</code>、<code>5=xhigh</code>。</div></div>
-                  <div class="command-item"><div class="command-col-command"><code>/model [slug|default]</code></div><div class="command-col-original"><code>/model [slug|default]</code></div><div class="command-col-desc">查看或切换当前 IM 会话使用的模型；CLI only 模型会标注“仅 IM / CLI”，共享桌面线程只允许查看不允许切换。</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>/model [slug|default]</code></div><div class="command-col-original"><code>/model [slug|default]</code></div><div class="command-col-desc">查看或切换当前 IM 会话使用的模型；Desktop 不支持的模型会标注“仅 IM”，共享桌面线程只允许查看不允许切换。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/t 0</code></div><div class="command-col-original"><code>/thread 0</code></div><div class="command-col-desc">切换到当前聊天的临时草稿线程。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/t 0 reset</code></div><div class="command-col-original"><code>/thread 0 reset</code></div><div class="command-col-desc">丢弃当前草稿上下文并重建一条新的草稿线程。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/unbind</code></div><div class="command-col-original"><code>/unbind</code></div><div class="command-col-desc">解绑当前聊天，释放当前会话；之后再直接发文本会自动进入新的临时草稿线程。</div></div>
@@ -2507,6 +2832,8 @@ function renderHtml(): string {
         weixinAccounts: [],
         desktopRoot: '',
         activePage: 'overview',
+        activeSessionTargetKey: '',
+        sessionHistory: null,
         activeChannelId: '',
         channelDraft: null,
         weixinLoginPollers: {},
@@ -2542,7 +2869,7 @@ function renderHtml(): string {
           if (!model || typeof model.slug !== 'string' || !model.slug) continue;
           if (seen.has(model.slug)) continue;
           seen.add(model.slug);
-          const label = model.slug + (model.supportedInApi === false ? '（仅 IM / CLI）' : '');
+          const label = model.slug + (model.supportedInApi === false ? '（仅 IM）' : '');
           items.push(
             '<option value="' + escapeHtml(model.slug) + '">' + escapeHtml(label) + '</option>'
           );
@@ -2592,22 +2919,25 @@ function renderHtml(): string {
       function renderBindingTable(binding) {
         const sessions = state.desktopSessions || [];
         if (!sessions.length) {
-          return '<div class="binding-empty">当前还没有和会话页一致的命名桌面线程。</div>';
+          return '<div class="binding-empty">当前没有可用的 Codex 会话记录。</div>';
         }
 
         return ''
           + '<div class="binding-table-wrap">'
           +   '<table class="binding-table">'
-          +     '<thead><tr><th>标题</th><th>Thread</th><th>目录</th><th>操作</th></tr></thead>'
+          +     '<thead><tr><th>标题</th><th>Thread</th><th>目录</th><th>来源</th><th>操作</th></tr></thead>'
           +     '<tbody>'
           +       sessions.map((session) => {
-            const targetKey = 'desktop:' + session.threadId;
+            const targetKey = session.targetKey || (session.kind === 'bridge' ? ('session:' + session.sessionId) : ('desktop:' + session.threadId));
             const active = targetKey === binding.currentTargetKey;
+            const sourceLabel = session && session.kind === 'bridge' ? 'Bridge' : 'Desktop';
+            const sourceBadge = '<span class="pill pill-' + (sourceLabel === 'Bridge' ? 'bridge' : 'desktop') + '">' + sourceLabel + '</span>';
             return ''
               + '<tr class="' + (active ? 'current' : '') + '">'
-              +   '<td><div class="binding-table-title">' + escapeHtml(session.title || 'Untitled Session') + (active ? '<span class="binding-table-mark">当前</span>' : '') + '</div></td>'
-              +   '<td><div class="binding-table-thread"><code>' + escapeHtml(session.threadId) + '</code></div></td>'
+              +   '<td><div class="binding-table-title">' + escapeHtml(session.title || 'Untitled Session') + ' ' + sourceBadge + (active ? '<span class="binding-table-mark">当前</span>' : '') + '</div></td>'
+              +   '<td><div class="binding-table-thread"><code>' + escapeHtml(session.threadId || session.sessionId || '-') + '</code></div></td>'
               +   '<td><div class="binding-table-path">' + escapeHtml(session.cwd || '(no cwd)') + '</div></td>'
+              +   '<td><div class="binding-table-source">' + sourceBadge + '</div></td>'
               +   '<td><button type="button" class="binding-target-btn' + (active ? ' current' : '') + '" data-action="switch-binding-target" data-binding-id="' + escapeHtml(binding.id) + '" data-target-key="' + escapeHtml(targetKey) + '"' + (active ? ' disabled' : '') + '>' + (active ? '当前会话' : '切换到当前会话') + '</button></td>'
               + '</tr>';
           }).join('')
@@ -2691,7 +3021,7 @@ function renderHtml(): string {
       }
 
       function setActivePage(page, syncHash) {
-        const nextPage = ['overview', 'sessions', 'config', 'commands', 'channels', 'logs'].includes(page) ? page : 'overview';
+        const nextPage = ['overview', 'sessions', 'session-history', 'config', 'commands', 'channels', 'logs'].includes(page) ? page : 'overview';
         state.activePage = nextPage;
 
         document.querySelectorAll('.nav-link').forEach((element) => {
@@ -2707,7 +3037,9 @@ function renderHtml(): string {
         if (syncHash !== false) {
           const hash = nextPage === 'channels'
             ? '#channels/' + (state.activeChannelId || '')
-            : '#' + nextPage;
+            : nextPage === 'session-history'
+              ? '#session/' + encodeURIComponent(state.activeSessionTargetKey || '')
+              : '#' + nextPage;
           if (window.location.hash !== hash) {
             history.replaceState(null, '', hash);
           }
@@ -2737,6 +3069,16 @@ function renderHtml(): string {
           setActivePage('channels', false);
           setActiveChannel(raw.split('/')[1] || '', false);
           return;
+        }
+
+        if (raw.startsWith('session/')) {
+          const targetKey = decodeURIComponent(raw.slice('session/'.length));
+          if (targetKey) {
+            void openSessionHistory(targetKey, false).catch((error) => {
+              showMessage('sessionHistoryMessage', 'error', error.message);
+            });
+            return;
+          }
         }
 
         setActivePage(raw, false);
@@ -2955,13 +3297,18 @@ function renderHtml(): string {
         return label + '当前还没有聊天接入。先从这个机器人发一条消息。';
       }
 
-      function currentThreadMarks(threadId) {
+      function sessionTargetKey(session) {
+        return session.targetKey || (session.kind === 'bridge' ? ('session:' + session.sessionId) : ('desktop:' + session.threadId));
+      }
+
+      function currentThreadMarks(session) {
         const marks = [];
-        const currentTargetKey = 'desktop:' + threadId;
+        const threadId = session.threadId || '';
+        const currentTargetKey = sessionTargetKey(session);
         const counts = new Map();
 
         for (const binding of state.bindings || []) {
-          const matchesThread = binding.currentThreadId === threadId || binding.currentTargetKey === currentTargetKey;
+          const matchesThread = (threadId && binding.currentThreadId === threadId) || binding.currentTargetKey === currentTargetKey;
           if (!matchesThread) continue;
           const label = (binding.channelAlias || providerLabel(binding.channelProvider)) + ' 当前';
           counts.set(label, (counts.get(label) || 0) + 1);
@@ -2974,10 +3321,11 @@ function renderHtml(): string {
         return marks;
       }
 
-      function bindingsForThread(threadId) {
-        const currentTargetKey = 'desktop:' + threadId;
+      function bindingsForSession(session) {
+        const threadId = session.threadId || '';
+        const currentTargetKey = sessionTargetKey(session);
         return (state.bindings || []).filter((binding) => (
-          binding.currentThreadId === threadId || binding.currentTargetKey === currentTargetKey
+          (threadId && binding.currentThreadId === threadId) || binding.currentTargetKey === currentTargetKey
         ));
       }
 
@@ -3021,15 +3369,26 @@ function renderHtml(): string {
 
       function renderDesktopSessionCard(session) {
         const originator = session.originator || 'Codex Desktop';
-        const marks = currentThreadMarks(session.threadId);
+        const targetKey = sessionTargetKey(session);
+        const marks = currentThreadMarks(session);
         const markHtml = marks.map((mark) => '<span class="session-mark">' + escapeHtml(mark) + '</span>').join('');
+        const threadHtml = session.threadId
+          ? 'Thread: <code>' + escapeHtml(session.threadId) + '</code><button type="button" class="session-inline-action" data-action="copy-thread" data-thread-id="' + escapeHtml(session.threadId) + '">复制</button>'
+          : 'Bridge 会话：<code>' + escapeHtml(session.sessionId || '-') + '</code>';
+        const actionHtml =
+          '<button type="button" data-action="open-session-history" data-target-key="' + escapeHtml(targetKey) + '">查看历史</button>'
+          + (session.threadId
+            ? '<button type="button" data-action="copy-thread" data-thread-id="' + escapeHtml(session.threadId) + '">复制 thread</button>'
+              + '<button type="button" data-action="copy-bind-command" data-thread-id="' + escapeHtml(session.threadId) + '">复制命令</button>'
+            : '')
+          + '<button type="button" class="danger" data-action="delete-session" data-target-key="' + escapeHtml(targetKey) + '">删除</button>';
 
         return ''
-          + '<article class="session-card' + (marks.length ? ' current-thread' : '') + '">'
+          + '<article class="session-card session-openable' + (marks.length ? ' current-thread' : '') + '" data-session-target-key="' + escapeHtml(targetKey) + '">'
           +   '<div class="session-head">'
           +     '<div class="session-main">'
           +       '<div class="session-title-row"><div class="session-title">' + escapeHtml(session.title || 'Untitled Session') + '</div>' + markHtml + '</div>'
-          +       '<div class="session-thread">Thread: <code>' + escapeHtml(session.threadId) + '</code><button type="button" class="session-inline-action" data-action="copy-thread" data-thread-id="' + escapeHtml(session.threadId) + '">复制</button></div>'
+          +       '<div class="session-thread">' + threadHtml + '</div>'
           +     '</div>'
           +     '<div class="session-cell">'
           +       '<div class="session-label">来源</div>'
@@ -3040,16 +3399,16 @@ function renderHtml(): string {
           +       '<div class="session-path">' + escapeHtml(session.cwd || '(no cwd)') + '</div>'
           +     '</div>'
           +     '<div class="session-actions">'
-          +       '<button type="button" data-action="copy-thread" data-thread-id="' + escapeHtml(session.threadId) + '">复制 thread</button>'
-          +       '<button type="button" data-action="copy-bind-command" data-thread-id="' + escapeHtml(session.threadId) + '">复制命令</button>'
+          +       actionHtml
           +   '</div>'
           + '</div>'
           + '</article>';
       }
 
       function renderBoundDesktopSessionCard(session) {
-        const bindings = bindingsForThread(session.threadId);
-        const marks = currentThreadMarks(session.threadId);
+        const targetKey = sessionTargetKey(session);
+        const bindings = bindingsForSession(session);
+        const marks = currentThreadMarks(session);
         const markHtml = marks.map((mark) => '<span class="session-mark">' + escapeHtml(mark) + '</span>').join('');
         const bindingTags = bindings.map((binding) => (
           '<div class="session-binding-tag">'
@@ -3059,7 +3418,7 @@ function renderHtml(): string {
         )).join('');
 
         return ''
-          + '<article class="session-card' + (marks.length ? ' current-thread' : '') + '">'
+          + '<article class="session-card session-openable' + (marks.length ? ' current-thread' : '') + '" data-session-target-key="' + escapeHtml(targetKey) + '">'
           +   '<div class="session-head">'
           +     '<div class="session-main">'
           +       '<div class="session-title-row"><div class="session-title">' + escapeHtml(session.title || 'Untitled Session') + '</div>' + markHtml + '</div>'
@@ -3078,20 +3437,34 @@ function renderHtml(): string {
           +     '<div class="session-cell">'
           +       '<div class="session-label">来源</div>'
           +       '<div class="session-value">' + escapeHtml(session.originator || 'Codex Desktop') + '</div>'
+          +       '<div class="session-actions">'
+          +         '<button type="button" data-action="open-session-history" data-target-key="' + escapeHtml(targetKey) + '">查看历史</button>'
+          +         '<button type="button" class="danger" data-action="delete-session" data-target-key="' + escapeHtml(targetKey) + '">删除</button>'
+          +       '</div>'
           +     '</div>'
           +   '</div>'
           + '</article>';
       }
 
       function renderDesktopSessionListItem(session) {
-        const marks = currentThreadMarks(session.threadId);
+        const targetKey = sessionTargetKey(session);
+        const marks = currentThreadMarks(session);
         const markHtml = marks.map((mark) => '<span class="binding-table-mark">' + escapeHtml(mark) + '</span>').join('');
+        const identityLabel = session.threadId ? 'Thread' : 'Bridge 会话';
+        const identityValue = session.threadId || session.sessionId || '-';
+        const actionHtml =
+          '<button type="button" data-action="open-session-history" data-target-key="' + escapeHtml(targetKey) + '">查看历史</button>'
+          + (session.threadId
+            ? '<button type="button" data-action="copy-thread" data-thread-id="' + escapeHtml(session.threadId) + '">复制 thread</button>'
+              + '<button type="button" data-action="copy-bind-command" data-thread-id="' + escapeHtml(session.threadId) + '">复制命令</button>'
+            : '')
+          + '<button type="button" class="danger" data-action="delete-session" data-target-key="' + escapeHtml(targetKey) + '">删除</button>';
 
         return ''
-          + '<article class="session-simple-item">'
+          + '<article class="session-simple-item" data-session-target-key="' + escapeHtml(targetKey) + '">'
           +   '<div class="session-simple-main">'
           +     '<div class="session-title-row"><div class="session-simple-title">' + escapeHtml(session.title || 'Untitled Session') + '</div>' + markHtml + '</div>'
-          +     '<div class="session-simple-thread">Thread: <code>' + escapeHtml(session.threadId) + '</code></div>'
+          +     '<div class="session-simple-thread">' + identityLabel + ': <code>' + escapeHtml(identityValue) + '</code></div>'
           +     '<div class="session-simple-time">最近活动：' + escapeHtml(formatTime(session.lastEventAt || '')) + '</div>'
           +   '</div>'
           +   '<div class="session-simple-side">'
@@ -3099,8 +3472,7 @@ function renderHtml(): string {
           +     '<div class="session-simple-time">来源：' + escapeHtml(session.originator || 'Codex Desktop') + '</div>'
           +   '</div>'
           +   '<div class="session-actions">'
-          +     '<button type="button" data-action="copy-thread" data-thread-id="' + escapeHtml(session.threadId) + '">复制 thread</button>'
-          +     '<button type="button" data-action="copy-bind-command" data-thread-id="' + escapeHtml(session.threadId) + '">复制命令</button>'
+          +     actionHtml
           +   '</div>'
           + '</article>';
       }
@@ -3109,10 +3481,10 @@ function renderHtml(): string {
         state.desktopSessions = result.sessions || [];
         state.desktopRoot = result.root || '-';
         const sessions = state.desktopSessions || [];
-        const boundSessions = sessions.filter((session) => bindingsForThread(session.threadId).length > 0);
+        const boundSessions = sessions.filter((session) => bindingsForSession(session).length > 0);
         document.getElementById('desktopSessionCount').textContent = String(state.desktopSessions.length);
         document.getElementById('desktopSessionMeta').textContent =
-          '扫描目录：' + state.desktopRoot + ' · ' + state.desktopSessions.length + ' 条桌面会话';
+          '扫描目录：' + state.desktopRoot + ' · ' + state.desktopSessions.length + ' 条 Codex 会话';
         document.getElementById('desktopRootStatus').textContent = state.desktopRoot;
 
         const boundList = document.getElementById('boundSessionsList');
@@ -3120,18 +3492,18 @@ function renderHtml(): string {
         const list = document.getElementById('desktopSessionsList');
         const allMeta = document.getElementById('allSessionsMeta');
         boundMeta.textContent = boundSessions.length > 0
-          ? '当前有 ' + boundSessions.length + ' 条桌面会话已绑定到聊天。'
-          : '当前没有已绑定到聊天的桌面会话。';
+          ? '当前有 ' + boundSessions.length + ' 条会话已绑定到聊天。'
+          : '当前没有已绑定到聊天的会话。';
         allMeta.textContent = '按最近活动排序，共 ' + sessions.length + ' 条。';
 
         if (boundSessions.length === 0) {
-          boundList.innerHTML = '<div class="binding-empty">当前没有任何桌面会话正在绑定到聊天入口。</div>';
+          boundList.innerHTML = '<div class="binding-empty">当前没有任何会话正在绑定到聊天入口。</div>';
         } else {
           boundList.innerHTML = boundSessions.map((session) => renderBoundDesktopSessionCard(session)).join('');
         }
 
         if (state.desktopSessions.length === 0) {
-          list.innerHTML = '<div class="notice ghost">当前没有发现桌面端会话。先在 Codex Desktop App 中打开或运行一个会话，再回到这里刷新。</div>';
+          list.innerHTML = '<div class="notice ghost">当前没有发现 Codex 会话。先从 IM 发一条消息，或在 Codex Desktop 中打开一个会话，再回到这里刷新。</div>';
           renderChannelsWorkspace();
           return;
         }
@@ -3521,6 +3893,110 @@ function renderHtml(): string {
       async function loadDesktopSessions() {
         const result = await api('/api/desktop-sessions');
         renderDesktopSessions(result);
+      }
+
+      function sessionSourceLabel(source) {
+        return source === 'bridge' ? 'Bridge / IM' : 'Codex Desktop';
+      }
+
+      function chatRoleLabel(role) {
+        if (role === 'user') return '用户';
+        if (role === 'assistant') return 'Codex';
+        if (role === 'system') return '系统';
+        if (role === 'tool') return '工具';
+        return role || '消息';
+      }
+
+      function renderSessionHistory(result) {
+        state.sessionHistory = result || null;
+        const session = result && result.session ? result.session : null;
+        const messages = result && Array.isArray(result.messages) ? result.messages : [];
+        const title = session ? (session.title || 'Untitled Session') : '会话历史';
+        const targetKey = session ? sessionTargetKey(session) : state.activeSessionTargetKey;
+
+        document.getElementById('sessionHistoryTitle').textContent = title;
+        document.getElementById('sessionHistorySubtitle').textContent = targetKey
+          ? 'Target: ' + targetKey
+          : '查看当前 session 的 chat_history。';
+        document.getElementById('deleteSessionBtn').disabled = !targetKey;
+        document.getElementById('refreshSessionHistoryBtn').disabled = !targetKey;
+
+        document.getElementById('sessionHistorySummary').innerHTML = session
+          ? ''
+            + '<div class="session-history-stat"><strong>来源</strong><span>' + escapeHtml(sessionSourceLabel(result.source)) + '</span></div>'
+            + '<div class="session-history-stat"><strong>消息数</strong><span>' + escapeHtml(String(messages.length)) + '</span></div>'
+            + '<div class="session-history-stat"><strong>最近活动</strong><span>' + escapeHtml(formatTime(session.lastEventAt || '')) + '</span></div>'
+            + '<div class="session-history-stat"><strong>目录</strong><span>' + escapeHtml(session.cwd || '(no cwd)') + '</span></div>'
+          : '';
+
+        const list = document.getElementById('sessionHistoryList');
+        if (!messages.length) {
+          list.innerHTML = '<div class="binding-empty">当前 session 没有可显示的 chat_history。</div>';
+          return;
+        }
+
+        list.innerHTML = messages.map((message) => (
+          '<article class="chat-history-message">'
+            + '<div class="chat-history-message-head">'
+            +   '<span class="chat-history-role">' + escapeHtml(chatRoleLabel(message.role)) + '</span>'
+            +   '<span>' + escapeHtml(formatTime(message.timestamp || '')) + '</span>'
+            + '</div>'
+            + '<div class="chat-history-content">' + escapeHtml(message.content || '') + '</div>'
+          + '</article>'
+        )).join('');
+      }
+
+      async function openSessionHistory(targetKey, syncHash) {
+        state.activeSessionTargetKey = targetKey || '';
+        setActivePage('session-history', syncHash);
+        renderSessionHistory({
+          session: null,
+          source: '',
+          messages: [],
+        });
+
+        const result = await api('/api/session-history?targetKey=' + encodeURIComponent(state.activeSessionTargetKey));
+        renderSessionHistory(result);
+      }
+
+      async function refreshSessionHistory() {
+        if (!state.activeSessionTargetKey) {
+          throw new Error('当前没有选中的会话。');
+        }
+        await openSessionHistory(state.activeSessionTargetKey, false);
+      }
+
+      function findSessionSummaryByTargetKey(targetKey) {
+        return (state.desktopSessions || []).find((session) => sessionTargetKey(session) === targetKey) || null;
+      }
+
+      async function deleteSessionByTargetKey(targetKey) {
+        if (!targetKey) {
+          throw new Error('当前没有选中的会话。');
+        }
+        const session = (
+          state.sessionHistory
+          && state.sessionHistory.session
+          && sessionTargetKey(state.sessionHistory.session) === targetKey
+        )
+          ? state.sessionHistory.session
+          : findSessionSummaryByTargetKey(targetKey);
+        const label = session && session.title ? session.title : targetKey;
+        if (!window.confirm('确定删除会话“' + label + '”？删除后会移除本地消息和绑定；Desktop 会话会被归档。')) {
+          return false;
+        }
+
+        await api('/api/sessions/delete', {
+          method: 'POST',
+          body: JSON.stringify({ targetKey }),
+        });
+        state.activeSessionTargetKey = '';
+        state.sessionHistory = null;
+        await loadBindings();
+        await loadDesktopSessions();
+        setActivePage('sessions', true);
+        showMessage('desktopMessage', 'success', '会话已删除。');
+        return true;
       }
 
       async function loadBindings() {
@@ -3923,7 +4399,7 @@ function renderHtml(): string {
       document.getElementById('refreshDesktopBtn').addEventListener('click', async () => {
         try {
           await loadDesktopSessions();
-          showMessage('desktopMessage', 'success', '桌面会话列表已刷新。');
+          showMessage('desktopMessage', 'success', '会话列表已刷新。');
         } catch (error) {
           showGlobalMessage('error', error.message);
         }
@@ -3960,16 +4436,32 @@ function renderHtml(): string {
 
       async function handleSessionListAction(event) {
         const source = event.target instanceof Element ? event.target : null;
-        const target = source ? source.closest('button[data-action]') : null;
-        if (!target) return;
+        if (!source) return;
+        const target = source.closest('button[data-action]');
 
         try {
-          if (target.dataset.action === 'copy-thread') {
-            await copyText(target.dataset.threadId || '', 'Thread ID 已复制。');
-            return;
+          if (target) {
+            if (target.dataset.action === 'open-session-history') {
+              await openSessionHistory(target.dataset.targetKey || '', true);
+              return;
+            }
+            if (target.dataset.action === 'delete-session') {
+              await deleteSessionByTargetKey(target.dataset.targetKey || '');
+              return;
+            }
+            if (target.dataset.action === 'copy-thread') {
+              await copyText(target.dataset.threadId || '', 'Thread ID 已复制。');
+              return;
+            }
+            if (target.dataset.action === 'copy-bind-command') {
+              await copyText(shortThreadCommand(target.dataset.threadId || ''), '接管命令已复制。');
+              return;
+            }
           }
-          if (target.dataset.action === 'copy-bind-command') {
-            await copyText(shortThreadCommand(target.dataset.threadId || ''), '接管命令已复制。');
+
+          const card = source.closest('[data-session-target-key]');
+          if (card) {
+            await openSessionHistory(card.dataset.sessionTargetKey || '', true);
             return;
           }
         } catch (error) {
@@ -3981,9 +4473,8 @@ function renderHtml(): string {
       document.getElementById('boundSessionsList').addEventListener('click', async (event) => {
         const source = event.target instanceof Element ? event.target : null;
         const target = source ? source.closest('button[data-action]') : null;
-        if (!target) return;
 
-        if (target.dataset.action === 'unbind-binding') {
+        if (target && target.dataset.action === 'unbind-binding') {
           try {
             const result = await api('/api/bindings/delete', {
               method: 'POST',
@@ -3998,6 +4489,27 @@ function renderHtml(): string {
         }
 
         await handleSessionListAction(event);
+      });
+
+      document.getElementById('backToSessionsBtn').addEventListener('click', () => {
+        setActivePage('sessions', true);
+      });
+
+      document.getElementById('refreshSessionHistoryBtn').addEventListener('click', async () => {
+        try {
+          await refreshSessionHistory();
+          showMessage('sessionHistoryMessage', 'success', '会话历史已刷新。');
+        } catch (error) {
+          showMessage('sessionHistoryMessage', 'error', error.message);
+        }
+      });
+
+      document.getElementById('deleteSessionBtn').addEventListener('click', async () => {
+        try {
+          await deleteSessionByTargetKey(state.activeSessionTargetKey);
+        } catch (error) {
+          showMessage('sessionHistoryMessage', 'error', error.message);
+        }
       });
 
       syncPageFromHash();
@@ -4144,10 +4656,47 @@ const server = http.createServer(async (request, response) => {
     if (request.method === 'GET' && url.pathname === '/api/desktop-sessions') {
       const limitParam = url.searchParams.get('limit');
       const limit = limitParam ? parsePositiveInt(limitParam, 10) : undefined;
+      const store = createUiStore();
       json(response, 200, {
         root: getCodexSessionsRoot(),
-        sessions: listDesktopSessions(limit),
+        sessions: listUiSessions(store, limit),
       });
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/session-history') {
+      const targetKey = asString(url.searchParams.get('targetKey'));
+      if (!targetKey) {
+        json(response, 400, { error: 'targetKey 不能为空。' });
+        return;
+      }
+
+      const store = createUiStore();
+      try {
+        json(response, 200, getUiSessionHistory(store, targetKey));
+      } catch (error) {
+        json(response, 404, { error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/sessions/delete') {
+      const payload = await readJsonBody<Record<string, unknown>>(request);
+      const targetKey = asString(payload.targetKey);
+      if (!targetKey) {
+        json(response, 400, { error: 'targetKey 不能为空。' });
+        return;
+      }
+
+      const store = createUiStore();
+      try {
+        json(response, 200, {
+          ok: true,
+          ...deleteUiSession(store, targetKey),
+        });
+      } catch (error) {
+        json(response, 404, { error: error instanceof Error ? error.message : String(error) });
+      }
       return;
     }
 
