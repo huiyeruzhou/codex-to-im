@@ -56,20 +56,12 @@ import {
 } from './bridge-channel-runtime.js';
 import { readDesktopSessionMessages } from '../../desktop-sessions.js';
 import { getExplicitDesktopThreadId } from './turns/turn-classifier.js';
+import { buildFencedCodeBlock } from './markdown/fence.js';
 
 const MODE_OPTIONS_TEXT = '可选：`code`（直接执行，默认） `plan`（先分析再行动） `ask`（轻对话 / 草稿）';
 const REASONING_OPTIONS_TEXT = '可选：`1=minimal` `2=low` `3=medium` `4=high` `5=xhigh`';
 const SANDBOX_OPTIONS_TEXT = '可选：`read-only` `workspace-write` `danger-full-access` `default`（回到全局默认）';
 const NETWORK_OPTIONS_TEXT = '可选：`on`/`true` 开启网络，`off`/`false` 关闭网络，`default` 回到全局默认。';
-
-function buildFencedCodeBlock(content: string, language: string): string {
-  const normalized = content.replace(/\r\n/g, '\n');
-  const runs = normalized.match(/`+/g) || [];
-  const longest = runs.reduce((max, run) => Math.max(max, run.length), 0);
-  const fenceLength = Math.max(3, longest + 1);
-  const fence = '`'.repeat(fenceLength);
-  return `${fence}${language ? language : ''}\n${normalized}\n${fence}`;
-}
 
 function parseForceFlag(args: string): { args: string; force: boolean } {
   const forcePattern = /(^|\s)--force(?=\s|$)/;

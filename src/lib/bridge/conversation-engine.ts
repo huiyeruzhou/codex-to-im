@@ -27,6 +27,9 @@ import {
   normalizeSandboxMode,
 } from '../../runtime-options.js';
 import { consumeSseEvents } from './sse-stream-decoder.js';
+import { maskSecrets } from '../../logger.js';
+import { sanitizeInput } from './security/validators.js';
+import { buildFencedCodeBlock } from './markdown/fence.js';
 
 export interface PermissionRequestInfo {
   permissionRequestId: string;
@@ -144,6 +147,60 @@ export function appendStreamPreviewChunk(
   }
   const separator = current.endsWith('\n\n') ? '' : (current.endsWith('\n') ? '\n' : '\n\n');
   return `${current}${separator}${chunk}`;
+}
+
+function stringifyToolValue(value: unknown): string {
+  if (value == null) return '';
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function summarizeToolInputForInline(input: unknown): string {
+  if (input && typeof input === 'object') {
+    const record = input as Record<string, unknown>;
+    const commandValue = record.command;
+    if (typeof commandValue === 'string' && commandValue.trim()) {
+      const trimmedCommand = commandValue.trim();
+      const bashPrefix = '/bin/bash -lc "';
+      return trimmedCommand.startsWith(bashPrefix) && trimmedCommand.endsWith('"')
+        ? trimmedCommand.slice(bashPrefix.length, -1)
+        : trimmedCommand;
+    }
+  }
+  return stringifyToolValue(input);
+}
+
+function buildInlineToolBlock(params: {
+  name: string;
+  input?: unknown;
+  output?: string;
+  isError?: boolean;
+}): string {
+  const title = `${params.isError ? '❌' : '🔧'} \`${params.name || 'tool'}\``;
+  const sections: string[] = [title];
+
+  if (typeof params.input !== 'undefined') {
+    const inputText = summarizeToolInputForInline(params.input);
+    const masked = maskSecrets(inputText);
+    const { text } = sanitizeInput(masked, 1200);
+    if (text.trim()) {
+      sections.push(`输入：\n${buildFencedCodeBlock(text.trim(), 'json')}`);
+    }
+  }
+
+  if (typeof params.output === 'string') {
+    const masked = maskSecrets(params.output);
+    const { text } = sanitizeInput(masked, 1800);
+    if (text.trim()) {
+      sections.push(`输出：\n${buildFencedCodeBlock(text.trim(), 'text')}`);
+    }
+  }
+
+  return sections.join('\n\n').trim();
 }
 
 /**
@@ -340,6 +397,8 @@ async function consumeStream(
   const permissionRequests: PermissionRequestInfo[] = [];
   let capturedSdkSessionId: string | null = null;
   const outboundAttachments: OutboundAttachment[] = [];
+  const toolPreview = new Map<string, { name: string; input: unknown }>();
+  let lastReasoningNote: string | null = null;
 
   try {
     await consumeSseEvents(stream, async (event: SSEEvent) => {
@@ -366,10 +425,17 @@ async function consumeStream(
               name: toolData.name,
               input: toolData.input,
             });
+            toolPreview.set(toolData.id, { name: toolData.name, input: toolData.input });
             if (onToolEvent) {
               try {
                 onToolEvent(toolData.id, toolData.name, 'running', { input: toolData.input });
               } catch { /* non-critical */ }
+            }
+            if (onPartialText) {
+              const snippet = buildInlineToolBlock({ name: toolData.name, input: toolData.input });
+              previewText = appendStreamPreviewChunk(previewText, snippet, true);
+              separateNextPreviewText = false;
+              try { onPartialText(previewText); } catch { /* non-critical */ }
             }
             separateNextPreviewText = true;
           } catch { /* skip */ }
@@ -403,6 +469,18 @@ async function consumeStream(
                   { output: resultData.content, isError: resultData.is_error || false },
                 );
               } catch { /* non-critical */ }
+            }
+            if (onPartialText) {
+              const prior = toolPreview.get(resultData.tool_use_id);
+              const snippet = buildInlineToolBlock({
+                name: prior?.name || 'tool',
+                input: prior?.input,
+                output: String(resultData.content || ''),
+                isError: Boolean(resultData.is_error),
+              });
+              previewText = appendStreamPreviewChunk(previewText, snippet, true);
+              separateNextPreviewText = false;
+              try { onPartialText(previewText); } catch { /* non-critical */ }
             }
             separateNextPreviewText = true;
           } catch { /* skip */ }
@@ -440,6 +518,20 @@ async function consumeStream(
             }
             if (typeof statusData.reasoning === 'string' && onStatusNote) {
               try { onStatusNote(statusData.reasoning); } catch { /* non-critical */ }
+            }
+            if (typeof statusData.reasoning === 'string' && onPartialText) {
+              const note = statusData.reasoning.trim();
+              if (note && note !== lastReasoningNote) {
+                lastReasoningNote = note;
+                const masked = maskSecrets(note);
+                const { text } = sanitizeInput(masked, 1200);
+                const snippet = text.trim() ? `> ${text.trim().replace(/\n/g, '\n> ')}` : '';
+                if (snippet) {
+                  previewText = appendStreamPreviewChunk(previewText, snippet, true);
+                  separateNextPreviewText = false;
+                  try { onPartialText(previewText); } catch { /* non-critical */ }
+                }
+              }
             }
           } catch { /* skip */ }
           break;

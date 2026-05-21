@@ -1,4 +1,5 @@
 import type { TaskProgressInfo, ToolCallInfo } from '../types.js';
+import { buildFencedCodeBlock } from './fence.js';
 
 /**
  * Feishu-specific Markdown processing.
@@ -31,15 +32,6 @@ export function hasComplexMarkdown(text: string): boolean {
 export function preprocessFeishuMarkdown(text: string): string {
   // Ensure ``` has newline before it (unless at start of text)
   return text.replace(/([^\n])```/g, '$1\n```');
-}
-
-function buildFencedCodeBlock(content: string, language: string): string {
-  const normalized = content.replace(/\r\n/g, '\n');
-  const runs = normalized.match(/`+/g) || [];
-  const longest = runs.reduce((max, run) => Math.max(max, run.length), 0);
-  const fenceLength = Math.max(3, longest + 1);
-  const fence = '`'.repeat(fenceLength);
-  return `${fence}${language ? language : ''}\n${normalized}\n${fence}`;
 }
 
 /**

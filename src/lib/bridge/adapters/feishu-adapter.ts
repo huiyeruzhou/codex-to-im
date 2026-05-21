@@ -874,13 +874,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       const trimmedExisting = existingText.trim();
       const trimmedResponse = responseText.trim();
       let finalText = trimmedResponse || trimmedExisting;
-      if (
-        status === 'interrupted'
-        && trimmedExisting
-        && trimmedResponse
-        && trimmedResponse !== trimmedExisting
-        && !trimmedExisting.includes(trimmedResponse)
-      ) {
+      if (trimmedExisting && trimmedResponse && trimmedResponse !== trimmedExisting && !trimmedExisting.includes(trimmedResponse)) {
         finalText = `${trimmedExisting}\n\n${trimmedResponse}`;
       }
 
