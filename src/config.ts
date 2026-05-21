@@ -322,7 +322,7 @@ function migrateLegacyEnvToV2(env: Map<string, string>): ConfigV2File {
       codexSandboxMode: parseSandboxMode(env.get("CTI_CODEX_SANDBOX_MODE")) ?? 'workspace-write',
       codexNetworkAccess: env.has("CTI_CODEX_NETWORK_ACCESS")
         ? env.get("CTI_CODEX_NETWORK_ACCESS") === "true"
-        : false,
+        : true,
       codexReasoningEffort: parseReasoningEffort(env.get("CTI_CODEX_REASONING_EFFORT")) ?? 'medium',
       uiAllowLan: env.get("CTI_UI_ALLOW_LAN") === "true",
       uiAccessToken: env.get("CTI_UI_ACCESS_TOKEN") || undefined,
@@ -356,7 +356,7 @@ function expandConfig(v2: ConfigV2File): Config {
     streamStatusCheckIntervalSeconds: v2.runtime.streamStatusCheckIntervalSeconds ?? DEFAULT_STREAM_STATUS_CHECK_INTERVAL_SECONDS,
     codexSkipGitRepoCheck: v2.runtime.codexSkipGitRepoCheck ?? true,
     codexSandboxMode: v2.runtime.codexSandboxMode ?? 'workspace-write',
-    codexNetworkAccess: v2.runtime.codexNetworkAccess === true,
+    codexNetworkAccess: v2.runtime.codexNetworkAccess !== false,
     codexReasoningEffort: v2.runtime.codexReasoningEffort ?? 'medium',
     uiAllowLan: v2.runtime.uiAllowLan === true,
     uiAccessToken: v2.runtime.uiAccessToken || undefined,
@@ -417,7 +417,7 @@ export function loadConfig(): Config {
       streamStatusCheckIntervalSeconds: DEFAULT_STREAM_STATUS_CHECK_INTERVAL_SECONDS,
       codexSkipGitRepoCheck: true,
       codexSandboxMode: 'workspace-write',
-      codexNetworkAccess: false,
+      codexNetworkAccess: true,
       codexReasoningEffort: 'medium',
       uiAllowLan: false,
     },
