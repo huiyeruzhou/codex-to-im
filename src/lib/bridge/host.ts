@@ -97,6 +97,8 @@ export interface BridgeSession {
   /** Explicit owner of the current persisted thread identity. */
   thread_origin?: 'bridge' | 'desktop';
   reasoning_effort?: CodexReasoningEffort;
+  codex_sandbox_mode?: CodexSandboxMode;
+  codex_network_access?: boolean;
   session_type?: 'normal' | 'draft';
   hidden?: boolean;
   parent_session_id?: string;
@@ -284,6 +286,7 @@ export interface StreamChatParams {
   model?: string;
   forceModel?: boolean;
   sandboxMode?: CodexSandboxMode;
+  networkAccessEnabled?: boolean;
   modelReasoningEffort?: CodexReasoningEffort;
   skipGitRepoCheck?: boolean;
   systemPrompt?: string;

@@ -952,11 +952,13 @@ describe('CodexProvider image input', () => {
       prompt: 'hello',
       sessionId: 'sandbox-reasoning-session',
       sandboxMode: 'danger-full-access',
+      networkAccessEnabled: true,
       modelReasoningEffort: 'xhigh',
     });
     await collectStream(stream);
 
     assert.equal(capturedStartOptions?.sandboxMode, 'danger-full-access');
+    assert.equal(capturedStartOptions?.networkAccessEnabled, true);
     assert.equal(capturedStartOptions?.modelReasoningEffort, 'xhigh');
     assert.equal(capturedStartOptions?.approvalPolicy, 'on-request');
   });
@@ -987,6 +989,7 @@ describe('CodexProvider image input', () => {
         sessionId: 'log-preview-session',
         workingDirectory: '/tmp/work dir',
         sandboxMode: 'workspace-write',
+        networkAccessEnabled: true,
         permissionMode: 'acceptEdits',
       });
       await collectStream(stream);
@@ -999,9 +1002,11 @@ describe('CodexProvider image input', () => {
     const payload = launchLog![1] as { command: string; prompt_chars: number; options: Record<string, unknown> };
     assert.match(payload.command, /codex exec --experimental-json/);
     assert.match(payload.command, /--sandbox workspace-write/);
+    assert.match(payload.command, /sandbox_workspace_write\.network_access=true/);
     assert.match(payload.command, /approval_policy=/);
     assert.equal(payload.prompt_chars, 'do not leak this full prompt'.length);
     assert.equal(payload.options.approval_policy, 'on-request');
+    assert.equal(payload.options.network_access_enabled, true);
     assert.ok(!payload.command.includes('do not leak this full prompt'), 'Prompt content should not be logged');
   });
 });

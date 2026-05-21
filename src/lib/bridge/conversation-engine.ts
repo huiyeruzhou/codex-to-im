@@ -170,7 +170,10 @@ export async function processMessage(
     // Resolve session early — needed for workingDirectory and provider resolution
     const session = store.getSession(sessionId);
     const workDir = binding.workingDirectory || session?.working_directory || '';
-    const sandboxMode = normalizeSandboxMode(store.getSetting('bridge_codex_sandbox_mode'));
+    const sandboxMode = normalizeSandboxMode(session?.codex_sandbox_mode || store.getSetting('bridge_codex_sandbox_mode'));
+    const networkAccessEnabled = typeof session?.codex_network_access === 'boolean'
+      ? session.codex_network_access
+      : (store.getSetting('bridge_codex_network_access') || '').toLowerCase() === 'true';
     const modelReasoningEffort = resolveReasoningEffort(store, session);
     const skipGitRepoCheck = (store.getSetting('bridge_codex_skip_git_repo_check') || '').toLowerCase() === 'true';
 
@@ -256,6 +259,7 @@ export async function processMessage(
       model: effectiveModel,
       forceModel: !binding.sdkSessionId && Boolean(effectiveModel),
       sandboxMode,
+      networkAccessEnabled,
       modelReasoningEffort,
       skipGitRepoCheck,
       systemPrompt: session?.system_prompt || undefined,

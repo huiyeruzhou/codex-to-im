@@ -83,6 +83,7 @@ interface CodexErrorContext {
   codexThreadId?: string;
   workingDirectory?: string;
   sandboxMode?: string;
+  networkAccessEnabled?: boolean;
   approvalPolicy?: string;
   permissionMode?: string;
 }
@@ -103,6 +104,9 @@ function formatCodexErrorMessage(
     context.codexThreadId ? `- codex_thread_id: ${context.codexThreadId}` : undefined,
     context.workingDirectory ? `- cwd: ${context.workingDirectory}` : undefined,
     context.sandboxMode ? `- sandbox_mode: ${context.sandboxMode}` : undefined,
+    typeof context.networkAccessEnabled === 'boolean'
+      ? `- network_access_enabled: ${context.networkAccessEnabled}`
+      : undefined,
     context.approvalPolicy ? `- approval_policy: ${context.approvalPolicy}` : undefined,
     context.permissionMode ? `- permission_mode: ${context.permissionMode}` : undefined,
   ].filter(Boolean).join('\n');
@@ -211,6 +215,9 @@ function formatCodexExecPreview(
   if (typeof threadOptions.modelReasoningEffort === 'string') {
     args.push('--config', `model_reasoning_effort="${threadOptions.modelReasoningEffort}"`);
   }
+  if (typeof threadOptions.networkAccessEnabled === 'boolean') {
+    args.push('--config', `sandbox_workspace_write.network_access=${threadOptions.networkAccessEnabled}`);
+  }
   if (typeof threadOptions.approvalPolicy === 'string') {
     args.push('--config', `approval_policy="${threadOptions.approvalPolicy}"`);
   }
@@ -251,6 +258,9 @@ function logCodexExecStart(params: {
       model: params.threadOptions.model || null,
       working_directory: params.threadOptions.workingDirectory || null,
       sandbox_mode: params.threadOptions.sandboxMode || null,
+      network_access_enabled: typeof params.threadOptions.networkAccessEnabled === 'boolean'
+        ? params.threadOptions.networkAccessEnabled
+        : null,
       approval_policy: params.threadOptions.approvalPolicy || null,
       model_reasoning_effort: params.threadOptions.modelReasoningEffort || null,
       skip_git_repo_check: params.threadOptions.skipGitRepoCheck === true,
@@ -328,6 +338,9 @@ export class CodexProvider implements LLMProvider {
               ...(params.workingDirectory ? { workingDirectory: params.workingDirectory } : {}),
               ...(shouldSkipGitRepoCheck(params) ? { skipGitRepoCheck: true } : {}),
               sandboxMode,
+              ...(typeof params.networkAccessEnabled === 'boolean'
+                ? { networkAccessEnabled: params.networkAccessEnabled }
+                : {}),
               ...(modelReasoningEffort ? { modelReasoningEffort } : {}),
               approvalPolicy,
             };
@@ -337,6 +350,7 @@ export class CodexProvider implements LLMProvider {
               codexThreadId: self.threadIds.get(params.sessionId) || savedThreadId,
               workingDirectory: params.workingDirectory,
               sandboxMode,
+              networkAccessEnabled: params.networkAccessEnabled,
               approvalPolicy,
               permissionMode: params.permissionMode,
             });

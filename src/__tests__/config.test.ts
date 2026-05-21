@@ -162,9 +162,11 @@ describe('configToSettings', () => {
     const m = configToSettings({
       ...base,
       codexSandboxMode: 'danger-full-access',
+      codexNetworkAccess: true,
       codexReasoningEffort: 'xhigh',
     });
     assert.equal(m.get('bridge_codex_sandbox_mode'), 'danger-full-access');
+    assert.equal(m.get('bridge_codex_network_access'), 'true');
     assert.equal(m.get('bridge_codex_reasoning_effort'), 'xhigh');
   });
 

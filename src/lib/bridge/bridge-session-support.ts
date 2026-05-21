@@ -62,9 +62,17 @@ export function resolveEffectiveReasoningEffort(session: BridgeSession | null | 
   );
 }
 
-export function resolveEffectiveSandboxMode(): string {
+export function resolveEffectiveSandboxMode(session?: BridgeSession | null): string {
   const { store } = getBridgeContext();
-  return normalizeSandboxMode(store.getSetting('bridge_codex_sandbox_mode'));
+  return normalizeSandboxMode(session?.codex_sandbox_mode || store.getSetting('bridge_codex_sandbox_mode'));
+}
+
+export function resolveEffectiveNetworkAccess(session?: BridgeSession | null): boolean {
+  const { store } = getBridgeContext();
+  if (typeof session?.codex_network_access === 'boolean') {
+    return session.codex_network_access;
+  }
+  return (store.getSetting('bridge_codex_network_access') || '').toLowerCase() === 'true';
 }
 
 export function resolveDisplayedModel(

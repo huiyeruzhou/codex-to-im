@@ -29,6 +29,7 @@ export interface RuntimeConfigV2 {
   streamStatusCheckIntervalSeconds?: number;
   codexSkipGitRepoCheck?: boolean;
   codexSandboxMode?: CodexSandboxMode;
+  codexNetworkAccess?: boolean;
   codexReasoningEffort?: CodexReasoningEffort;
   uiAllowLan?: boolean;
   uiAccessToken?: string;
@@ -85,6 +86,7 @@ export interface Config {
   streamStatusCheckIntervalSeconds?: number;
   codexSkipGitRepoCheck?: boolean;
   codexSandboxMode?: CodexSandboxMode;
+  codexNetworkAccess?: boolean;
   codexReasoningEffort?: CodexReasoningEffort;
   uiAllowLan?: boolean;
   uiAccessToken?: string;
@@ -318,6 +320,9 @@ function migrateLegacyEnvToV2(env: Map<string, string>): ConfigV2File {
         ? env.get("CTI_CODEX_SKIP_GIT_REPO_CHECK") === "true"
         : true,
       codexSandboxMode: parseSandboxMode(env.get("CTI_CODEX_SANDBOX_MODE")) ?? 'workspace-write',
+      codexNetworkAccess: env.has("CTI_CODEX_NETWORK_ACCESS")
+        ? env.get("CTI_CODEX_NETWORK_ACCESS") === "true"
+        : false,
       codexReasoningEffort: parseReasoningEffort(env.get("CTI_CODEX_REASONING_EFFORT")) ?? 'medium',
       uiAllowLan: env.get("CTI_UI_ALLOW_LAN") === "true",
       uiAccessToken: env.get("CTI_UI_ACCESS_TOKEN") || undefined,
@@ -351,6 +356,7 @@ function expandConfig(v2: ConfigV2File): Config {
     streamStatusCheckIntervalSeconds: v2.runtime.streamStatusCheckIntervalSeconds ?? DEFAULT_STREAM_STATUS_CHECK_INTERVAL_SECONDS,
     codexSkipGitRepoCheck: v2.runtime.codexSkipGitRepoCheck ?? true,
     codexSandboxMode: v2.runtime.codexSandboxMode ?? 'workspace-write',
+    codexNetworkAccess: v2.runtime.codexNetworkAccess === true,
     codexReasoningEffort: v2.runtime.codexReasoningEffort ?? 'medium',
     uiAllowLan: v2.runtime.uiAllowLan === true,
     uiAccessToken: v2.runtime.uiAccessToken || undefined,
@@ -376,6 +382,7 @@ function buildV2FileFromExpandedConfig(config: Config, current?: ConfigV2File | 
       streamStatusCheckIntervalSeconds: config.streamStatusCheckIntervalSeconds,
       codexSkipGitRepoCheck: config.codexSkipGitRepoCheck,
       codexSandboxMode: config.codexSandboxMode,
+      codexNetworkAccess: config.codexNetworkAccess === true,
       codexReasoningEffort: config.codexReasoningEffort,
       uiAllowLan: config.uiAllowLan,
       uiAccessToken: config.uiAccessToken,
@@ -410,6 +417,7 @@ export function loadConfig(): Config {
       streamStatusCheckIntervalSeconds: DEFAULT_STREAM_STATUS_CHECK_INTERVAL_SECONDS,
       codexSkipGitRepoCheck: true,
       codexSandboxMode: 'workspace-write',
+      codexNetworkAccess: false,
       codexReasoningEffort: 'medium',
       uiAllowLan: false,
     },
@@ -451,6 +459,7 @@ export function saveConfig(config: Config): void {
     out += formatEnvLine("CTI_CODEX_SKIP_GIT_REPO_CHECK", String(next.runtime.codexSkipGitRepoCheck));
   }
   out += formatEnvLine("CTI_CODEX_SANDBOX_MODE", next.runtime.codexSandboxMode);
+  out += formatEnvLine("CTI_CODEX_NETWORK_ACCESS", String(next.runtime.codexNetworkAccess === true));
   out += formatEnvLine("CTI_CODEX_REASONING_EFFORT", next.runtime.codexReasoningEffort);
   out += formatEnvLine("CTI_UI_ALLOW_LAN", String(next.runtime.uiAllowLan === true));
   out += formatEnvLine("CTI_UI_ACCESS_TOKEN", next.runtime.uiAccessToken);
@@ -553,6 +562,10 @@ export function configToSettings(config: Config): Map<string, string> {
   m.set(
     "bridge_codex_sandbox_mode",
     config.codexSandboxMode || 'workspace-write',
+  );
+  m.set(
+    "bridge_codex_network_access",
+    config.codexNetworkAccess === true ? "true" : "false",
   );
   m.set(
     "bridge_codex_reasoning_effort",
