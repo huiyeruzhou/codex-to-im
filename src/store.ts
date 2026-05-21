@@ -183,7 +183,22 @@ export class JsonFileStore implements BridgeStore {
       path.join(DATA_DIR, 'sessions.json'),
       {},
     );
-    this.sessions = new Map(Object.entries(sessions));
+    let changed = false;
+    const normalized = new Map<string, BridgeSession>();
+    for (const [id, session] of Object.entries(sessions)) {
+      const codexThreadId = session.codex_thread_id?.trim();
+      const legacyThreadId = session.sdk_session_id?.trim() || session.desktop_thread_id?.trim();
+      if (!codexThreadId && legacyThreadId) {
+        normalized.set(id, { ...session, codex_thread_id: legacyThreadId });
+        changed = true;
+      } else {
+        normalized.set(id, session);
+      }
+    }
+    this.sessions = normalized;
+    if (changed) {
+      this.persistSessions();
+    }
   }
 
   private reloadBindings(): void {
