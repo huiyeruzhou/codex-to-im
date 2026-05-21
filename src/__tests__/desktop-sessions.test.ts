@@ -1535,6 +1535,35 @@ describe('readDesktopSessionMirrorRecordStreamByFilePath', () => {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   });
 
+  it('surfaces Codex desktop context compaction as a commentary notice', () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-desktop-mirror-'));
+    const filePath = path.join(tempRoot, 'rollout.jsonl');
+    fs.writeFileSync(
+      filePath,
+      [
+        JSON.stringify({
+          timestamp: '2026-05-14T00:00:00.000Z',
+          type: 'event_msg',
+          payload: { type: 'context_compacted' },
+        }),
+      ].join('\n') + '\n',
+      'utf-8',
+    );
+
+    const delta = readDesktopSessionMirrorRecordDeltaByFilePath(filePath, 0, fs.statSync(filePath).size);
+    assert.equal(delta.unknownKinds.length, 0);
+    assert.equal(delta.records.length, 1);
+    assert.equal(delta.records[0]?.type, 'message');
+    assert.equal(delta.records[0]?.role, 'commentary');
+    assert.match(delta.records[0]?.content || '', /上下文已压缩/);
+
+    const eventDelta = readDesktopSessionEventDeltaByFilePath(filePath, 0, fs.statSync(filePath).size);
+    assert.equal(eventDelta.events[0]?.role, 'commentary');
+    assert.match(eventDelta.events[0]?.content || '', /上下文已压缩/);
+
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  });
+
   it('ignores known Codex desktop bookkeeping events without reporting unknown kinds', () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-desktop-mirror-'));
     const filePath = path.join(tempRoot, 'rollout.jsonl');
@@ -1545,11 +1574,6 @@ describe('readDesktopSessionMirrorRecordStreamByFilePath', () => {
           timestamp: '2026-05-14T00:00:00.000Z',
           type: 'event_msg',
           payload: { type: 'token_count', info: {}, rate_limits: {} },
-        }),
-        JSON.stringify({
-          timestamp: '2026-05-14T00:00:01.000Z',
-          type: 'event_msg',
-          payload: { type: 'context_compacted' },
         }),
         JSON.stringify({
           timestamp: '2026-05-14T00:00:02.000Z',

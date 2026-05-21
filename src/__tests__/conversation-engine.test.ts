@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  appendStreamPreviewChunk,
   buildConversationPromptText,
   buildLocalAttachmentPromptSupplement,
 } from '../lib/bridge/conversation-engine.js';
@@ -63,5 +64,17 @@ describe('buildLocalAttachmentPromptSupplement', () => {
     assert.match(result, /^请帮我总结附件\n\nAttached local files:/);
     assert.match(result, /report\.pdf/);
     assert.match(result, /D:\\work\\\.codepilot-uploads\\report\.pdf/);
+  });
+});
+
+describe('appendStreamPreviewChunk', () => {
+  it('starts a new paragraph when text resumes after tool progress', () => {
+    const result = appendStreamPreviewChunk('先检查文件', '然后继续说明', true);
+    assert.equal(result, '先检查文件\n\n然后继续说明');
+  });
+
+  it('does not add an extra paragraph for continuous text chunks', () => {
+    const result = appendStreamPreviewChunk('先检查', '文件', false);
+    assert.equal(result, '先检查文件');
   });
 });

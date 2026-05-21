@@ -742,11 +742,12 @@ function isTurnContextLine(line: SessionMessageLine | SessionEventLine | TurnCon
 }
 
 const IGNORED_EVENT_MSG_TYPES = new Set([
-  'context_compacted',
   'thread_name_updated',
   'thread_rolled_back',
   'token_count',
 ]);
+
+const CONTEXT_COMPACTED_NOTICE = '上下文已压缩，后续回复会基于压缩后的上下文继续。';
 
 const IGNORED_RESPONSE_ITEM_TYPES = new Set([
   'web_search_call',
@@ -893,6 +894,16 @@ function pushDesktopSessionEvent(
   parsed: SessionMessageLine | SessionEventLine,
   rawLine: string,
 ): void {
+  if (isSessionEventLine(parsed) && parsed.payload?.type === 'context_compacted') {
+    events.push({
+      signature: createDesktopEventSignature(rawLine),
+      role: 'commentary',
+      content: CONTEXT_COMPACTED_NOTICE,
+      timestamp: parsed.timestamp || '',
+    });
+    return;
+  }
+
   if (isSessionEventLine(parsed) && parsed.payload?.type === 'user_message') {
     const text = extractNormalizedStructuredText(parsed.payload.message);
     if (!text) return;
@@ -995,6 +1006,18 @@ function pushDesktopMirrorEventRecord(
       signature,
       type: 'task_aborted',
       content: extractNormalizedStructuredText(parsed.payload.reason),
+      timestamp,
+      ...(activeTurnId ? { turnId: activeTurnId } : {}),
+    });
+    return true;
+  }
+
+  if (parsed.payload?.type === 'context_compacted') {
+    records.push({
+      signature,
+      type: 'message',
+      role: 'commentary',
+      content: CONTEXT_COMPACTED_NOTICE,
       timestamp,
       ...(activeTurnId ? { turnId: activeTurnId } : {}),
     });

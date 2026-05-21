@@ -254,4 +254,40 @@ describe('mirror-turns pending delivery queue', () => {
     assert.deepEqual(streamSnapshots, ['OK', 'OK\n\nOK']);
     assert.equal(subscription.pendingTurn?.streamedText, 'OK\n\nOK');
   });
+
+  it('keeps streamed commentary as a separate paragraph in the final turn text', () => {
+    const subscription = {
+      sessionId: 'session-1',
+      threadId: 'thread-1',
+      pendingTurn: null,
+    } as any;
+
+    const finalized = consumeMirrorRecords(subscription, [
+      {
+        signature: 'start-1',
+        type: 'task_started',
+        content: '',
+        timestamp: '2026-04-21T10:00:00.000Z',
+        turnId: 'turn-1',
+      },
+      {
+        signature: 'compact-1',
+        type: 'message',
+        role: 'commentary',
+        content: '上下文已压缩，后续回复会基于压缩后的上下文继续。',
+        timestamp: '2026-04-21T10:00:01.000Z',
+        turnId: 'turn-1',
+      },
+      {
+        signature: 'complete-1',
+        type: 'task_complete',
+        content: '最终回答',
+        timestamp: '2026-04-21T10:00:02.000Z',
+        turnId: 'turn-1',
+      },
+    ]);
+
+    assert.equal(finalized.length, 1);
+    assert.equal(finalized[0]?.text, '上下文已压缩，后续回复会基于压缩后的上下文继续。\n\n最终回答');
+  });
 });

@@ -7,6 +7,7 @@ function nowIso(): string {
 }
 
 const MIRROR_DUPLICATE_TEXT_WINDOW_MS = 2_000;
+const CONTEXT_COMPACTED_NOTICE_MARKER = '上下文已压缩';
 
 export interface DesktopMirrorTurnState {
   turnId: string | null;
@@ -163,6 +164,22 @@ function isNearDuplicateMirrorText(
   return Math.abs(nextMs - previousMs) <= MIRROR_DUPLICATE_TEXT_WINDOW_MS;
 }
 
+function buildFinalMirrorText(
+  turnState: DesktopMirrorTurnState,
+  preferredText?: string,
+): string {
+  const preferred = (preferredText || '').trim();
+  const streamed = (turnState.streamedText || '').trim();
+  const fallback = turnState.lastAssistantText?.trim() || turnState.lastCommentaryText?.trim() || '';
+  if (!streamed || !streamed.includes(CONTEXT_COMPACTED_NOTICE_MARKER)) {
+    return preferred || fallback;
+  }
+  if (!preferred || streamed === preferred || streamed.endsWith(preferred)) {
+    return streamed;
+  }
+  return `${streamed}\n\n${preferred}`;
+}
+
 export function finalizeMirrorTurn<TSubscription extends MirrorTurnStateHolder>(
   subscription: TSubscription,
   signature: string,
@@ -174,13 +191,7 @@ export function finalizeMirrorTurn<TSubscription extends MirrorTurnStateHolder>(
   subscription.pendingTurn = null;
   if (!pendingTurn) return null;
 
-  const text = [
-    preferredText,
-    pendingTurn.lastAssistantText,
-    pendingTurn.lastCommentaryText,
-  ]
-    .map((value) => (value || '').trim())
-    .find(Boolean) || '';
+  const text = buildFinalMirrorText(pendingTurn, preferredText);
   const userText = pendingTurn.userText?.trim() || null;
   if (!text && !userText && pendingTurn.toolCalls.size === 0 && pendingTurn.taskItems.length === 0) return null;
 

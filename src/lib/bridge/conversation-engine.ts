@@ -125,6 +125,18 @@ export function buildConversationPromptText(text: string, files: PersistedAttach
   return text.trim() ? `${text}\n\n${attachmentSupplement}` : attachmentSupplement;
 }
 
+export function appendStreamPreviewChunk(
+  current: string,
+  chunk: string,
+  separateBeforeChunk: boolean,
+): string {
+  if (!separateBeforeChunk || !current.trim() || !chunk.trim()) {
+    return current + chunk;
+  }
+  const separator = current.endsWith('\n\n') ? '' : (current.endsWith('\n') ? '\n' : '\n\n');
+  return `${current}${separator}${chunk}`;
+}
+
 /**
  * Process an inbound message: send to the LLM provider, consume the response stream,
  * save to DB, and return the result.
@@ -311,6 +323,7 @@ async function consumeStream(
   let currentText = '';
   /** Monotonically accumulated text for streaming preview — never resets on tool_use. */
   let previewText = '';
+  let separateNextPreviewText = false;
   let tokenUsage: TokenUsage | null = null;
   let hasError = false;
   let errorMessage = '';
@@ -325,7 +338,8 @@ async function consumeStream(
         case 'text':
           currentText += event.data;
           if (onPartialText) {
-            previewText += event.data;
+            previewText = appendStreamPreviewChunk(previewText, event.data, separateNextPreviewText);
+            separateNextPreviewText = false;
             try { onPartialText(previewText); } catch { /* non-critical */ }
           }
           break;
@@ -346,6 +360,7 @@ async function consumeStream(
             if (onToolEvent) {
               try { onToolEvent(toolData.id, toolData.name, 'running'); } catch { /* non-critical */ }
             }
+            separateNextPreviewText = true;
           } catch { /* skip */ }
           break;
         }
@@ -377,6 +392,7 @@ async function consumeStream(
                 );
               } catch { /* non-critical */ }
             }
+            separateNextPreviewText = true;
           } catch { /* skip */ }
           break;
         }
@@ -489,7 +505,7 @@ async function consumeStream(
     const responseText = contentBlocks
       .filter((b): b is Extract<MessageContentBlock, { type: 'text' }> => b.type === 'text')
       .map((b) => b.text)
-      .join('')
+      .join('\n\n')
       .trim();
 
     return {
