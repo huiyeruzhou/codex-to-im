@@ -17,12 +17,13 @@ import {
 
 export interface BindingTargetOption {
   key: string;
-  kind: 'desktop';
+  kind: 'desktop' | 'session';
   id: string;
   label: string;
   description: string;
   cwd: string;
-  threadId: string;
+  threadId?: string;
+  sessionId?: string;
 }
 
 export interface BindingSummary {
@@ -247,18 +248,37 @@ export function bindStoreToSdkSession(
 }
 
 export function listBindingTargetOptions(
-  _store: BridgeStore,
+  store: BridgeStore,
   desktopLimit = 12,
 ): BindingTargetOption[] {
-  return listDesktopSessions(desktopLimit).map((session) => ({
+  const bridgeOptions = store.listSessions()
+    .filter((session) => session.hidden !== true && session.session_type !== 'draft')
+    .filter((session) => !getExplicitDesktopThreadId(session))
+    .map((session) => {
+      const threadId = getCodexThreadId(session) || undefined;
+      return {
+        key: `session:${session.id}`,
+        kind: 'session' as const,
+        id: session.id,
+        label: getSessionName(session),
+        description: `${threadId ? `${threadId.slice(0, 8)}... · ` : ''}${session.working_directory || '(no cwd)'}`,
+        cwd: session.working_directory,
+        threadId,
+        sessionId: session.id,
+      };
+    });
+
+  const desktopOptions = listDesktopSessions(desktopLimit).map((session) => ({
     key: `desktop:${session.threadId}`,
-    kind: 'desktop',
+    kind: 'desktop' as const,
     id: session.threadId,
     label: session.title,
     description: `${session.threadId.slice(0, 8)}... · ${session.cwd || '(no cwd)'}`,
     cwd: session.cwd,
     threadId: session.threadId,
   }));
+
+  return [...bridgeOptions, ...desktopOptions];
 }
 
 export function listBindingSummaries(store: BridgeStore): BindingSummary[] {

@@ -353,11 +353,17 @@ function walkSessionFiles(dirPath: string, target: string[]): void {
   }
 }
 
-function isDesktopLike(meta: SessionMetaLine['payload']): boolean {
+function isSelectableCodexSession(meta: SessionMetaLine['payload']): boolean {
+  const rawSource = meta?.source;
+  if (rawSource != null && typeof rawSource !== 'string') return false;
+
   const originator = typeof meta?.originator === 'string' ? meta.originator.toLowerCase() : '';
-  const source = typeof meta?.source === 'string' ? meta.source.toLowerCase() : '';
-  if (source === 'exec') return false;
-  return originator.includes('desktop') || source === 'vscode' || source === 'desktop';
+  const source = typeof rawSource === 'string' ? rawSource.toLowerCase() : '';
+
+  // Desktop can emit internal exec rollouts that are not user-selectable threads.
+  if (source === 'exec' && originator.includes('desktop')) return false;
+
+  return true;
 }
 
 function loadThreadIndexEntries(archivedThreadIds: Set<string>): Map<string, ThreadIndexEntry> {
@@ -492,7 +498,7 @@ function parseDesktopSession(
     return null;
   }
 
-  if (parsed.type !== 'session_meta' || !parsed.payload?.id || !isDesktopLike(parsed.payload)) {
+  if (parsed.type !== 'session_meta' || !parsed.payload?.id || !isSelectableCodexSession(parsed.payload)) {
     return null;
   }
 
@@ -830,8 +836,40 @@ export function listDesktopSessions(limit?: number): DesktopSessionSummary[] {
 }
 
 export function getDesktopSessionByThreadId(threadId: string): DesktopSessionSummary | null {
-  const sessions = listDesktopSessions(200);
+  const sessions = listDesktopSessions();
   return sessions.find((session) => session.threadId === threadId) || null;
+}
+
+function uniqueArchivedSessionPath(filePath: string): string {
+  const archivedRoot = getArchivedSessionsRoot();
+  fs.mkdirSync(archivedRoot, { recursive: true });
+
+  const parsed = path.parse(path.basename(filePath));
+  let candidate = path.join(archivedRoot, path.basename(filePath));
+  let suffix = 2;
+  while (fs.existsSync(candidate)) {
+    candidate = path.join(archivedRoot, `${parsed.name}.${suffix}${parsed.ext}`);
+    suffix += 1;
+  }
+  return candidate;
+}
+
+export function archiveDesktopSession(threadId: string): DesktopSessionSummary | null {
+  const session = getDesktopSessionByThreadId(threadId);
+  if (!session) return null;
+
+  const archivedPath = uniqueArchivedSessionPath(session.filePath);
+  try {
+    fs.renameSync(session.filePath, archivedPath);
+  } catch (error) {
+    const code = error && typeof error === 'object' && 'code' in error
+      ? (error as { code?: string }).code
+      : '';
+    if (code !== 'EXDEV') throw error;
+    fs.copyFileSync(session.filePath, archivedPath);
+    fs.unlinkSync(session.filePath);
+  }
+  return session;
 }
 
 export function isArchivedDesktopThread(threadId: string): boolean {

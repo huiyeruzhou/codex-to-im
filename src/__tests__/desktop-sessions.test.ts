@@ -114,6 +114,96 @@ describe('listDesktopSessions', () => {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   });
 
+  it('shows CLI exec sessions in the desktop session list', () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-desktop-sessions-'));
+    process.env.CODEX_HOME = tempRoot;
+
+    const sessionsDir = path.join(tempRoot, 'sessions', '2026', '03', '24');
+    fs.mkdirSync(sessionsDir, { recursive: true });
+
+    const threadId = '019d1e3a-74f9-7e43-92ef-e206eec01f81';
+    const rolloutPath = path.join(
+      sessionsDir,
+      `rollout-2026-03-24T13-04-00-${threadId}.jsonl`,
+    );
+    fs.writeFileSync(
+      rolloutPath,
+      [
+        JSON.stringify({
+          timestamp: '2026-03-24T05:04:17.166Z',
+          type: 'session_meta',
+          payload: {
+            id: threadId,
+            timestamp: '2026-03-24T05:04:00.768Z',
+            cwd: '/work',
+            originator: 'codex_cli',
+            source: 'exec',
+          },
+        }),
+        JSON.stringify({
+          timestamp: '2026-03-24T05:04:17.166Z',
+          type: 'event_msg',
+          payload: {
+            type: 'user_message',
+            message: 'hello',
+          },
+        }),
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const sessions = listDesktopSessions(10);
+    assert.equal(sessions.length, 1);
+    assert.equal(sessions[0]?.threadId, threadId);
+
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  });
+
+  it('shows user-visible codex-tui CLI sessions by default', () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-desktop-sessions-'));
+    process.env.CODEX_HOME = tempRoot;
+
+    const sessionsDir = path.join(tempRoot, 'sessions', '2026', '05', '21');
+    fs.mkdirSync(sessionsDir, { recursive: true });
+
+    const threadId = '019e46bc-f466-71d3-a186-a2ce89051958';
+    const rolloutPath = path.join(
+      sessionsDir,
+      `rollout-2026-05-21T02-54-09-${threadId}.jsonl`,
+    );
+    fs.writeFileSync(
+      rolloutPath,
+      [
+        JSON.stringify({
+          timestamp: '2026-05-20T18:55:40.794Z',
+          type: 'session_meta',
+          payload: {
+            id: threadId,
+            timestamp: '2026-05-20T18:54:09.001Z',
+            cwd: '/data00/home/hongli.fish/Codex/yachio',
+            originator: 'codex-tui',
+            source: 'cli',
+          },
+        }),
+        JSON.stringify({
+          timestamp: '2026-05-20T18:55:40.794Z',
+          type: 'event_msg',
+          payload: {
+            type: 'user_message',
+            message: 'hello from tui',
+          },
+        }),
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const sessions = listDesktopSessions(10);
+    assert.equal(sessions.length, 1);
+    assert.equal(sessions[0]?.threadId, threadId);
+
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  });
+
   it('ignores session_meta source objects from subagent threads instead of throwing', () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-desktop-sessions-'));
     process.env.CODEX_HOME = tempRoot;
