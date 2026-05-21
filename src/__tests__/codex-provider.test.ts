@@ -960,6 +960,50 @@ describe('CodexProvider image input', () => {
     assert.equal(capturedStartOptions?.modelReasoningEffort, 'xhigh');
     assert.equal(capturedStartOptions?.approvalPolicy, 'on-request');
   });
+
+  it('logs a redacted Codex exec preview before starting a turn', async () => {
+    const { CodexProvider } = await import('../codex-provider.js');
+    const { PendingPermissions } = await import('../permission-gateway.js');
+    const provider = new CodexProvider(new PendingPermissions());
+
+    const mockThread = {
+      runStreamed: () => ({
+        events: (async function* () {
+          yield { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1, cached_input_tokens: 0 } };
+        })(),
+      }),
+    };
+    (provider as any).sdk = { Codex: class { constructor() {} } };
+    (provider as any).codex = {
+      startThread: () => mockThread,
+    };
+
+    const logs: unknown[][] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => { logs.push(args); };
+    try {
+      const stream = provider.streamChat({
+        prompt: 'do not leak this full prompt',
+        sessionId: 'log-preview-session',
+        workingDirectory: '/tmp/work dir',
+        sandboxMode: 'workspace-write',
+        permissionMode: 'acceptEdits',
+      });
+      await collectStream(stream);
+    } finally {
+      console.log = originalLog;
+    }
+
+    const launchLog = logs.find((args) => args[0] === '[codex-provider] Codex exec start:');
+    assert.ok(launchLog, 'Should log Codex exec launch details');
+    const payload = launchLog![1] as { command: string; prompt_chars: number; options: Record<string, unknown> };
+    assert.match(payload.command, /codex exec --experimental-json/);
+    assert.match(payload.command, /--sandbox workspace-write/);
+    assert.match(payload.command, /approval_policy=/);
+    assert.equal(payload.prompt_chars, 'do not leak this full prompt'.length);
+    assert.equal(payload.options.approval_policy, 'on-request');
+    assert.ok(!payload.command.includes('do not leak this full prompt'), 'Prompt content should not be logged');
+  });
 });
 
 // ── Error event tests ───────────────────────────────────────

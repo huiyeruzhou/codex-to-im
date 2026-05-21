@@ -192,6 +192,72 @@ function stringifyUnknown(value: unknown): string {
   }
 }
 
+function quoteCliArg(value: string): string {
+  if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(value)) return value;
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function formatCodexExecPreview(
+  action: 'start' | 'resume',
+  threadId: string | undefined,
+  threadOptions: Record<string, unknown>,
+  imageCount: number,
+): string {
+  const args = ['codex', 'exec', '--experimental-json'];
+  if (typeof threadOptions.model === 'string') args.push('--model', threadOptions.model);
+  if (typeof threadOptions.sandboxMode === 'string') args.push('--sandbox', threadOptions.sandboxMode);
+  if (typeof threadOptions.workingDirectory === 'string') args.push('--cd', threadOptions.workingDirectory);
+  if (threadOptions.skipGitRepoCheck === true) args.push('--skip-git-repo-check');
+  if (typeof threadOptions.modelReasoningEffort === 'string') {
+    args.push('--config', `model_reasoning_effort="${threadOptions.modelReasoningEffort}"`);
+  }
+  if (typeof threadOptions.approvalPolicy === 'string') {
+    args.push('--config', `approval_policy="${threadOptions.approvalPolicy}"`);
+  }
+  if (action === 'resume' && threadId) args.push('resume', threadId);
+  for (let i = 0; i < imageCount; i += 1) {
+    args.push('--image', '<image-path:redacted>');
+  }
+  return args.map(quoteCliArg).join(' ');
+}
+
+function logCodexExecStart(params: {
+  action: 'start' | 'resume';
+  threadId?: string;
+  sessionId: string;
+  promptChars: number;
+  imageCount: number;
+  attachmentCount: number;
+  permissionMode?: string;
+  threadOptions: Record<string, unknown>;
+}): void {
+  console.log('[codex-provider] Codex exec start:', {
+    action: params.action,
+    thread_id: params.threadId,
+    bridge_session_id: params.sessionId,
+    command: formatCodexExecPreview(
+      params.action,
+      params.threadId,
+      params.threadOptions,
+      params.imageCount,
+    ),
+    prompt_chars: params.promptChars,
+    attachments: {
+      total: params.attachmentCount,
+      images: params.imageCount,
+    },
+    permission_mode: params.permissionMode || null,
+    options: {
+      model: params.threadOptions.model || null,
+      working_directory: params.threadOptions.workingDirectory || null,
+      sandbox_mode: params.threadOptions.sandboxMode || null,
+      approval_policy: params.threadOptions.approvalPolicy || null,
+      model_reasoning_effort: params.threadOptions.modelReasoningEffort || null,
+      skip_git_repo_check: params.threadOptions.skipGitRepoCheck === true,
+    },
+  });
+}
+
 export class CodexProvider implements LLMProvider {
   private sdk: CodexModule | null = null;
   private codex: CodexInstance | null = null;
@@ -309,8 +375,27 @@ export class CodexProvider implements LLMProvider {
             while (true) {
               let thread: ThreadInstance;
               if (savedThreadId) {
+                logCodexExecStart({
+                  action: 'resume',
+                  threadId: savedThreadId,
+                  sessionId: params.sessionId,
+                  promptChars: params.prompt.length,
+                  imageCount: imageFiles.length,
+                  attachmentCount: params.files?.length || 0,
+                  permissionMode: params.permissionMode,
+                  threadOptions,
+                });
                 thread = codex.resumeThread(savedThreadId, threadOptions);
               } else {
+                logCodexExecStart({
+                  action: 'start',
+                  sessionId: params.sessionId,
+                  promptChars: params.prompt.length,
+                  imageCount: imageFiles.length,
+                  attachmentCount: params.files?.length || 0,
+                  permissionMode: params.permissionMode,
+                  threadOptions,
+                });
                 thread = codex.startThread(threadOptions);
               }
 
