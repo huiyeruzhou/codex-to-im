@@ -3,11 +3,14 @@ import type { ChannelAddress, ChannelBinding } from './types.js';
 
 export type BindingChangeAction =
   | 'auto_create_draft'
+  | 'auto_create_prebound'
   | 'auto_recreate_missing_session'
   | 'switch_draft'
   | 'switch_desktop'
   | 'new_session'
   | 'unbind'
+  | 'web_clear_default_target'
+  | 'web_set_default_target'
   | 'web_switch'
   | 'web_unbind';
 

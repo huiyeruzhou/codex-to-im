@@ -180,6 +180,8 @@ export async function handleBridgeCommand(
   let responseParseMode: 'Markdown' | 'plain' = getFeedbackParseMode(adapter.channelType);
   let auditResponse = true;
   const currentBinding = store.getChannelBinding(msg.address.channelType, msg.address.chatId);
+  const commandBinding = currentBinding
+    || (store.getChannelDefaultTarget(msg.address.channelType) ? router.resolve(msg.address) : null);
 
   switch (command) {
     case '/start':
@@ -201,7 +203,7 @@ export async function handleBridgeCommand(
       const parsedArgs = parseForceFlag(args);
       const blocked = guardBindingChangeWhileRunning(
         store,
-        currentBinding,
+        commandBinding,
         parsedArgs.force,
         deps,
         responseParseMode === 'Markdown',
@@ -210,10 +212,10 @@ export async function handleBridgeCommand(
         response = blocked;
         break;
       }
-      const currentSession = currentBinding
-        ? store.getSession(currentBinding.codepilotSessionId)
+      const currentSession = commandBinding
+        ? store.getSession(commandBinding.codepilotSessionId)
         : null;
-      const resolved = resolveNewSessionWorkingDirectory(parsedArgs.args, currentBinding, currentSession);
+      const resolved = resolveNewSessionWorkingDirectory(parsedArgs.args, commandBinding, currentSession);
       if (!resolved.ok) {
         response = resolved.message;
         break;
@@ -226,7 +228,7 @@ export async function handleBridgeCommand(
       auditCommandBindingChange(
         'new_session',
         msg,
-        currentBinding,
+        commandBinding,
         binding,
         parsedArgs.force ? 'forced' : undefined,
       );
@@ -253,7 +255,7 @@ export async function handleBridgeCommand(
       if (threadArgs === '0' || threadArgs === '0 reset') {
         const blocked = guardBindingChangeWhileRunning(
           store,
-          currentBinding,
+          commandBinding,
           parsedArgs.force,
           deps,
           responseParseMode === 'Markdown',
@@ -279,7 +281,7 @@ export async function handleBridgeCommand(
         auditCommandBindingChange(
           'switch_draft',
           msg,
-          currentBinding,
+          commandBinding,
           updatedBinding,
           [
             threadArgs === '0 reset' ? 'reset' : null,
@@ -324,7 +326,7 @@ export async function handleBridgeCommand(
 
       const blocked = guardBindingChangeWhileRunning(
         store,
-        currentBinding,
+        commandBinding,
         parsedArgs.force,
         deps,
         responseParseMode === 'Markdown',
@@ -398,7 +400,7 @@ export async function handleBridgeCommand(
       auditCommandBindingChange(
         'switch_desktop',
         msg,
-        currentBinding,
+        commandBinding,
         binding,
         parsedArgs.force ? 'forced' : undefined,
       );
@@ -442,11 +444,11 @@ export async function handleBridgeCommand(
     }
 
     case '/reasoning': {
-      if (!currentBinding) {
+      if (!commandBinding) {
         response = '当前聊天还没有绑定会话。先发送消息创建会话，或先用 `/t 1` 接管桌面会话。';
         break;
       }
-      const session = store.getSession(currentBinding.codepilotSessionId);
+      const session = store.getSession(commandBinding.codepilotSessionId);
       if (!session) {
         response = '当前会话不存在。';
         break;
@@ -711,7 +713,7 @@ export async function handleBridgeCommand(
 
     case '/status': {
       auditResponse = false;
-      const binding = currentBinding;
+      const binding = commandBinding;
       if (!binding) {
         response = buildCommandFields(
           '当前会话',
@@ -787,7 +789,7 @@ export async function handleBridgeCommand(
       }
 
       const explicitTargetSessionId = args.trim();
-      const targetSessionId = explicitTargetSessionId || currentBinding?.codepilotSessionId;
+      const targetSessionId = explicitTargetSessionId || commandBinding?.codepilotSessionId;
       if (!targetSessionId) {
         response = '当前聊天还没有绑定会话。先发送消息创建会话，或先用 `/t 1` 接管桌面会话。';
         break;
@@ -806,7 +808,7 @@ export async function handleBridgeCommand(
     }
 
     case '/history': {
-      if (!currentBinding) {
+      if (!commandBinding) {
         response = '当前聊天还没有绑定会话。先发送消息创建会话，或先用 `/t 1` 接管桌面会话。';
         break;
       }
@@ -824,12 +826,12 @@ export async function handleBridgeCommand(
       }
 
       const limit = getHistoryMessageLimit();
-      const session = store.getSession(currentBinding.codepilotSessionId);
+      const session = store.getSession(commandBinding.codepilotSessionId);
       const desktopThreadId = getExplicitDesktopThreadId(session);
       const desktopMessages = desktopThreadId
         ? readDesktopSessionMessages(desktopThreadId, limit)
         : [];
-      const { messages: storedMessages } = store.getMessages(currentBinding.codepilotSessionId, { limit });
+      const { messages: storedMessages } = store.getMessages(commandBinding.codepilotSessionId, { limit });
       const messages = desktopMessages.length > 0 ? desktopMessages : storedMessages;
       if (messages.length === 0) {
         response = '当前会话还没有历史消息。';
@@ -842,8 +844,8 @@ export async function handleBridgeCommand(
         const exportedAt = new Date().toISOString();
         const payload = {
           exportedAt,
-          sessionId: currentBinding.codepilotSessionId,
-          threadTitle: threadTitle || getSessionDisplayName(session, currentBinding.workingDirectory),
+          sessionId: commandBinding.codepilotSessionId,
+          threadTitle: threadTitle || getSessionDisplayName(session, commandBinding.workingDirectory),
           source: messageSource,
           limit,
           messages,
@@ -870,7 +872,7 @@ export async function handleBridgeCommand(
             adapter,
             msg.address,
             '',
-            currentBinding.codepilotSessionId,
+            commandBinding.codepilotSessionId,
             msg.messageId,
             [attachment],
           );
@@ -886,7 +888,7 @@ export async function handleBridgeCommand(
       const header = buildCommandFields(
         '最近对话（raw）',
         [
-          ['标题', threadTitle || getSessionDisplayName(session, currentBinding.workingDirectory)],
+          ['标题', threadTitle || getSessionDisplayName(session, commandBinding.workingDirectory)],
           ['来源', messageSource],
           ['返回条数', `${messages.length} / 配置 ${limit}`],
         ],
@@ -1054,14 +1056,14 @@ export async function handleBridgeCommand(
     }
 
     case '/unbind': {
-      if (!currentBinding) {
+      if (!commandBinding) {
         response = '当前聊天还没有绑定任何会话。';
         break;
       }
       const parsedArgs = parseForceFlag(args);
       const blocked = guardBindingChangeWhileRunning(
         store,
-        currentBinding,
+        commandBinding,
         parsedArgs.force,
         deps,
         responseParseMode === 'Markdown',
@@ -1070,18 +1072,18 @@ export async function handleBridgeCommand(
         response = blocked;
         break;
       }
-      store.deleteChannelBinding(currentBinding.id);
+      store.deleteChannelBinding(commandBinding.id);
       auditCommandBindingChange(
         'unbind',
         msg,
-        currentBinding,
+        commandBinding,
         null,
         parsedArgs.force ? 'forced' : undefined,
       );
       response = buildCommandFields(
         '已解绑当前聊天',
         [
-          ['聊天', formatBindingChatLabel(currentBinding)],
+          ['聊天', formatBindingChatLabel(commandBinding)],
         ],
         [
           '这个聊天已释放当前会话绑定。',

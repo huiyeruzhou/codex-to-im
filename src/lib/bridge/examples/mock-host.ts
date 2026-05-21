@@ -25,7 +25,7 @@ import type {
   BridgeSession,
   BridgeMessage,
 } from '../host.js';
-import type { ChannelBinding, ChannelType } from '../types.js';
+import type { ChannelBinding, ChannelDefaultTarget, ChannelType } from '../types.js';
 
 // ── In-memory Store ─────────────────────────────────────────
 
@@ -33,6 +33,7 @@ class InMemoryStore implements BridgeStore {
   private settings = new Map<string, string>();
   private sessions = new Map<string, BridgeSession>();
   private bindings = new Map<string, ChannelBinding>();
+  private channelDefaultTargets = new Map<string, ChannelDefaultTarget>();
   private messages = new Map<string, BridgeMessage[]>();
   private nextId = 1;
 
@@ -79,6 +80,23 @@ class InMemoryStore implements BridgeStore {
   }
 
   listChannelBindings(_channelType?: ChannelType) { return Array.from(this.bindings.values()); }
+  getChannelDefaultTarget(channelType: string) { return this.channelDefaultTargets.get(channelType) ?? null; }
+  upsertChannelDefaultTarget(data: { channelType: string; channelProvider?: string; channelAlias?: string; targetKey: string }) {
+    const existing = this.channelDefaultTargets.get(data.channelType);
+    const target: ChannelDefaultTarget = {
+      id: existing?.id || `channel-default-${this.nextId++}`,
+      channelType: data.channelType,
+      channelProvider: data.channelProvider ?? existing?.channelProvider,
+      channelAlias: data.channelAlias ?? existing?.channelAlias,
+      targetKey: data.targetKey,
+      createdAt: existing?.createdAt ?? new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    this.channelDefaultTargets.set(data.channelType, target);
+    return target;
+  }
+  deleteChannelDefaultTarget(channelType: string) { this.channelDefaultTargets.delete(channelType); }
+  listChannelDefaultTargets() { return Array.from(this.channelDefaultTargets.values()); }
 
   getSession(id: string) { return this.sessions.get(id) ?? null; }
 

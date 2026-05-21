@@ -128,6 +128,49 @@ describe('command-dispatch', () => {
     assert.match(response, /第一条助手回复/);
   });
 
+  it('applies channel prebinding before running the first session-scoped slash command', async () => {
+    const store = initTestContext();
+    const sent: string[] = [];
+    const adapter: any = {
+      channelType: 'feishu-default',
+      send: async (message: { text: string }) => {
+        sent.push(message.text);
+        return { ok: true, messageId: 'reply-prebound-history' };
+      },
+    };
+    const address = { channelType: 'feishu-default', chatId: 'chat-prebound-history', displayName: 'Prebound Chat' } as const;
+    const session = store.createSession('prebound-session', 'test-model', undefined, '/tmp/prebound-history');
+    store.addMessage(session.id, 'user', '预绑定历史消息');
+    store.upsertChannelDefaultTarget({
+      channelType: 'feishu-default',
+      channelProvider: 'feishu',
+      channelAlias: '飞书',
+      targetKey: `session:${session.id}`,
+    });
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/history',
+        messageId: 'incoming-prebound-history',
+      } as any,
+      '/history',
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      },
+    );
+
+    const binding = store.getChannelBinding(address.channelType, address.chatId);
+    assert.ok(binding);
+    assert.equal(binding?.codepilotSessionId, session.id);
+    assert.equal(store.getChannelDefaultTarget(address.channelType), null);
+    assert.match(sent[0] || '', /最近对话（raw）/);
+    assert.match(sent[0] || '', /预绑定历史消息/);
+  });
+
   it('exports /history json as an attachment', async () => {
     const store = initTestContext();
     const sent: any[] = [];

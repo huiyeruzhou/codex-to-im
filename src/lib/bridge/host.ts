@@ -6,7 +6,7 @@
  * interfaces to use the bridge.
  */
 
-import type { ChannelBinding, ChannelType } from './types.js';
+import type { ChannelBinding, ChannelDefaultTarget, ChannelType } from './types.js';
 import type { CodexReasoningEffort, CodexSandboxMode } from '../../config.js';
 
 // ── Bridge-local types (replacing @/types imports) ────────────
@@ -201,6 +201,14 @@ export interface UpsertChannelBindingInput {
   mode?: string;
 }
 
+/** Input for upserting a channel default target. */
+export interface UpsertChannelDefaultTargetInput {
+  channelType: string;
+  channelProvider?: string;
+  channelAlias?: string;
+  targetKey: string;
+}
+
 /**
  * Persistence layer for the bridge system.
  * All database operations are abstracted through this interface.
@@ -215,6 +223,10 @@ export interface BridgeStore {
   deleteChannelBinding(id: string): void;
   updateChannelBinding(id: string, updates: Partial<ChannelBinding>): void;
   listChannelBindings(channelType?: ChannelType): ChannelBinding[];
+  getChannelDefaultTarget(channelType: string): ChannelDefaultTarget | null;
+  upsertChannelDefaultTarget(data: UpsertChannelDefaultTargetInput): ChannelDefaultTarget;
+  deleteChannelDefaultTarget(channelType: string): void;
+  listChannelDefaultTargets(): ChannelDefaultTarget[];
 
   // ── Sessions ──
   getSession(id: string): BridgeSession | null;

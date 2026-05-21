@@ -123,6 +123,17 @@ export interface ChannelBinding {
   updatedAt: string;
 }
 
+/** One-shot default target for the next new chat on a channel instance. */
+export interface ChannelDefaultTarget {
+  id: string;
+  channelType: ChannelType;
+  channelProvider?: string;
+  channelAlias?: string;
+  targetKey: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // ── Bridge Status ──────────────────────────────────────────────
 
 /** Overall bridge system status */

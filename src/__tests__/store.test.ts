@@ -162,6 +162,32 @@ describe('JsonFileStore', () => {
     assert.equal(store.listChannelBindings().length, 2);
   });
 
+  it('persists channel default targets by channel instance', () => {
+    const store = new JsonFileStore(makeSettings());
+    const first = store.upsertChannelDefaultTarget({
+      channelType: 'feishu-default',
+      channelProvider: 'feishu',
+      channelAlias: '飞书',
+      targetKey: 'session:sess-1',
+    });
+    assert.ok(first.id);
+    assert.equal(first.targetKey, 'session:sess-1');
+
+    const updated = store.upsertChannelDefaultTarget({
+      channelType: 'feishu-default',
+      targetKey: 'desktop:thread-2',
+    });
+    assert.equal(updated.id, first.id);
+    assert.equal(updated.targetKey, 'desktop:thread-2');
+
+    const reloaded = new JsonFileStore(makeSettings());
+    assert.equal(reloaded.getChannelDefaultTarget('feishu-default')?.targetKey, 'desktop:thread-2');
+    assert.equal(reloaded.listChannelDefaultTargets().length, 1);
+
+    reloaded.deleteChannelDefaultTarget('feishu-default');
+    assert.equal(reloaded.getChannelDefaultTarget('feishu-default'), null);
+  });
+
   it('migrates legacy singleton channel bindings to default v2 channel instances on reload', () => {
     const configBackup = fs.existsSync(CONFIG_V2_PATH) ? fs.readFileSync(CONFIG_V2_PATH, 'utf-8') : null;
     try {

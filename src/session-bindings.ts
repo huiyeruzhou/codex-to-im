@@ -1,7 +1,7 @@
 import path from 'node:path';
 
 import type { BridgeSession, BridgeStore } from './lib/bridge/host.js';
-import type { ChannelBinding } from './lib/bridge/types.js';
+import type { ChannelAddress, ChannelBinding, ChannelDefaultTarget } from './lib/bridge/types.js';
 import { recordBindingChange } from './lib/bridge/binding-audit.js';
 import { findChannelInstance, loadConfig, type ChannelProvider } from './config.js';
 import {
@@ -46,6 +46,19 @@ export interface BindingSummary {
   queuedCount?: number;
   mirrorStatus?: BridgeSession['mirror_status'];
   mirrorLastEventAt?: string;
+}
+
+export interface ChannelDefaultTargetSummary {
+  id: string;
+  channelType: string;
+  channelProvider?: string;
+  channelAlias?: string;
+  targetKey: string;
+  targetLabel: string;
+  targetSessionId?: string;
+  targetThreadId?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 interface BindingChatMeta {
@@ -97,6 +110,16 @@ function findConflictingBinding(
   }) || null;
 }
 
+function findTargetConflict(
+  store: BridgeStore,
+  opts: { sessionId?: string; sdkSessionId?: string },
+): ChannelBinding | null {
+  return store.listChannelBindings().find((binding) => (
+    (opts.sessionId ? binding.codepilotSessionId === opts.sessionId : false)
+    || (opts.sdkSessionId ? binding.sdkSessionId === opts.sdkSessionId : false)
+  )) || null;
+}
+
 function assertBindingTargetAvailable(
   store: BridgeStore,
   current: { channelType: string; chatId: string },
@@ -118,6 +141,43 @@ function assertBindingTargetAvailable(
   );
 }
 
+function assertTargetAvailableForDefaultRouting(
+  store: BridgeStore,
+  targetKey: string,
+): void {
+  if (targetKey.startsWith('session:')) {
+    const sessionId = targetKey.slice('session:'.length);
+    const session = store.getSession(sessionId);
+    if (!session) {
+      throw new Error('Session not found.');
+    }
+
+    const conflict = findTargetConflict(store, {
+      sessionId: session.id,
+      sdkSessionId: getCodexThreadId(session) || getExplicitDesktopThreadId(session),
+    });
+    if (conflict) {
+      throw new Error(
+        `该会话已绑定到 ${formatChannelLabel(conflict)} 聊天 ${formatBindingChatTarget(conflict)}。一个会话只能绑定一个聊天。`,
+      );
+    }
+    return;
+  }
+
+  if (targetKey.startsWith('desktop:')) {
+    const threadId = targetKey.slice('desktop:'.length);
+    const conflict = findTargetConflict(store, { sdkSessionId: threadId });
+    if (conflict) {
+      throw new Error(
+        `该会话已绑定到 ${formatChannelLabel(conflict)} 聊天 ${formatBindingChatTarget(conflict)}。一个会话只能绑定一个聊天。`,
+      );
+    }
+    return;
+  }
+
+  throw new Error('Unsupported target.');
+}
+
 function getSessionName(session: BridgeSession): string {
   if (session.session_type === 'draft') return '临时草稿线程';
   if (session.name?.trim()) return session.name.trim();
@@ -133,6 +193,36 @@ function getSessionMode(store: BridgeStore, session: BridgeSession): ChannelBind
 
 function getBindingResumeThreadId(session: BridgeSession): string {
   return getCodexThreadId(session) || '';
+}
+
+function describeTargetKey(
+  store: BridgeStore,
+  targetKey: string,
+): { targetLabel: string; targetSessionId?: string; targetThreadId?: string } {
+  if (targetKey.startsWith('desktop:')) {
+    const threadId = targetKey.slice('desktop:'.length);
+    const desktop = getDesktopSessionByThreadId(threadId);
+    const archived = isArchivedDesktopThread(threadId);
+    return {
+      targetLabel: desktop?.title || (archived ? `已归档桌面线程 ${threadId.slice(0, 8)}...` : `Desktop thread ${threadId.slice(0, 8)}...`),
+      targetThreadId: threadId,
+    };
+  }
+
+  if (targetKey.startsWith('session:')) {
+    const sessionId = targetKey.slice('session:'.length);
+    const session = store.getSession(sessionId);
+    if (!session) {
+      throw new Error('Session not found.');
+    }
+    return {
+      targetLabel: getSessionName(session),
+      targetSessionId: session.id,
+      targetThreadId: getCodexThreadId(session) || undefined,
+    };
+  }
+
+  throw new Error('Unsupported target.');
 }
 
 function markSessionAsDesktopBacked(
@@ -247,6 +337,40 @@ export function bindStoreToSdkSession(
   });
 }
 
+export function bindAddressToTarget(
+  store: BridgeStore,
+  address: Pick<ChannelAddress, 'channelType' | 'chatId' | 'userId' | 'displayName'>,
+  targetKey: string,
+): ChannelBinding {
+  if (targetKey.startsWith('desktop:')) {
+    const threadId = targetKey.slice('desktop:'.length);
+    const desktop = getDesktopSessionByThreadId(threadId);
+    return bindStoreToSdkSession(store, address.channelType, address.chatId, threadId, desktop ? {
+      workingDirectory: desktop.cwd,
+      displayName: desktop.title,
+      chatUserId: address.userId,
+      chatDisplayName: address.displayName,
+    } : {
+      chatUserId: address.userId,
+      chatDisplayName: address.displayName,
+    });
+  }
+
+  if (targetKey.startsWith('session:')) {
+    const sessionId = targetKey.slice('session:'.length);
+    const binding = bindStoreToSession(store, address.channelType, address.chatId, sessionId, {
+      chatUserId: address.userId,
+      chatDisplayName: address.displayName,
+    });
+    if (!binding) {
+      throw new Error('Session not found.');
+    }
+    return binding;
+  }
+
+  throw new Error('Unsupported target.');
+}
+
 export function listBindingTargetOptions(
   store: BridgeStore,
   desktopLimit = 12,
@@ -322,6 +446,125 @@ export function listBindingSummaries(store: BridgeStore): BindingSummary[] {
     const bLabel = b.channelAlias || b.channelType;
     if (aLabel !== bLabel) return aLabel.localeCompare(bLabel);
     return a.chatId.localeCompare(b.chatId);
+  });
+}
+
+export function listChannelDefaultTargetSummaries(store: BridgeStore): ChannelDefaultTargetSummary[] {
+  return store.listChannelDefaultTargets().map((target) => {
+    const resolved = describeTargetKey(store, target.targetKey);
+    return {
+      id: target.id,
+      channelType: target.channelType,
+      channelProvider: target.channelProvider,
+      channelAlias: target.channelAlias,
+      targetKey: target.targetKey,
+      targetLabel: resolved.targetLabel,
+      targetSessionId: resolved.targetSessionId,
+      targetThreadId: resolved.targetThreadId,
+      createdAt: target.createdAt,
+      updatedAt: target.updatedAt,
+    };
+  }).sort((a, b) => {
+    const aLabel = a.channelAlias || a.channelType;
+    const bLabel = b.channelAlias || b.channelType;
+    return aLabel.localeCompare(bLabel);
+  });
+}
+
+export function updateChannelDefaultTarget(
+  store: BridgeStore,
+  channelType: string,
+  targetKey: string,
+): ChannelDefaultTargetSummary {
+  assertTargetAvailableForDefaultRouting(store, targetKey);
+  const meta = resolveChannelMeta(channelType);
+  const existing = store.getChannelDefaultTarget(channelType);
+  const updated = store.upsertChannelDefaultTarget({
+    channelType,
+    channelProvider: meta.provider,
+    channelAlias: meta.alias,
+    targetKey,
+  });
+
+  recordBindingChange(store, {
+    action: 'web_set_default_target',
+    address: {
+      channelType,
+      channelProvider: meta.provider,
+      channelAlias: meta.alias,
+      chatId: '*',
+    },
+    fromBinding: existing ? ({
+      id: existing.id,
+      channelType: existing.channelType,
+      channelProvider: existing.channelProvider,
+      channelAlias: existing.channelAlias,
+      chatId: '*',
+      codepilotSessionId: existing.targetKey,
+      sdkSessionId: '',
+      workingDirectory: '',
+      model: '',
+      mode: 'code',
+      active: true,
+      createdAt: existing.createdAt,
+      updatedAt: existing.updatedAt,
+    } satisfies ChannelBinding) : null,
+    toBinding: {
+      id: updated.id,
+      channelType: updated.channelType,
+      channelProvider: updated.channelProvider,
+      channelAlias: updated.channelAlias,
+      chatId: '*',
+      codepilotSessionId: updated.targetKey,
+      sdkSessionId: '',
+      workingDirectory: '',
+      model: '',
+      mode: 'code',
+      active: true,
+      createdAt: updated.createdAt,
+      updatedAt: updated.updatedAt,
+    },
+    source: 'web_ui',
+    reason: `target=${targetKey}`,
+  });
+
+  return listChannelDefaultTargetSummaries(store).find((item) => item.channelType === channelType)!;
+}
+
+export function removeChannelDefaultTarget(
+  store: BridgeStore,
+  channelType: string,
+): void {
+  const existing = store.getChannelDefaultTarget(channelType);
+  if (!existing) {
+    throw new Error('Channel default target not found.');
+  }
+  store.deleteChannelDefaultTarget(channelType);
+  recordBindingChange(store, {
+    action: 'web_clear_default_target',
+    address: {
+      channelType,
+      channelProvider: existing.channelProvider,
+      channelAlias: existing.channelAlias,
+      chatId: '*',
+    },
+    fromBinding: {
+      id: existing.id,
+      channelType: existing.channelType,
+      channelProvider: existing.channelProvider,
+      channelAlias: existing.channelAlias,
+      chatId: '*',
+      codepilotSessionId: existing.targetKey,
+      sdkSessionId: '',
+      workingDirectory: '',
+      model: '',
+      mode: 'code',
+      active: true,
+      createdAt: existing.createdAt,
+      updatedAt: existing.updatedAt,
+    },
+    toBinding: null,
+    source: 'web_ui',
   });
 }
 

@@ -32,9 +32,12 @@ import {
 } from './desktop-sessions.js';
 import {
   type BindingSummary,
+  listChannelDefaultTargetSummaries,
   listBindingSummaries,
   listBindingTargetOptions,
+  removeChannelDefaultTarget,
   removeBinding,
+  updateChannelDefaultTarget,
   updateBindingTarget,
 } from './session-bindings.js';
 import {
@@ -1086,6 +1089,7 @@ async function buildBindingsPayload(store: JsonFileStore, config: Config) {
   return {
     bindings: enriched,
     options: listBindingTargetOptions(store, 12),
+    channelDefaults: listChannelDefaultTargetSummaries(store),
   };
 }
 
@@ -1094,6 +1098,15 @@ function syncBindingChannelMeta(store: JsonFileStore, channel: ChannelInstance):
     store.updateChannelBinding(binding.id, {
       channelProvider: channel.provider,
       channelAlias: channel.alias,
+    });
+  }
+  const channelDefault = store.getChannelDefaultTarget(channel.id);
+  if (channelDefault) {
+    store.upsertChannelDefaultTarget({
+      channelType: channel.id,
+      channelProvider: channel.provider,
+      channelAlias: channel.alias,
+      targetKey: channelDefault.targetKey,
     });
   }
 }
@@ -1681,6 +1694,7 @@ function renderHtml(): string {
         desktopSessionCounts: null,
         bindings: [],
         bindingOptions: [],
+        channelDefaults: [],
         activeBindingByChannelId: {},
         weixinAccounts: [],
         desktopRoot: '',
@@ -1931,10 +1945,29 @@ function renderHtml(): string {
       }
 
       function bindingTabLabel(binding) {
+        if (binding.kind === 'default') {
+          return '下一条新聊天';
+        }
         return binding.chatDisplayName || binding.chatId || binding.id;
       }
 
       function renderBindingCard(binding) {
+        if (binding.kind === 'default') {
+          return ''
+            + '<article class="binding-item" data-binding-id="' + escapeHtml(binding.id) + '">'
+            +   '<div class="binding-head">'
+            +     '<div class="binding-title">下一条新聊天</div>'
+            +     '<div class="actions">'
+            +       '<div class="small">' + escapeHtml(formatDefaultTargetAccount(binding)) + '</div>'
+            +       '<button type="button" data-action="clear-channel-default-target" data-channel-type="' + escapeHtml(binding.channelType) + '">清除当前入口</button>'
+            +     '</div>'
+            +   '</div>'
+            +   '<div class="binding-detail">接入方式：该通道收到下一条新聊天后，会直接进入当前指定会话。</div>'
+            +   '<div class="binding-detail">当前会话：<code>' + escapeHtml(binding.currentSessionId ? binding.currentSessionId.slice(0, 8) + '...' : 'not-shared') + '</code> · ' + escapeHtml(binding.currentSessionName || binding.currentTargetLabel || '未指定') + '</div>'
+            +   '<div class="binding-detail">当前目标：' + escapeHtml(binding.currentTargetLabel || '未指定') + '</div>'
+            +   '<div class="binding-detail">当前 thread：<code>' + escapeHtml(binding.currentThreadId || 'not-shared') + '</code></div>'
+            + '</article>';
+        }
         return ''
           + '<article class="binding-item" data-binding-id="' + escapeHtml(binding.id) + '">'
           +   '<div class="binding-head">'
@@ -2403,6 +2436,13 @@ function renderHtml(): string {
           counts.set(label, (counts.get(label) || 0) + 1);
         }
 
+        for (const entry of state.channelDefaults || []) {
+          const matchesThread = (threadId && entry.targetThreadId === threadId) || entry.targetKey === currentTargetKey;
+          if (!matchesThread) continue;
+          const label = (entry.channelAlias || providerLabel(entry.channelProvider)) + ' 当前';
+          counts.set(label, (counts.get(label) || 0) + 1);
+        }
+
         for (const [label, count] of counts.entries()) {
           marks.push(count > 1 ? label + ' x' + count : label);
         }
@@ -2418,6 +2458,14 @@ function renderHtml(): string {
         ));
       }
 
+      function channelDefaultsForSession(session) {
+        const threadId = session.threadId || '';
+        const currentTargetKey = sessionTargetKey(session);
+        return (state.channelDefaults || []).filter((entry) => (
+          (threadId && entry.targetThreadId === threadId) || entry.targetKey === currentTargetKey
+        ));
+      }
+
       function projectNameFromCwd(cwd) {
         const value = String(cwd || '').trim();
         if (!value) return '(no cwd)';
@@ -2430,6 +2478,12 @@ function renderHtml(): string {
         const provider = providerLabel(binding.channelProvider);
         const channel = alias ? (alias === provider ? alias : alias + ' · ' + provider) : provider;
         return channel + ' · ' + (binding.chatDisplayName || binding.chatId);
+      }
+
+      function formatDefaultTargetAccount(entry) {
+        const alias = String(entry.channelAlias || '').trim();
+        const provider = providerLabel(entry.channelProvider);
+        return alias ? (alias === provider ? alias : alias + ' · ' + provider) : provider;
       }
 
       function renderSessionChannelControl(session) {
@@ -2524,6 +2578,7 @@ function renderHtml(): string {
       function renderBoundDesktopSessionCard(session) {
         const targetKey = sessionTargetKey(session);
         const bindings = bindingsForSession(session);
+        const defaults = channelDefaultsForSession(session);
         const marks = currentThreadMarks(session);
         const markHtml = marks.map((mark) => '<span class="session-mark">' + escapeHtml(mark) + '</span>').join('');
         const identityLabel = session.threadId ? 'Thread' : 'Bridge 会话';
@@ -2535,6 +2590,14 @@ function renderHtml(): string {
             + '<button type="button" data-action="unbind-binding" data-binding-id="' + escapeHtml(binding.id) + '" data-channel="' + escapeHtml(binding.channelType) + '">解绑</button>'
           + '</div>'
         )).join('');
+        const defaultTags = defaults.map((entry) => (
+          '<div class="session-binding-tag">'
+            + '<span class="session-binding-tag-label">' + escapeHtml(formatDefaultTargetAccount(entry) + ' · 等待首条新聊天') + '</span>'
+            + iconButton('open-session-config-modal', 'settings', '会话配置', 'data-target-key="' + escapeHtml(targetKey) + '"', 'mini-icon')
+            + '<button type="button" data-action="clear-channel-default-target" data-channel-type="' + escapeHtml(entry.channelType) + '">清除</button>'
+          + '</div>'
+        )).join('');
+        const tagHtml = bindingTags + defaultTags;
 
         return ''
           + '<article class="session-card session-openable' + (marks.length ? ' current-thread' : '') + '" data-session-target-key="' + escapeHtml(targetKey) + '">'
@@ -2543,7 +2606,7 @@ function renderHtml(): string {
           +       renderSessionTitle(session, markHtml)
           +       '<div class="session-thread">' + identityLabel + ': <code>' + escapeHtml(identityValue) + '</code></div>'
           +       '<div class="session-path">' + escapeHtml(session.cwd || '(no cwd)') + '</div>'
-          +       '<div class="session-binding-tags">' + bindingTags + '</div>'
+          +       '<div class="session-binding-tags">' + tagHtml + '</div>'
           +     '</div>'
           +     '<div class="session-cell">'
           +       '<div class="session-label">所属项目</div>'
@@ -2603,7 +2666,7 @@ function renderHtml(): string {
         const dedupedBridgeRows = Number.isFinite(Number(counts.dedupedBridgeRows))
           ? Number(counts.dedupedBridgeRows)
           : 0;
-        const boundSessions = sessions.filter((session) => bindingsForSession(session).length > 0);
+        const boundSessions = sessions.filter((session) => bindingsForSession(session).length > 0 || channelDefaultsForSession(session).length > 0);
         document.getElementById('desktopSessionCount').textContent = String(totalDisplayable);
         document.getElementById('desktopSessionMeta').textContent =
           '扫描目录：' + state.desktopRoot
@@ -2618,13 +2681,13 @@ function renderHtml(): string {
         const list = document.getElementById('desktopSessionsList');
         const allMeta = document.getElementById('allSessionsMeta');
         boundMeta.textContent = boundSessions.length > 0
-          ? '当前有 ' + boundSessions.length + ' 条会话已绑定到聊天。'
-          : '当前没有已绑定到聊天的会话。';
+          ? '当前有 ' + boundSessions.length + ' 条会话正在使用通道入口。'
+          : '当前没有正在使用通道入口的会话。';
         allMeta.textContent = '按最近活动排序，当前展示 ' + sessions.length
           + (totalDisplayable === sessions.length ? ' 条。' : ' / ' + totalDisplayable + ' 条。');
 
         if (boundSessions.length === 0) {
-          boundList.innerHTML = '<div class="binding-empty">当前没有任何会话正在绑定到聊天入口。</div>';
+          boundList.innerHTML = '<div class="binding-empty">当前没有任何会话正在使用通道入口。</div>';
         } else {
           boundList.innerHTML = boundSessions.map((session) => renderBoundDesktopSessionCard(session)).join('');
         }
@@ -2659,6 +2722,42 @@ function renderHtml(): string {
 
       function bindingsForChannel(channelId) {
         return (state.bindings || []).filter((item) => item.channelType === channelId);
+      }
+
+      function channelDefaultForChannel(channelId) {
+        return (state.channelDefaults || []).find((item) => item.channelType === channelId) || null;
+      }
+
+      function bindingEntriesForChannel(channelId) {
+        const bindings = bindingsForChannel(channelId).map((binding) => ({
+          kind: 'binding',
+          ...binding,
+        }));
+        const channelDefault = channelDefaultForChannel(channelId);
+        if (!channelDefault) {
+          return bindings;
+        }
+        return [{
+          kind: 'default',
+          id: 'default:' + channelId,
+          channelType: channelDefault.channelType,
+          channelProvider: channelDefault.channelProvider,
+          channelAlias: channelDefault.channelAlias,
+          chatId: '*',
+          chatDisplayName: '等待首条新聊天',
+          mode: 'pending',
+          model: '',
+          workingDirectory: '',
+          currentTargetKey: channelDefault.targetKey,
+          currentTargetLabel: channelDefault.targetLabel,
+          currentSessionId: channelDefault.targetSessionId || '',
+          currentSessionName: channelDefault.targetLabel || '未指定',
+          currentThreadId: channelDefault.targetThreadId || '',
+          runtimeStatus: '',
+          queuedCount: 0,
+          mirrorStatus: '',
+          mirrorLastEventAt: '',
+        }].concat(bindings);
       }
 
       function ensureActiveBinding(channelId, bindings) {
@@ -2705,7 +2804,7 @@ function renderHtml(): string {
         list.innerHTML = channels.map((channel) => {
           const adapter = getAdapterStatus(channel.id);
           const active = channel.id === state.activeChannelId;
-          const bindingCount = bindingsForChannel(channel.id).length;
+          const bindingCount = bindingEntriesForChannel(channel.id).length;
           const statusText = channel.enabled === false
             ? '已停用'
             : adapter && adapter.running
@@ -2721,7 +2820,7 @@ function renderHtml(): string {
             +   '</div>'
             +   '<div class="channel-list-item-stats">'
             +     '<span class="channel-list-item-status">' + escapeHtml(statusText) + '</span>'
-            +     '<span>' + escapeHtml(bindingCount === 0 ? '未绑定聊天' : ('已绑定 ' + bindingCount + ' 个聊天')) + '</span>'
+            +     '<span>' + escapeHtml(bindingCount === 0 ? '未指定入口' : ('已指定 ' + bindingCount + ' 个入口')) + '</span>'
             +   '</div>'
             +   '<div class="channel-list-item-meta">' + escapeHtml(channel.id) + '</div>'
             + '</button>';
@@ -2729,7 +2828,7 @@ function renderHtml(): string {
       }
 
       function renderChannelBindingsV2(channel) {
-        const bindings = bindingsForChannel(channel.id);
+        const bindings = bindingEntriesForChannel(channel.id);
         const emptyText = emptyBindingText(channel);
         if (bindings.length === 0) {
           return '<div class="binding-empty">' + escapeHtml(emptyText) + '</div>';
@@ -2743,14 +2842,14 @@ function renderHtml(): string {
                 + ' data-action="select-binding-tab"'
                 + ' data-channel-id="' + escapeHtml(channel.id) + '"'
                 + ' data-binding-id="' + escapeHtml(binding.id) + '"'
-                + ' title="' + escapeHtml(binding.chatId) + '">'
+                + ' title="' + escapeHtml(binding.kind === 'default' ? '等待首条新聊天' : binding.chatId) + '">'
                 + escapeHtml(bindingTabLabel(binding))
               + '</button>'
             )).join('') + '</div>'
           : '';
 
         return ''
-          + '<div class="small">当前已发现 ' + bindings.length + ' 个聊天绑定。一个会话同一时刻只能绑定一个聊天。</div>'
+          + '<div class="small">当前已指定 ' + bindings.length + ' 个通道入口。一个会话同一时刻只能处理一个聊天。</div>'
           + tabs
           + renderBindingCard(activeBinding);
       }
@@ -2776,7 +2875,7 @@ function renderHtml(): string {
           )),
         ).join('');
         const bindingsHtml = renderChannelBindingsV2(channel);
-        const bindingCount = bindingsForChannel(channel.id).length;
+        const bindingCount = bindingEntriesForChannel(channel.id).length;
         const detailsHtml = channel.provider === 'feishu'
           ? ''
             + '<div class="editor-section">'
@@ -2839,7 +2938,7 @@ function renderHtml(): string {
           + '</div>'
           + '<div class="channel-editor-summary">'
           +   '<div class="channel-editor-stat"><strong>当前状态</strong><span>' + escapeHtml(statusText) + '</span></div>'
-          +   '<div class="channel-editor-stat"><strong>聊天绑定</strong><span>' + escapeHtml(String(bindingCount)) + '</span></div>'
+          +   '<div class="channel-editor-stat"><strong>通道入口</strong><span>' + escapeHtml(String(bindingCount)) + '</span></div>'
           +   '<div class="channel-editor-stat"><strong>Provider</strong><span>' + escapeHtml(providerLabel(channel.provider)) + '</span></div>'
           + '</div>'
           + '<div class="fields">'
@@ -2857,7 +2956,7 @@ function renderHtml(): string {
           +   detailsHtml
           + '</div>'
           + '<div class="panel-block">'
-          +   '<p class="panel-subtitle">当前绑定</p>'
+          +   '<p class="panel-subtitle">当前入口</p>'
           +   bindingsHtml
           + '</div>';
       }
@@ -2870,6 +2969,7 @@ function renderHtml(): string {
       function renderBindings(result) {
         state.bindings = result.bindings || [];
         state.bindingOptions = result.options || [];
+        state.channelDefaults = result.channelDefaults || [];
         document.getElementById('bindingCount').textContent = String(state.bindings.length);
         renderChannelsWorkspace();
         rerenderDesktopSessions();
@@ -3236,6 +3336,39 @@ function renderHtml(): string {
         showMessage('desktopMessage', 'success', '通道已指定到当前会话。');
       }
 
+      async function assignSessionChannelDefault(targetKey, channelType) {
+        if (!targetKey) {
+          throw new Error('当前没有选中的会话。');
+        }
+        if (!channelType) {
+          throw new Error('当前没有可指定的通道实例。');
+        }
+
+        const channel = visibleChannels().find((item) => item.id === channelType);
+        if (!channel) {
+          throw new Error('指定的通道不存在。');
+        }
+
+        const channelDefault = channelDefaultForChannel(channelType);
+        const targetSession = findSessionSummaryByTargetKey(targetKey);
+        const targetLabel = targetSession && targetSession.title ? targetSession.title : targetKey;
+        if (
+          channelDefault
+          && channelDefault.targetKey
+          && channelDefault.targetKey !== targetKey
+          && !window.confirm('通道“' + channel.alias + '”当前已预绑定到“' + channelDefault.targetLabel + '”。确认改为“' + targetLabel + '”？')
+        ) {
+          return;
+        }
+
+        const result = await api('/api/channel-default-targets/update', {
+          method: 'POST',
+          body: JSON.stringify({ channelType, targetKey }),
+        });
+        renderBindings(result);
+        showMessage('desktopMessage', 'success', '已设置预绑定。该通道收到下一条新对话时会自动进入当前会话。');
+      }
+
       function closeSessionChannelModal() {
         const modal = document.getElementById('sessionChannelModal');
         if (!modal) return;
@@ -3267,27 +3400,30 @@ function renderHtml(): string {
             + '</button>';
         });
 
-        const unconnectedChannels = channels
-          .filter((channel) => !bindings.some((binding) => binding.channelType === channel.id))
-          .map((channel) => (
-            ''
-              + '<button type="button" class="modal-list-item" disabled>'
-              +   '<span class="modal-list-title">' + escapeHtml(channel.alias) + ' · ' + escapeHtml(providerLabel(channel.provider)) + '</span>'
-              +   '<span class="modal-list-meta">该通道还没有已连接聊天。先让机器人收到一条消息，再回来切换到这个通道。</span>'
-              + '</button>'
-          ));
+        const defaultItems = channels
+          .filter((channel) => {
+            const channelDefault = channelDefaultForChannel(channel.id);
+            return Boolean(channelDefault) || !bindings.some((binding) => binding.channelType === channel.id);
+          })
+          .map((channel) => {
+            const channelDefault = channelDefaultForChannel(channel.id);
+            const isCurrent = channelDefault && channelDefault.targetKey === targetKey;
+            const meta = isCurrent
+              ? '下一条新聊天将直接进入当前会话。'
+              : (channelDefault && channelDefault.targetLabel
+                ? ('当前入口：' + channelDefault.targetLabel + '。点击改为当前会话。')
+                : '该通道收到下一条新聊天后，将直接进入当前会话。');
+            return ''
+              + '<button type="button" class="modal-list-item' + (isCurrent ? ' active' : '') + '" data-action="assign-session-channel-default" data-channel-type="' + escapeHtml(channel.id) + '"' + (isCurrent ? ' disabled' : '') + '>'
+              +   '<span class="modal-list-title">' + escapeHtml(channel.alias) + ' · ' + escapeHtml(providerLabel(channel.provider)) + ' · 下一条新聊天</span>'
+              +   '<span class="modal-list-meta">' + escapeHtml(meta) + '</span>'
+              + '</button>';
+          });
 
-        if (bindingItems.length === 0 && unconnectedChannels.length === 0) {
+        if (bindingItems.length === 0 && defaultItems.length === 0) {
           list.innerHTML = '<div class="binding-empty">当前没有可用通道实例。请先创建并保存一个通道。</div>';
-        } else if (bindingItems.length === 0) {
-          list.innerHTML = ''
-            + '<div class="binding-empty">当前没有已连接聊天的通道，暂时不能直接切换。请先让目标机器人收到一条消息建立绑定。</div>'
-            + unconnectedChannels.join('');
         } else {
-          list.innerHTML = bindingItems.join('')
-            + (unconnectedChannels.length > 0
-              ? '<div class="binding-empty">以下通道尚未连接聊天，暂时不能切换：</div>' + unconnectedChannels.join('')
-              : '');
+          list.innerHTML = bindingItems.join('') + defaultItems.join('');
         }
         modal.hidden = false;
       }
@@ -3658,6 +3794,15 @@ function renderHtml(): string {
             showMessage('channelMessage', 'success', '聊天绑定已解绑。');
             return;
           }
+          if (target.dataset.action === 'clear-channel-default-target') {
+            const result = await api('/api/channel-default-targets/delete', {
+              method: 'POST',
+              body: JSON.stringify({ channelType: target.dataset.channelType || channel.id }),
+            });
+            renderBindings(result);
+            showMessage('channelMessage', 'success', '通道入口已清除。');
+            return;
+          }
           if (target.dataset.action === 'switch-binding-target') {
             const result = await api('/api/bindings/update', {
               method: 'POST',
@@ -3937,6 +4082,20 @@ function renderHtml(): string {
           return;
         }
 
+        if (target && target.dataset.action === 'clear-channel-default-target') {
+          try {
+            const result = await api('/api/channel-default-targets/delete', {
+              method: 'POST',
+              body: JSON.stringify({ channelType: target.dataset.channelType }),
+            });
+            renderBindings(result);
+            showMessage('desktopMessage', 'success', '通道入口已清除。');
+          } catch (error) {
+            showMessage('desktopMessage', 'error', error.message);
+          }
+          return;
+        }
+
         await handleSessionListAction(event);
       });
       document.getElementById('boundSessionsList').addEventListener('dblclick', handleSessionListDblClick);
@@ -3953,6 +4112,15 @@ function renderHtml(): string {
         if (target && target.dataset.action === 'assign-session-channel-choice') {
           try {
             await assignSessionChannelByBinding(modal.dataset.targetKey || '', target.dataset.bindingId || '');
+            closeSessionChannelModal();
+          } catch (error) {
+            showMessage('desktopMessage', 'error', error.message);
+          }
+          return;
+        }
+        if (target && target.dataset.action === 'assign-session-channel-default') {
+          try {
+            await assignSessionChannelDefault(modal.dataset.targetKey || '', target.dataset.channelType || '');
             closeSessionChannelModal();
           } catch (error) {
             showMessage('desktopMessage', 'error', error.message);
@@ -4353,6 +4521,7 @@ const server = http.createServer(async (request, response) => {
 
       const next = deleteChannelInstance(loadConfig(), channelId);
       saveConfig(next);
+      store.deleteChannelDefaultTarget(channelId);
       json(response, 200, {
         ok: true,
         config: configToPayload(loadConfig()),
@@ -4526,6 +4695,42 @@ const server = http.createServer(async (request, response) => {
       json(response, 200, {
         ok: true,
         updated,
+        ...(await buildBindingsPayload(store, loadConfig())),
+      });
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/channel-default-targets/update') {
+      const payload = await readJsonBody<Record<string, unknown>>(request);
+      const channelType = asString(payload.channelType);
+      const targetKey = asString(payload.targetKey);
+      if (!channelType || !targetKey) {
+        json(response, 400, { error: 'channelType 和 targetKey 不能为空。' });
+        return;
+      }
+
+      const store = createUiStore();
+      const updated = updateChannelDefaultTarget(store, channelType, targetKey);
+      json(response, 200, {
+        ok: true,
+        updated,
+        ...(await buildBindingsPayload(store, loadConfig())),
+      });
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/channel-default-targets/delete') {
+      const payload = await readJsonBody<Record<string, unknown>>(request);
+      const channelType = asString(payload.channelType);
+      if (!channelType) {
+        json(response, 400, { error: 'channelType 不能为空。' });
+        return;
+      }
+
+      const store = createUiStore();
+      removeChannelDefaultTarget(store, channelType);
+      json(response, 200, {
+        ok: true,
         ...(await buildBindingsPayload(store, loadConfig())),
       });
       return;

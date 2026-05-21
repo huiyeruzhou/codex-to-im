@@ -18,12 +18,14 @@ import type {
   PermissionLinkRecord,
   OutboundRefInput,
   UpsertChannelBindingInput,
+  UpsertChannelDefaultTargetInput,
 } from './lib/bridge/host.js';
-import type { ChannelBinding, ChannelType } from './lib/bridge/types.js';
+import type { ChannelBinding, ChannelDefaultTarget, ChannelType } from './lib/bridge/types.js';
 import { CTI_HOME, configToSettings, findChannelInstance, loadConfig } from './config.js';
 
 const DATA_DIR = path.join(CTI_HOME, 'data');
 const MESSAGES_DIR = path.join(DATA_DIR, 'messages');
+const CHANNEL_DEFAULT_TARGETS_PATH = path.join(DATA_DIR, 'channel-default-targets.json');
 
 // ── Helpers ──
 
@@ -108,6 +110,24 @@ function didBindingChange(before: ChannelBinding, after: ChannelBinding): boolea
     || (before.active !== false) !== after.active;
 }
 
+function normalizeChannelDefaultTarget(target: ChannelDefaultTarget): ChannelDefaultTarget {
+  const config = loadConfig();
+  const instance = findChannelInstance(target.channelType, config);
+  const channelProvider = instance?.provider || target.channelProvider;
+  const channelAlias = instance?.alias || target.channelAlias || defaultAliasForProvider(channelProvider);
+
+  return {
+    ...target,
+    channelProvider,
+    channelAlias,
+  };
+}
+
+function didChannelDefaultTargetChange(before: ChannelDefaultTarget, after: ChannelDefaultTarget): boolean {
+  return before.channelProvider !== after.channelProvider
+    || before.channelAlias !== after.channelAlias;
+}
+
 // ── Lock entry ──
 
 interface LockEntry {
@@ -123,6 +143,7 @@ export class JsonFileStore implements BridgeStore {
   private dynamicSettings: boolean;
   private sessions = new Map<string, BridgeSession>();
   private bindings = new Map<string, ChannelBinding>();
+  private channelDefaultTargets = new Map<string, ChannelDefaultTarget>();
   private messages = new Map<string, BridgeMessage[]>();
   private permissionLinks = new Map<string, PermissionLinkRecord>();
   private offsets = new Map<string, string>();
@@ -146,6 +167,7 @@ export class JsonFileStore implements BridgeStore {
   private loadAll(): void {
     this.reloadSessions();
     this.reloadBindings();
+    this.reloadChannelDefaultTargets();
 
     // Permission links
     const perms = readJson<Record<string, PermissionLinkRecord>>(
@@ -224,6 +246,28 @@ export class JsonFileStore implements BridgeStore {
     }
   }
 
+  private reloadChannelDefaultTargets(): void {
+    const targets = readJson<Record<string, ChannelDefaultTarget>>(
+      CHANNEL_DEFAULT_TARGETS_PATH,
+      {},
+    );
+    const normalized = new Map<string, ChannelDefaultTarget>();
+    let changed = false;
+
+    for (const target of Object.values(targets)) {
+      const normalizedTarget = normalizeChannelDefaultTarget(target);
+      if (didChannelDefaultTargetChange(target, normalizedTarget)) {
+        changed = true;
+      }
+      normalized.set(normalizedTarget.channelType, normalizedTarget);
+    }
+
+    this.channelDefaultTargets = normalized;
+    if (changed) {
+      this.persistChannelDefaultTargets();
+    }
+  }
+
   private persistSessions(): void {
     writeJson(
       path.join(DATA_DIR, 'sessions.json'),
@@ -235,6 +279,13 @@ export class JsonFileStore implements BridgeStore {
     writeJson(
       path.join(DATA_DIR, 'bindings.json'),
       Object.fromEntries(this.bindings),
+    );
+  }
+
+  private persistChannelDefaultTargets(): void {
+    writeJson(
+      CHANNEL_DEFAULT_TARGETS_PATH,
+      Object.fromEntries(this.channelDefaultTargets),
     );
   }
 
@@ -377,6 +428,53 @@ export class JsonFileStore implements BridgeStore {
     const all = Array.from(this.bindings.values());
     if (!channelType) return all;
     return all.filter((b) => b.channelType === channelType);
+  }
+
+  getChannelDefaultTarget(channelType: string): ChannelDefaultTarget | null {
+    this.reloadChannelDefaultTargets();
+    return this.channelDefaultTargets.get(channelType) ?? null;
+  }
+
+  upsertChannelDefaultTarget(data: UpsertChannelDefaultTargetInput): ChannelDefaultTarget {
+    this.reloadChannelDefaultTargets();
+    const existing = this.channelDefaultTargets.get(data.channelType);
+    if (existing) {
+      const updated: ChannelDefaultTarget = {
+        ...existing,
+        targetKey: data.targetKey,
+        channelProvider: data.channelProvider ?? existing.channelProvider,
+        channelAlias: data.channelAlias ?? existing.channelAlias,
+        updatedAt: now(),
+      };
+      this.channelDefaultTargets.set(data.channelType, updated);
+      this.persistChannelDefaultTargets();
+      return updated;
+    }
+
+    const target: ChannelDefaultTarget = {
+      id: uuid(),
+      channelType: data.channelType,
+      channelProvider: data.channelProvider,
+      channelAlias: data.channelAlias,
+      targetKey: data.targetKey,
+      createdAt: now(),
+      updatedAt: now(),
+    };
+    this.channelDefaultTargets.set(data.channelType, target);
+    this.persistChannelDefaultTargets();
+    return target;
+  }
+
+  deleteChannelDefaultTarget(channelType: string): void {
+    this.reloadChannelDefaultTargets();
+    if (this.channelDefaultTargets.delete(channelType)) {
+      this.persistChannelDefaultTargets();
+    }
+  }
+
+  listChannelDefaultTargets(): ChannelDefaultTarget[] {
+    this.reloadChannelDefaultTargets();
+    return Array.from(this.channelDefaultTargets.values());
   }
 
   // ── Sessions ──

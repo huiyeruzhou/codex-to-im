@@ -7,7 +7,7 @@
 
 import type { ChannelAddress, ChannelBinding, ChannelType } from './types.js';
 import { getBridgeContext } from './context.js';
-import { bindStoreToSdkSession, bindStoreToSession } from '../../session-bindings.js';
+import { bindAddressToTarget, bindStoreToSdkSession, bindStoreToSession } from '../../session-bindings.js';
 import { getOrCreateDraftSession } from '../../internal-sessions.js';
 import { recordBindingChange } from './binding-audit.js';
 
@@ -46,13 +46,38 @@ export function resolve(address: ChannelAddress): ChannelBinding {
     });
     return created;
   }
+  const channelDefaultTarget = store.getChannelDefaultTarget(address.channelType);
+  if (channelDefaultTarget) {
+    try {
+      const created = bindAddressToTarget(store, address, channelDefaultTarget.targetKey);
+      store.deleteChannelDefaultTarget(address.channelType);
+      recordBindingChange(store, {
+        action: 'auto_create_prebound',
+        address,
+        fromBinding: null,
+        toBinding: created,
+        reason: `channel default target ${channelDefaultTarget.targetKey}`,
+      });
+      return created;
+    } catch (error) {
+      store.deleteChannelDefaultTarget(address.channelType);
+      console.warn(
+        `[channel-router] Failed to apply channel default target for ${address.channelType}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
   const created = createBinding(address);
   recordBindingChange(store, {
     action: 'auto_create_draft',
     address,
     fromBinding: null,
     toBinding: created,
-    reason: 'no existing binding',
+    reason: channelDefaultTarget
+      ? `channel default target ${channelDefaultTarget.targetKey} was unavailable`
+      : 'no existing binding',
   });
   return created;
 }
