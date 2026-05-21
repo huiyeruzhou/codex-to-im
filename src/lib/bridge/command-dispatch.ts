@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { getOrCreateDraftSession } from '../../internal-sessions.js';
 import { isCliOnlyCodexModel, readConfiguredCodexModel } from '../../codex-models.js';
 import {
@@ -23,14 +25,14 @@ import {
   truncateHistoryContent,
 } from './command-helpers.js';
 import { getBridgeContext } from './context.js';
-import { deliverBridgeNotice } from './feedback-delivery.js';
+import { deliverBridgeNotice, deliverResponse } from './feedback-delivery.js';
 import * as broker from './permission-broker.js';
 import * as router from './channel-router.js';
 import type { BaseChannelAdapter } from './channel-adapter.js';
 import type { BridgeSession } from './host.js';
-import type { ChannelBinding, InboundMessage } from './types.js';
+import type { ChannelBinding, InboundMessage, OutboundAttachment } from './types.js';
 import { recordBindingChange, type BindingChangeAction } from './binding-audit.js';
-import { isDangerousInput, validateMode, validateSessionId } from './security/validators.js';
+import { isDangerousInput, sanitizeInput, validateMode, validateSessionId } from './security/validators.js';
 import { parseSandboxMode } from '../../runtime-options.js';
 import {
   ensureWorkingDirectoryExists,
@@ -59,6 +61,15 @@ const MODE_OPTIONS_TEXT = '可选：`code`（直接执行，默认） `plan`（�
 const REASONING_OPTIONS_TEXT = '可选：`1=minimal` `2=low` `3=medium` `4=high` `5=xhigh`';
 const SANDBOX_OPTIONS_TEXT = '可选：`read-only` `workspace-write` `danger-full-access` `default`（回到全局默认）';
 const NETWORK_OPTIONS_TEXT = '可选：`on`/`true` 开启网络，`off`/`false` 关闭网络，`default` 回到全局默认。';
+
+function buildFencedCodeBlock(content: string, language: string): string {
+  const normalized = content.replace(/\r\n/g, '\n');
+  const runs = normalized.match(/`+/g) || [];
+  const longest = runs.reduce((max, run) => Math.max(max, run.length), 0);
+  const fenceLength = Math.max(3, longest + 1);
+  const fence = '`'.repeat(fenceLength);
+  return `${fence}${language ? language : ''}\n${normalized}\n${fence}`;
+}
 
 function parseForceFlag(args: string): { args: string; force: boolean } {
   const forcePattern = /(^|\s)--force(?=\s|$)/;
@@ -843,6 +854,94 @@ export async function handleBridgeCommand(
       break;
     }
 
+    case '/cat': {
+      const binding = currentBinding || router.resolve(msg.address);
+      const parts = args.split(/\s+/).filter(Boolean);
+      const rawPath = parts[0] || '';
+      if (!rawPath) {
+        response = '用法：/cat <path> [start_line] [end_line]\n示例：/cat README.md 1 200';
+        break;
+      }
+      const hasAbs = path.isAbsolute(rawPath) || path.win32.isAbsolute(rawPath);
+      if (!hasAbs && !binding.workingDirectory) {
+        response = '当前会话没有工作目录，请使用绝对路径。';
+        break;
+      }
+      const resolvedPath = hasAbs ? rawPath : path.resolve(binding.workingDirectory, rawPath);
+      let startLine = 1;
+      let endLine = 200;
+      const maybeStart = parts[1];
+      const maybeEnd = parts[2];
+      if (maybeStart && /^\d+$/.test(maybeStart) && maybeEnd && /^\d+$/.test(maybeEnd)) {
+        startLine = Math.max(1, parseInt(maybeStart, 10));
+        endLine = Math.max(startLine, parseInt(maybeEnd, 10));
+      } else if (maybeStart && /^\d+$/.test(maybeStart)) {
+        endLine = Math.max(1, parseInt(maybeStart, 10));
+      }
+      try {
+        const stat = fs.statSync(resolvedPath);
+        if (!stat.isFile()) {
+          response = '目标不是文件。';
+          break;
+        }
+        const raw = fs.readFileSync(resolvedPath, 'utf-8');
+        const lines = raw.replace(/\r\n/g, '\n').split('\n');
+        const slice = lines.slice(startLine - 1, endLine);
+        const slicedText = slice.join('\n');
+        const { text: safeText, truncated } = sanitizeInput(slicedText, 12_000);
+        const suffix = truncated || lines.length > endLine ? '\n\n（内容过长已截断）' : '';
+        response = responseParseMode === 'Markdown'
+          ? `**${path.basename(resolvedPath)}**\n\n${buildFencedCodeBlock(safeText, 'text')}${suffix}`
+          : `${path.basename(resolvedPath)}\n\n${safeText}${suffix}`;
+      } catch (error) {
+        response = `读取文件失败：${error instanceof Error ? error.message : String(error)}`;
+      }
+      break;
+    }
+
+    case '/file': {
+      const binding = currentBinding || router.resolve(msg.address);
+      const rawPath = args.trim();
+      if (!rawPath) {
+        response = '用法：/file <path>\n示例：/file report.txt';
+        break;
+      }
+      const hasAbs = path.isAbsolute(rawPath) || path.win32.isAbsolute(rawPath);
+      if (!hasAbs && !binding.workingDirectory) {
+        response = '当前会话没有工作目录，请使用绝对路径。';
+        break;
+      }
+      const resolvedPath = hasAbs ? rawPath : path.resolve(binding.workingDirectory, rawPath);
+      try {
+        const stat = fs.statSync(resolvedPath);
+        if (!stat.isFile()) {
+          response = '目标不是文件。';
+          break;
+        }
+        if (stat.size > 20 * 1024 * 1024) {
+          response = `文件过大（${stat.size} bytes），暂不支持通过 /file 发送。`;
+          break;
+        }
+        const attachment: OutboundAttachment = {
+          kind: 'file',
+          path: resolvedPath,
+          name: path.basename(resolvedPath),
+        };
+        const result = await deliverResponse(
+          adapter,
+          msg.address,
+          '',
+          binding.codepilotSessionId,
+          msg.messageId,
+          [attachment],
+        );
+        response = result.ok ? `已发送文件：${path.basename(resolvedPath)}` : `发送失败：${result.error || '未知错误'}`;
+      } catch (error) {
+        response = `读取文件失败：${error instanceof Error ? error.message : String(error)}`;
+      }
+      break;
+    }
+
     case '/stop': {
       const binding = router.resolve(msg.address);
       const session = store.getSession(binding.codepilotSessionId);
@@ -974,6 +1073,8 @@ export async function handleBridgeCommand(
         '**其它**',
         '- `/his raw` 最近原始记录（兼容别名）',
         '- `/perm allow|allow_session|deny <id>` 或 `1 / 2 / 3` 处理权限',
+        '- `/cat <path> [start] [end]` 打印文件内容（默认前 200 行）',
+        '- `/file <path>` 直接发送本地文件',
       ].join('\n');
       break;
 

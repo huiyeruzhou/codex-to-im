@@ -33,6 +33,15 @@ export function preprocessFeishuMarkdown(text: string): string {
   return text.replace(/([^\n])```/g, '$1\n```');
 }
 
+function buildFencedCodeBlock(content: string, language: string): string {
+  const normalized = content.replace(/\r\n/g, '\n');
+  const runs = normalized.match(/`+/g) || [];
+  const longest = runs.reduce((max, run) => Math.max(max, run.length), 0);
+  const fenceLength = Math.max(3, longest + 1);
+  const fence = '`'.repeat(fenceLength);
+  return `${fence}${language ? language : ''}\n${normalized}\n${fence}`;
+}
+
 /**
  * Build Feishu interactive card content (schema 2.0 markdown).
  * Renders code blocks, tables, bold, italic, links, inline code properly.
@@ -137,10 +146,10 @@ export function buildToolProgressMarkdown(
     const header = `${icon} \`${tool.name || 'tool'}\`（${statusLabel}）`;
     const details: string[] = [];
     if (tool.input && tool.input.trim()) {
-      details.push(`输入：\n\`\`\`json\n${tool.input.trim()}\n\`\`\``);
+      details.push(`输入：\n${buildFencedCodeBlock(tool.input.trim(), 'json')}`);
     }
     if (tool.output && tool.output.trim()) {
-      details.push(`输出：\n\`\`\`text\n${tool.output.trim()}\n\`\`\``);
+      details.push(`输出：\n${buildFencedCodeBlock(tool.output.trim(), 'text')}`);
     }
     blocks.push(details.length > 0 ? `${header}\n\n${details.join('\n\n')}` : header);
   }

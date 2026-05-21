@@ -17,6 +17,10 @@ function makeSettings(): Map<string, string> {
     ['remote_bridge_enabled', 'true'],
     ['bridge_default_model', 'test-model'],
     ['bridge_default_mode', 'code'],
+    ['bridge_channel_instances_json', JSON.stringify([
+      { id: 'feishu', provider: 'feishu', enabled: true, alias: '飞书', config: {} },
+      { id: 'feishu-default', provider: 'feishu', enabled: true, alias: '飞书', config: {} },
+    ])],
   ]);
 }
 
@@ -529,5 +533,76 @@ describe('command-dispatch', () => {
     assert.equal(store.getChannelBinding(address.channelType, address.chatId), null);
     assert.match(sent[0] || '', /已解绑当前聊天/);
     assert.match(sent[0] || '', /自动进入新的临时草稿线程/);
+  });
+
+  it('prints file content with /cat and escapes embedded fences', async () => {
+    initTestContext();
+    const sent: string[] = [];
+    const adapter: any = {
+      channelType: 'feishu-default',
+      provider: 'feishu',
+      send: async (message: { text: string }) => {
+        sent.push(message.text);
+        return { ok: true, messageId: 'reply-cat' };
+      },
+    };
+    const address = { channelType: 'feishu-default', chatId: 'chat-cat' } as const;
+    const tempRoot = fs.mkdtempSync(path.join(DATA_DIR, 'cti-cat-'));
+    const filePath = path.join(tempRoot, 'demo.md');
+    fs.writeFileSync(filePath, ['line1', '```', 'line3'].join('\n'), 'utf-8');
+    router.createBinding(address, tempRoot);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/cat demo.md',
+        messageId: 'incoming-cat',
+      } as any,
+      '/cat demo.md',
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      },
+    );
+
+    assert.match(sent[0] || '', /````text/);
+  });
+
+  it('sends a local file with /file', async () => {
+    initTestContext();
+    const sent: any[] = [];
+    const adapter: any = {
+      channelType: 'feishu-default',
+      provider: 'feishu',
+      send: async (message: any) => {
+        sent.push(message);
+        return { ok: true, messageId: `reply-${sent.length}` };
+      },
+    };
+    const address = { channelType: 'feishu-default', chatId: 'chat-file' } as const;
+    const tempRoot = fs.mkdtempSync(path.join(DATA_DIR, 'cti-file-'));
+    const filePath = path.join(tempRoot, 'hello.txt');
+    fs.writeFileSync(filePath, 'hello', 'utf-8');
+    router.createBinding(address, tempRoot);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/file hello.txt',
+        messageId: 'incoming-file',
+      } as any,
+      '/file hello.txt',
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      },
+    );
+
+    assert.ok(sent.some((m) => Array.isArray(m.attachments) && m.attachments.length === 1));
+    assert.match(String(sent.at(-1)?.text || ''), /已发送文件/);
   });
 });
