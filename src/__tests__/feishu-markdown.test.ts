@@ -9,19 +9,18 @@ import {
 } from '../lib/bridge/markdown/feishu.js';
 
 describe('buildToolProgressMarkdown', () => {
-  it('groups repeated tools by name and keeps running state visible', () => {
+  it('renders recent tool calls and includes input/output blocks when available', () => {
     const rendered = buildToolProgressMarkdown([
-      { id: '1', name: 'shell_command', status: 'complete' },
-      { id: '2', name: 'shell_command', status: 'complete' },
-      { id: '3', name: 'shell_command', status: 'running' },
-      { id: '4', name: 'apply_patch', status: 'error' },
-      { id: '5', name: 'apply_patch', status: 'complete' },
-      { id: '6', name: 'update_plan', status: 'complete' },
+      { id: '1', name: 'shell_command', status: 'running', input: '{\"cmd\":\"ls\"}', output: 'file1\\nfile2' },
+      { id: '2', name: 'apply_patch', status: 'error', input: '{\"file\":\"a.ts\"}', output: 'patch failed' },
     ]);
 
-    assert.match(rendered, /🔄 `shell_command` ×3（运行中 1 \/ 完成 2）/);
-    assert.match(rendered, /❌ `apply_patch` ×2（异常 1 \/ 完成 1）/);
-    assert.match(rendered, /✅ `update_plan`/);
+    assert.match(rendered, /🔄 `shell_command`（运行中）/);
+    assert.match(rendered, /输入：/);
+    assert.match(rendered, /```json/);
+    assert.match(rendered, /输出：/);
+    assert.match(rendered, /```text/);
+    assert.match(rendered, /❌ `apply_patch`（异常）/);
   });
 
   it('normalizes terminal tool state so final cards do not show running tools', () => {
@@ -31,8 +30,8 @@ describe('buildToolProgressMarkdown', () => {
     ], { terminalStatus: 'completed' });
 
     assert.doesNotMatch(rendered, /运行中/);
-    assert.match(rendered, /✅ `shell_command`/);
-    assert.match(rendered, /✅ `apply_patch`/);
+    assert.match(rendered, /✅ `shell_command`（完成）/);
+    assert.match(rendered, /✅ `apply_patch`（完成）/);
   });
 });
 

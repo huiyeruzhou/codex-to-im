@@ -192,6 +192,8 @@ export interface ToolCallInfo {
   id: string;
   name: string;
   status: 'running' | 'complete' | 'error';
+  input?: string | null;
+  output?: string | null;
 }
 
 export type TaskProgressStatus = 'in_progress' | 'pending' | 'completed';

@@ -1178,4 +1178,84 @@ describe('interactive-message-runner', () => {
     assert.deepEqual(deliveredTexts, ['最终回复']);
     assert.equal(clock.activeCount(), 0);
   });
+
+  it('includes masked error diagnostics in the streaming card when Codex fails', async () => {
+    const adapter = new FakeFeishuStreamingAdapter();
+    const address = {
+      channelType: 'feishu-default',
+      channelProvider: 'feishu',
+      chatId: 'chat-error-diag',
+      userId: 'user-error-diag',
+    } as const;
+    router.createBinding(address, 'D:\\workspace\\error-diag');
+
+    const taskStateMap = new Map<string, InteractiveTaskState>();
+    const deliveredTexts: string[] = [];
+    const errors: unknown[][] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => {
+      errors.push(args);
+    };
+
+    try {
+      await runInteractiveMessage(
+        adapter,
+        {
+          messageId: 'incoming-error-diag-1',
+          address,
+          text: 'hello',
+          timestamp: Date.now(),
+        },
+        'hello',
+        undefined,
+        {
+          registerInteractiveTask(task) {
+            taskStateMap.set(task.sessionId, task);
+          },
+          resetMirrorSessionForInteractiveRun() {},
+          isCurrentInteractiveTask(sessionId, taskId) {
+            return taskStateMap.get(sessionId)?.id === taskId;
+          },
+          touchInteractiveTask() {},
+          recordInteractiveHealthStart() {},
+          recordInteractiveHealthProgress() {},
+          recordInteractiveHealthTool() {},
+          recordInteractiveHealthEnd() {},
+          beginMirrorSuppression() { return 'suppression-error-diag'; },
+          abortMirrorSuppression() {},
+          settleMirrorSuppression() {},
+          releaseInteractiveTask(sessionId, taskId) {
+            if (taskStateMap.get(sessionId)?.id === taskId) {
+              taskStateMap.delete(sessionId);
+            }
+          },
+          async deliverResponse(_adapter, _address, responseText) {
+            deliveredTexts.push(responseText);
+          },
+          persistSdkSessionUpdate() {},
+          processMessageImpl: async () => {
+            return {
+              responseText: '',
+              outboundAttachments: [],
+              tokenUsage: null,
+              hasError: true,
+              errorMessage: 'Turn failed: token=secret123456',
+              permissionRequests: [],
+              sdkSessionId: 'thread-1',
+            };
+          },
+        },
+      );
+    } finally {
+      console.error = originalError;
+    }
+
+    assert.equal(adapter.streamEnds.length, 1);
+    assert.equal(adapter.streamEnds[0]?.status, 'error');
+    assert.match(adapter.streamEnds[0]?.text || '', /^Error\b/);
+    assert.match(adapter.streamEnds[0]?.text || '', /bridge_session_id:/);
+    assert.ok(!(adapter.streamEnds[0]?.text || '').includes('secret123456'));
+    assert.ok(deliveredTexts.length >= 1);
+    assert.ok(errors.length >= 1);
+  });
 });

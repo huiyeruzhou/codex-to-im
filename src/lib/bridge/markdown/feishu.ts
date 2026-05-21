@@ -116,33 +116,36 @@ export function buildToolProgressMarkdown(
   options: ProgressRenderOptions = {},
 ): string {
   if (tools.length === 0) return '';
-  const grouped = new Map<string, { running: number; complete: number; error: number }>();
 
-  for (const tool of tools) {
-    const key = tool.name || 'tool';
-    const bucket = grouped.get(key) || { running: 0, complete: 0, error: 0 };
-    const status = normalizeToolStatusForRender(tool.status, options);
-    if (status === 'running') bucket.running += 1;
-    else if (status === 'error') bucket.error += 1;
-    else bucket.complete += 1;
-    grouped.set(key, bucket);
+  const normalized = tools.map((tool) => ({
+    ...tool,
+    status: normalizeToolStatusForRender(tool.status, options),
+  }));
+
+  const maxItems = 5;
+  const slice = normalized.length > maxItems ? normalized.slice(-maxItems) : normalized;
+  const hiddenCount = normalized.length - slice.length;
+
+  const blocks: string[] = [];
+  if (hiddenCount > 0) {
+    blocks.push(`… 还有 ${hiddenCount} 个工具调用已折叠`);
   }
 
-  const lines = Array.from(grouped.entries()).map(([name, counts]) => {
-    const total = counts.running + counts.complete + counts.error;
-    const icon = counts.running > 0 ? '🔄' : counts.error > 0 ? '❌' : '✅';
-    const countSuffix = total > 1 ? ` ×${total}` : '';
-    const detailParts: string[] = [];
-    if (counts.running > 0) detailParts.push(`运行中 ${counts.running}`);
-    if (counts.error > 0) detailParts.push(`异常 ${counts.error}`);
-    if ((counts.running > 0 || counts.error > 0) && counts.complete > 0) {
-      detailParts.push(`完成 ${counts.complete}`);
+  for (const tool of slice) {
+    const statusLabel = tool.status === 'running' ? '运行中' : tool.status === 'error' ? '异常' : '完成';
+    const icon = tool.status === 'running' ? '🔄' : tool.status === 'error' ? '❌' : '✅';
+    const header = `${icon} \`${tool.name || 'tool'}\`（${statusLabel}）`;
+    const details: string[] = [];
+    if (tool.input && tool.input.trim()) {
+      details.push(`输入：\n\`\`\`json\n${tool.input.trim()}\n\`\`\``);
     }
-    const detailSuffix = detailParts.length > 0 ? `（${detailParts.join(' / ')}）` : '';
-    return `${icon} \`${name}\`${countSuffix}${detailSuffix}`;
-  });
+    if (tool.output && tool.output.trim()) {
+      details.push(`输出：\n\`\`\`text\n${tool.output.trim()}\n\`\`\``);
+    }
+    blocks.push(details.length > 0 ? `${header}\n\n${details.join('\n\n')}` : header);
+  }
 
-  return lines.join('\n');
+  return blocks.join('\n\n');
 }
 
 function getTaskProgressPresentation(

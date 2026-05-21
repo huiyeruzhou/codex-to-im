@@ -43,6 +43,8 @@ import {
   shouldShowStreamLastContentResponseAge,
   updateStreamStatusNote,
 } from './turns/stream-state.js';
+import { maskSecrets } from '../../logger.js';
+import { sanitizeInput } from './security/validators.js';
 
 /** Generate a non-zero random 31-bit integer for use as draft_id. */
 function generateDraftId(): number {
@@ -58,6 +60,73 @@ export interface StreamConfig {
 const STREAM_DEFAULTS: Record<string, StreamConfig> = {
   default: { intervalMs: 1000, minDeltaChars: 30, maxChars: 4000 },
 };
+
+function formatStreamingErrorForCard(
+  message: string,
+  context: {
+    bridgeSessionId: string;
+    codexThreadId?: string | null;
+    workingDirectory?: string | null;
+  },
+): string {
+  const masked = maskSecrets((message || '').trim());
+  const extraLines: string[] = [];
+  if (context.bridgeSessionId && !masked.includes('bridge_session_id')) {
+    extraLines.push(`bridge_session_id: ${context.bridgeSessionId}`);
+  }
+  if (context.codexThreadId && !masked.includes('codex_thread_id')) {
+    extraLines.push(`codex_thread_id: ${context.codexThreadId}`);
+  }
+  if (context.workingDirectory && !masked.includes('cwd:')) {
+    extraLines.push(`cwd: ${context.workingDirectory}`);
+  }
+  const combined = [
+    masked,
+    extraLines.length > 0 ? `\n\n${extraLines.join('\n')}` : '',
+  ].join('').trim();
+  const { text, truncated } = sanitizeInput(combined || 'Unknown error', 3500);
+  const suffix = truncated ? '\n\n（内容过长已截断）' : '';
+  return `**Error**\n\n\`\`\`text\n${text.trim()}\n\`\`\`${suffix}`;
+}
+
+function logInteractiveTaskError(params: {
+  kind: 'sdk' | 'external_terminal';
+  message: string;
+  bridgeSessionId: string;
+  channelType: string;
+  chatId: string;
+  codexThreadId?: string | null;
+  workingDirectory?: string | null;
+}): void {
+  const masked = maskSecrets((params.message || '').trim());
+  const { text, truncated } = sanitizeInput(masked || 'Unknown error', 2000);
+  console.error('[interactive-message-runner] Task error:', {
+    kind: params.kind,
+    bridge_session_id: params.bridgeSessionId,
+    channel_type: params.channelType,
+    chat_id: params.chatId,
+    codex_thread_id: params.codexThreadId || null,
+    cwd: params.workingDirectory || null,
+    error: text,
+    truncated,
+  });
+}
+
+function summarizeToolValue(value: unknown, maxChars: number): string {
+  if (value == null) return '';
+  const raw = typeof value === 'string'
+    ? value
+    : (() => {
+      try {
+        return JSON.stringify(value, null, 2);
+      } catch {
+        return String(value);
+      }
+    })();
+  const masked = maskSecrets(raw);
+  const { text, truncated } = sanitizeInput(masked, maxChars);
+  return truncated ? `${text}\n…(truncated)` : text;
+}
 const STREAM_STATUS_IDLE_START_MS = 180_000;
 const STREAM_STATUS_HEARTBEAT_MS = 10_000;
 
@@ -495,15 +564,42 @@ export async function runInteractiveMessage(
     );
   } : undefined;
 
-  const onToolEvent = (toolId: string, toolName: string, status: 'running' | 'complete' | 'error') => {
+  const onToolEvent = (
+    toolId: string,
+    toolName: string,
+    status: 'running' | 'complete' | 'error',
+    detail?: { input?: unknown; output?: string; isError?: boolean },
+  ) => {
     if (!deps.isCurrentInteractiveTask(binding.codepilotSessionId, taskId)) return;
     markActivity();
     deps.recordInteractiveHealthTool(binding.codepilotSessionId, toolId, toolName, status);
     if (toolName) {
-      toolCallTracker.set(toolId, { id: toolId, name: toolName, status });
+      const existing = toolCallTracker.get(toolId);
+      toolCallTracker.set(toolId, {
+        id: toolId,
+        name: toolName,
+        status,
+        input: existing?.input ?? null,
+        output: existing?.output ?? null,
+      });
     } else {
       const existing = toolCallTracker.get(toolId);
-      if (existing) existing.status = status;
+      if (existing) {
+        existing.status = status;
+      } else {
+        toolCallTracker.set(toolId, { id: toolId, name: 'tool', status, input: null, output: null });
+      }
+    }
+    if (detail) {
+      const existing = toolCallTracker.get(toolId);
+      if (existing) {
+        if (typeof detail.input !== 'undefined') {
+          existing.input = summarizeToolValue(detail.input, 900);
+        }
+        if (typeof detail.output === 'string') {
+          existing.output = summarizeToolValue(detail.output, 1400);
+        }
+      }
     }
     if (hasStreamingCards) {
       pushStreamFeedbackTools(streamFeedbackTarget, Array.from(toolCallTracker.values()));
@@ -686,11 +782,32 @@ export async function runInteractiveMessage(
         : raced.terminal.outcome === 'aborted'
           ? 'interrupted'
           : 'error';
+      if (streamEndStatus === 'error' && !taskAbort.signal.aborted) {
+        logInteractiveTaskError({
+          kind: 'external_terminal',
+          message: raced.terminal.detail || 'External terminal failed',
+          bridgeSessionId: binding.codepilotSessionId,
+          channelType: msg.address.channelType,
+          chatId: msg.address.chatId,
+          codexThreadId: binding.sdkSessionId || null,
+          workingDirectory: binding.workingDirectory || null,
+        });
+      }
       const staleTaskNotice = buildStaleTaskCompletionNotice(msg.address, binding);
       const terminalResponse = assembleDesktopFinalResponse({
         text: staleTaskNotice || raced.terminal.finalText || '',
       });
-      const cardFinalized = await finalizeStreamUiOnce(streamEndStatus, terminalResponse.text);
+      const cardText = streamEndStatus === 'error' && !taskAbort.signal.aborted
+        ? (() => {
+          const detail = formatStreamingErrorForCard(raced.terminal.detail || 'External terminal failed', {
+            bridgeSessionId: binding.codepilotSessionId,
+            codexThreadId: binding.sdkSessionId || null,
+            workingDirectory: binding.workingDirectory || null,
+          });
+          return terminalResponse.text.trim() ? `${terminalResponse.text.trim()}\n\n${detail}` : detail;
+        })()
+        : terminalResponse.text;
+      const cardFinalized = await finalizeStreamUiOnce(streamEndStatus, cardText);
       if (hasFinalResponsePayload(terminalResponse)) {
         await deliverFinalResponse({
           adapter,
@@ -712,6 +829,17 @@ export async function runInteractiveMessage(
     }
 
     const terminalAfterProcess = await waitForDesktopTerminalFinalization();
+    if (!taskAbort.signal.aborted && result.hasError) {
+      logInteractiveTaskError({
+        kind: 'sdk',
+        message: result.errorMessage,
+        bridgeSessionId: binding.codepilotSessionId,
+        channelType: msg.address.channelType,
+        chatId: msg.address.chatId,
+        codexThreadId: result.sdkSessionId || binding.sdkSessionId || null,
+        workingDirectory: binding.workingDirectory || null,
+      });
+    }
     const terminalResponse = terminalAfterProcess?.outcome === 'completed'
       ? assembleDesktopFinalResponse({ text: terminalAfterProcess.finalText || '' })
       : null;
@@ -743,10 +871,18 @@ export async function runInteractiveMessage(
         : taskAbort.signal.aborted
           ? 'interrupted'
           : result.hasError ? 'error' : 'completed';
-      cardFinalized = await finalizeStreamUiOnce(
-        streamEndStatus,
-        staleResponse?.text || (streamEndStatus === 'interrupted' ? '' : effectiveResponse.text),
-      );
+      const baseCardText = staleResponse?.text || (streamEndStatus === 'interrupted' ? '' : effectiveResponse.text);
+      const cardText = streamEndStatus === 'error' && !taskAbort.signal.aborted
+        ? (() => {
+          const detail = formatStreamingErrorForCard(result.errorMessage, {
+            bridgeSessionId: binding.codepilotSessionId,
+            codexThreadId: result.sdkSessionId || binding.sdkSessionId || null,
+            workingDirectory: binding.workingDirectory || null,
+          });
+          return baseCardText.trim() ? `${baseCardText.trim()}\n\n${detail}` : detail;
+        })()
+        : baseCardText;
+      cardFinalized = await finalizeStreamUiOnce(streamEndStatus, cardText);
     }
 
     if (staleResponse) {
@@ -766,6 +902,11 @@ export async function runInteractiveMessage(
         deliverResponse: deps.deliverResponse,
       }, effectiveResponse, { skipText: cardFinalized });
     } else if (result.hasError && !taskAbort.signal.aborted) {
+      const fallbackErrorText = formatStreamingErrorForCard(result.errorMessage, {
+        bridgeSessionId: binding.codepilotSessionId,
+        codexThreadId: result.sdkSessionId || binding.sdkSessionId || null,
+        workingDirectory: binding.workingDirectory || null,
+      });
       await deliverFinalResponse({
           adapter,
           address: msg.address,
@@ -774,7 +915,7 @@ export async function runInteractiveMessage(
           deliverResponse: deps.deliverResponse,
         },
         assembleSdkFinalResponse({
-          text: `**Error:** ${result.errorMessage}`,
+          text: fallbackErrorText,
           hasError: true,
           errorMessage: result.errorMessage,
         }),
