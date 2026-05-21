@@ -59,6 +59,7 @@ import {
 import { listWeixinAccounts } from './weixin-store.js';
 import { listSelectableCodexModels, readConfiguredCodexModel } from './codex-models.js';
 import type { BridgeSession } from './lib/bridge/host.js';
+import { accessDeniedStyles, loginStyles, mainStyles } from './ui-assets.js';
 import { getCodexThreadId } from './lib/bridge/turns/turn-classifier.js';
 
 let port = 4781;
@@ -549,6 +550,7 @@ function configToPayload(config: Config) {
     streamStatusCheckIntervalSeconds: config.streamStatusCheckIntervalSeconds ?? 10,
     codexSkipGitRepoCheck: config.codexSkipGitRepoCheck === true,
     codexSandboxMode: config.codexSandboxMode || 'workspace-write',
+    codexNetworkAccess: config.codexNetworkAccess === true,
     codexReasoningEffort: config.codexReasoningEffort || 'medium',
     uiAllowLan: config.uiAllowLan === true,
     uiAccessToken: config.uiAccessToken || '',
@@ -594,6 +596,7 @@ function mergeConfig(payload: Record<string, unknown>): Config {
       || payload.codexSandboxMode === 'danger-full-access'
       ? payload.codexSandboxMode
       : 'workspace-write',
+    codexNetworkAccess: payload.codexNetworkAccess === true,
     codexReasoningEffort: payload.codexReasoningEffort === 'minimal'
       || payload.codexReasoningEffort === 'low'
       || payload.codexReasoningEffort === 'high'
@@ -924,87 +927,7 @@ function renderLoginHtml(): string {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Codex to IM 登录</title>
-    <style>
-      :root {
-        --bg: #f5f7fa;
-        --surface: #ffffff;
-        --border: #e5e7eb;
-        --border-strong: #d0d7e2;
-        --text: #111827;
-        --muted: #667085;
-        --primary: #1677ff;
-        --primary-strong: #0958d9;
-        --danger: #dc2626;
-      }
-      * { box-sizing: border-box; }
-      body {
-        margin: 0;
-        min-height: 100vh;
-        display: grid;
-        place-items: center;
-        padding: 24px;
-        background: var(--bg);
-        color: var(--text);
-        font: 14px/1.5 "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
-      }
-      .auth-card {
-        width: min(420px, 100%);
-        background: var(--surface);
-        border: 1px solid var(--border);
-        border-radius: 10px;
-        padding: 24px;
-      }
-      h1 {
-        margin: 0 0 8px;
-        font-size: 24px;
-        line-height: 1.2;
-      }
-      p {
-        margin: 0 0 18px;
-        color: var(--muted);
-      }
-      label {
-        display: grid;
-        gap: 6px;
-        color: var(--muted);
-        font-weight: 500;
-      }
-      input {
-        width: 100%;
-        border: 1px solid var(--border-strong);
-        border-radius: 8px;
-        padding: 10px 12px;
-        font: inherit;
-      }
-      input:focus {
-        outline: 2px solid rgba(22, 119, 255, 0.14);
-        border-color: var(--primary);
-      }
-      button {
-        margin-top: 16px;
-        width: 100%;
-        border: 1px solid var(--primary);
-        background: var(--primary);
-        color: #ffffff;
-        border-radius: 8px;
-        padding: 10px 14px;
-        font: inherit;
-        cursor: pointer;
-      }
-      button:hover {
-        background: var(--primary-strong);
-        border-color: var(--primary-strong);
-      }
-      .message {
-        display: none;
-        margin-top: 14px;
-        padding: 10px 12px;
-        border-radius: 8px;
-        background: rgba(220, 38, 38, 0.08);
-        color: var(--danger);
-      }
-      .message.show { display: block; }
-    </style>
+    <style>${loginStyles}</style>
   </head>
   <body>
     <section class="auth-card">
@@ -1057,34 +980,7 @@ function renderAccessDeniedHtml(): string {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Codex to IM</title>
-    <style>
-      body {
-        margin: 0;
-        min-height: 100vh;
-        display: grid;
-        place-items: center;
-        padding: 24px;
-        background: #f5f7fa;
-        color: #111827;
-        font: 14px/1.5 "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
-      }
-      .card {
-        width: min(420px, 100%);
-        background: #ffffff;
-        border: 1px solid #e5e7eb;
-        border-radius: 10px;
-        padding: 24px;
-      }
-      h1 {
-        margin: 0 0 8px;
-        font-size: 24px;
-        line-height: 1.2;
-      }
-      p {
-        margin: 0;
-        color: #667085;
-      }
-    </style>
+    <style>${accessDeniedStyles}</style>
   </head>
   <body>
     <section class="card">
@@ -1102,1459 +998,7 @@ function renderHtml(): string {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Codex to IM</title>
-    <style>
-      :root {
-        --bg: #f5f7fa;
-        --surface: #ffffff;
-        --surface-soft: #fafafa;
-        --border: #e5e7eb;
-        --border-strong: #d0d7e2;
-        --text: #111827;
-        --muted: #667085;
-        --primary: #1677ff;
-        --primary-strong: #0958d9;
-        --success: #15803d;
-        --danger: #dc2626;
-        --sidebar: #001529;
-        --sidebar-border: #0f2b46;
-        --sidebar-text: #c7d2e0;
-        --sidebar-active: #1677ff;
-        --code-bg: #0f172a;
-      }
-
-      * { box-sizing: border-box; }
-      html, body { height: 100%; }
-      body {
-        margin: 0;
-        font: 14px/1.5 "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
-        color: var(--text);
-        background: var(--bg);
-      }
-
-      button, input, select, textarea {
-        font: inherit;
-      }
-
-      .shell {
-        height: 100vh;
-        display: grid;
-        grid-template-columns: 232px minmax(0, 1fr);
-        overflow: hidden;
-      }
-
-      .sidebar {
-        height: 100vh;
-        overflow: auto;
-        background: var(--sidebar);
-        color: var(--sidebar-text);
-        padding: 20px 16px;
-        border-right: 1px solid var(--sidebar-border);
-      }
-
-      .brand {
-        padding: 10px 12px 18px;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-        margin-bottom: 18px;
-      }
-
-      .brand-title {
-        margin: 0;
-        color: #ffffff;
-        font-size: 16px;
-        font-weight: 700;
-      }
-
-      .brand-copy {
-        margin: 6px 0 0;
-        color: var(--sidebar-text);
-        font-size: 13px;
-      }
-
-      .nav {
-        display: grid;
-        gap: 4px;
-      }
-
-      .nav-link {
-        width: 100%;
-        border: 0;
-        background: transparent;
-        color: var(--sidebar-text);
-        text-align: left;
-        padding: 10px 12px;
-        border-radius: 8px;
-        cursor: pointer;
-      }
-
-      .nav-link:hover {
-        background: rgba(255, 255, 255, 0.08);
-        color: #ffffff;
-      }
-
-      .nav-link.active {
-        background: var(--sidebar-active);
-        color: #ffffff;
-      }
-
-      .main {
-        min-height: 0;
-        height: 100vh;
-        overflow: auto;
-        padding: 28px 32px 36px;
-      }
-
-      .page {
-        display: none;
-      }
-
-      .page.active {
-        display: block;
-      }
-
-      .page-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-start;
-        gap: 16px;
-        margin-bottom: 20px;
-      }
-
-      .page-title {
-        margin: 0;
-        font-size: 28px;
-        line-height: 1.2;
-      }
-
-      .page-copy {
-        margin: 6px 0 0;
-        color: var(--muted);
-      }
-
-      .status-grid {
-        display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 16px;
-        margin-bottom: 20px;
-      }
-
-      .status-card,
-      .panel {
-        background: var(--surface);
-        border: 1px solid var(--border);
-        border-radius: 10px;
-      }
-
-      .status-card {
-        padding: 16px 18px;
-      }
-
-      .status-card strong {
-        display: block;
-        font-size: 12px;
-        color: var(--muted);
-        font-weight: 600;
-        margin-bottom: 8px;
-      }
-
-      .status-value {
-        font-size: 22px;
-        line-height: 1.2;
-        font-weight: 700;
-        word-break: break-word;
-      }
-
-      .status-meta {
-        margin-top: 8px;
-        color: var(--muted);
-        font-size: 12px;
-        line-height: 1.45;
-      }
-
-      .panel {
-        padding: 20px;
-      }
-
-      .section-grid {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 20px;
-      }
-
-      .overview-grid {
-        display: grid;
-        grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.9fr);
-        gap: 20px;
-      }
-
-      .panel-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-start;
-        gap: 12px;
-        margin-bottom: 16px;
-      }
-
-      .panel-header h2,
-      .panel-header h3 {
-        margin: 0;
-        font-size: 18px;
-      }
-
-      .panel-header p {
-        margin: 6px 0 0;
-        color: var(--muted);
-      }
-
-      .toolbar,
-      .actions,
-      .session-actions {
-        display: flex;
-        gap: 10px;
-        flex-wrap: wrap;
-      }
-
-      button {
-        border: 1px solid var(--border-strong);
-        background: #ffffff;
-        color: var(--text);
-        border-radius: 8px;
-        padding: 9px 14px;
-        cursor: pointer;
-      }
-
-      button:hover {
-        border-color: var(--primary);
-        color: var(--primary);
-      }
-
-      button.primary {
-        background: var(--primary);
-        border-color: var(--primary);
-        color: #ffffff;
-      }
-
-      button.primary:hover {
-        background: var(--primary-strong);
-        border-color: var(--primary-strong);
-        color: #ffffff;
-      }
-
-      button[disabled] {
-        border-color: var(--border);
-        color: #9ca3af;
-        background: #f3f4f6;
-        cursor: not-allowed;
-      }
-
-      button[disabled]:hover {
-        border-color: var(--border);
-        color: #9ca3af;
-      }
-
-      .fields {
-        display: grid;
-        gap: 16px;
-      }
-
-      .field-row {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 16px;
-      }
-
-      .field-row.triple {
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-      }
-
-      label {
-        display: grid;
-        gap: 6px;
-        color: var(--muted);
-        font-weight: 500;
-      }
-
-      input, select, textarea {
-        width: 100%;
-        border: 1px solid var(--border-strong);
-        background: #ffffff;
-        color: var(--text);
-        border-radius: 8px;
-        padding: 10px 12px;
-      }
-
-      input:focus, select:focus, textarea:focus {
-        outline: 2px solid rgba(22, 119, 255, 0.14);
-        border-color: var(--primary);
-      }
-
-      textarea {
-        min-height: 220px;
-        resize: vertical;
-      }
-
-      .checkbox-row {
-        display: flex;
-        gap: 16px;
-        flex-wrap: wrap;
-      }
-
-      .checkbox {
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        color: var(--text);
-      }
-
-      .checkbox input {
-        width: 16px;
-        height: 16px;
-        margin: 0;
-      }
-
-      .notice {
-        padding: 12px 14px;
-        background: #f8fafc;
-        border: 1px solid #e2e8f0;
-        border-radius: 8px;
-        color: var(--muted);
-      }
-
-      .message {
-        display: none;
-      }
-
-      .global-message-host {
-        position: fixed;
-        top: 18px;
-        left: 50%;
-        transform: translateX(-50%);
-        display: grid;
-        gap: 12px;
-        z-index: 2400;
-        pointer-events: none;
-      }
-
-      .global-message {
-        display: inline-flex;
-        align-items: center;
-        gap: 10px;
-        min-width: 260px;
-        max-width: min(640px, calc(100vw - 32px));
-        padding: 11px 14px;
-        border-radius: 10px;
-        border: 1px solid rgba(208, 215, 226, 0.88);
-        background: rgba(255, 255, 255, 0.98);
-        box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
-        color: var(--text);
-        line-height: 1.45;
-        animation: message-enter 160ms ease;
-      }
-
-      .global-message.success {
-        border-color: rgba(22, 163, 74, 0.22);
-      }
-
-      .global-message.error {
-        border-color: rgba(220, 38, 38, 0.24);
-      }
-
-      .global-message-icon {
-        flex: 0 0 auto;
-        width: 18px;
-        height: 18px;
-        border-radius: 999px;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 12px;
-        font-weight: 700;
-        background: rgba(15, 23, 42, 0.06);
-      }
-
-      .global-message.success .global-message-icon {
-        color: var(--success);
-        background: rgba(22, 163, 74, 0.12);
-      }
-
-      .global-message.error .global-message-icon {
-        color: var(--danger);
-        background: rgba(220, 38, 38, 0.10);
-      }
-
-      .global-message-content {
-        min-width: 0;
-        word-break: break-word;
-      }
-
-      @keyframes message-enter {
-        from {
-          opacity: 0;
-          transform: translateY(-6px);
-        }
-        to {
-          opacity: 1;
-          transform: translateY(0);
-        }
-      }
-
-      .info-list {
-        display: grid;
-        gap: 12px;
-      }
-
-      .info-item {
-        padding: 12px 14px;
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        background: var(--surface-soft);
-      }
-
-      .info-item strong {
-        display: block;
-        margin-bottom: 4px;
-        font-size: 12px;
-        color: var(--muted);
-      }
-
-      .mono,
-      .project-group-path,
-      .session-path,
-      .binding-detail code {
-        font-family: "Cascadia Code", Consolas, "SF Mono", monospace;
-      }
-
-      .session-list {
-        display: grid;
-        gap: 16px;
-      }
-
-      .session-section {
-        display: grid;
-        gap: 12px;
-      }
-
-      .session-section + .session-section {
-        margin-top: 22px;
-      }
-
-      .session-section-head {
-        display: flex;
-        justify-content: space-between;
-        align-items: baseline;
-        gap: 12px;
-      }
-
-      .session-section-title {
-        margin: 0;
-        font-size: 16px;
-        font-weight: 700;
-      }
-
-      .session-section-meta {
-        color: var(--muted);
-        font-size: 12px;
-      }
-
-      .project-group {
-        border: 1px solid var(--border);
-        border-radius: 10px;
-        background: var(--surface);
-        padding: 16px;
-        display: grid;
-        gap: 14px;
-      }
-
-      .project-group-head {
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-start;
-        gap: 16px;
-      }
-
-      .project-group-title {
-        font-size: 16px;
-        font-weight: 700;
-      }
-
-      .project-group-path {
-        color: var(--muted);
-        font-size: 12px;
-        margin-top: 4px;
-        word-break: break-all;
-      }
-
-      .project-group-count {
-        color: var(--muted);
-        font-size: 12px;
-        white-space: nowrap;
-      }
-
-      .project-session-list {
-        display: grid;
-        gap: 12px;
-      }
-
-      .session-card {
-        border: 1px solid var(--border);
-        border-radius: 10px;
-        padding: 14px;
-        background: var(--surface-soft);
-      }
-
-      .session-card.current-thread {
-        border-color: rgba(22, 119, 255, 0.32);
-        background: rgba(22, 119, 255, 0.03);
-      }
-
-      .session-head {
-        display: grid;
-        grid-template-columns: minmax(0, 1.9fr) 150px minmax(220px, 1fr) auto;
-        gap: 16px;
-        align-items: center;
-      }
-
-      .session-main {
-        min-width: 0;
-        display: grid;
-        gap: 4px;
-      }
-
-      .session-title {
-        font-weight: 700;
-      }
-
-      .session-title-row {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        flex-wrap: wrap;
-      }
-
-      .session-mark {
-        display: inline-flex;
-        align-items: center;
-        padding: 1px 8px;
-        border-radius: 999px;
-        background: rgba(22, 119, 255, 0.10);
-        color: var(--primary);
-        font-size: 12px;
-        border: 1px solid rgba(22, 119, 255, 0.16);
-      }
-
-      .session-thread {
-        color: var(--muted);
-        font-size: 12px;
-      }
-
-      .session-thread code {
-        word-break: break-all;
-      }
-
-      .session-inline-action {
-        border: 0;
-        background: transparent;
-        color: var(--primary);
-        padding: 0;
-        margin-left: 8px;
-        font-size: 12px;
-      }
-
-      .session-inline-action:hover {
-        color: var(--primary-strong);
-        text-decoration: underline;
-      }
-
-      .session-cell {
-        min-width: 0;
-        display: grid;
-        gap: 4px;
-      }
-
-      .session-label {
-        color: var(--muted);
-        font-size: 12px;
-      }
-
-      .session-value,
-      .session-path {
-        color: var(--muted);
-        font-size: 12px;
-        word-break: break-all;
-      }
-
-      .session-actions {
-        justify-content: flex-end;
-        align-items: center;
-        flex-wrap: wrap;
-      }
-
-      .session-binding-tags {
-        display: grid;
-        gap: 8px;
-        margin-top: 8px;
-      }
-
-      .session-binding-tag {
-        display: inline-flex;
-        align-items: center;
-        justify-content: flex-start;
-        gap: 8px;
-        padding: 6px 10px;
-        border-radius: 10px;
-        background: rgba(22, 119, 255, 0.08);
-        color: var(--primary);
-        font-size: 12px;
-        border: 1px solid rgba(22, 119, 255, 0.16);
-        width: fit-content;
-        max-width: 100%;
-      }
-
-      .session-binding-tag button {
-        padding: 4px 8px;
-        border-radius: 999px;
-        background: #ffffff;
-        font-size: 12px;
-      }
-
-      .session-binding-tag-label {
-        min-width: 0;
-        word-break: break-word;
-      }
-
-      .session-simple-list {
-        border: 1px solid var(--border);
-        border-radius: 10px;
-        overflow: hidden;
-        background: #ffffff;
-      }
-
-      .session-simple-item {
-        display: grid;
-        grid-template-columns: minmax(0, 1.6fr) minmax(220px, 1fr) auto;
-        gap: 16px;
-        align-items: center;
-        padding: 14px 16px;
-        border-top: 1px solid var(--border);
-        cursor: pointer;
-      }
-
-      .session-simple-item:first-child {
-        border-top: 0;
-      }
-
-      .session-simple-item:hover,
-      .session-card.session-openable:hover {
-        background: rgba(22, 119, 255, 0.04);
-        border-color: rgba(22, 119, 255, 0.24);
-      }
-
-      .session-card.session-openable {
-        cursor: pointer;
-      }
-
-      .session-simple-main {
-        min-width: 0;
-        display: grid;
-        gap: 4px;
-      }
-
-      .session-simple-title {
-        font-weight: 700;
-        word-break: break-word;
-      }
-
-      .session-simple-thread,
-      .session-simple-time,
-      .session-simple-path {
-        color: var(--muted);
-        font-size: 12px;
-        word-break: break-all;
-      }
-
-      .session-simple-side {
-        min-width: 0;
-        display: grid;
-        gap: 4px;
-      }
-
-      .session-history-layout {
-        display: grid;
-        grid-template-rows: auto minmax(0, 1fr) auto;
-        gap: 16px;
-        height: calc(100vh - 148px);
-        min-height: 420px;
-        overflow: hidden;
-      }
-
-      .session-history-summary {
-        display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 12px;
-      }
-
-      .session-history-stat {
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        background: var(--surface-soft);
-        padding: 12px 14px;
-        min-width: 0;
-      }
-
-      .session-history-stat strong {
-        display: block;
-        color: var(--muted);
-        font-size: 12px;
-        margin-bottom: 4px;
-      }
-
-      .session-history-stat span {
-        display: block;
-        font-weight: 700;
-        word-break: break-word;
-      }
-
-      .chat-history-list {
-        min-height: 0;
-        overflow: auto;
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-        padding: 18px;
-        border: 1px solid var(--border);
-        border-radius: 10px;
-        background: #ffffff;
-      }
-
-      .chat-history-message {
-        width: 100%;
-        border: 1px solid var(--border);
-        border-left-width: 4px;
-        border-radius: 10px;
-        background: var(--surface-soft);
-        box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
-      }
-
-      .chat-history-bubble {
-        padding: 12px 14px;
-      }
-
-      .chat-history-message.user {
-        border-left-color: var(--primary);
-        background: rgba(22, 119, 255, 0.06);
-      }
-
-      .chat-history-message.assistant {
-        border-left-color: #16a34a;
-        background: #ffffff;
-      }
-
-      .chat-history-message.system {
-        border-left-color: #d97706;
-        background: rgba(245, 158, 11, 0.08);
-      }
-
-      .chat-history-message.tool {
-        border-left-color: #7c3aed;
-        background: rgba(124, 58, 237, 0.07);
-      }
-
-      .chat-history-message.other {
-        border-left-color: var(--border-strong);
-      }
-
-      .chat-history-message-head {
-        display: flex;
-        justify-content: space-between;
-        align-items: baseline;
-        gap: 12px;
-        margin-bottom: 8px;
-        color: var(--muted);
-        font-size: 12px;
-      }
-
-      .chat-history-role {
-        color: var(--text);
-        font-weight: 700;
-      }
-
-      .chat-history-message-meta {
-        display: inline-flex;
-        align-items: center;
-        justify-content: flex-end;
-        gap: 10px;
-        flex-wrap: wrap;
-      }
-
-      .chat-history-copy {
-        padding: 2px 8px;
-        border-radius: 999px;
-        font-size: 12px;
-        background: #ffffff;
-      }
-
-      .chat-history-content {
-        word-break: break-word;
-        color: #1f2937;
-        line-height: 1.65;
-      }
-
-      .chat-history-content.raw {
-        white-space: pre-wrap;
-      }
-
-      .chat-history-content.markdown > :first-child {
-        margin-top: 0;
-      }
-
-      .chat-history-content.markdown > :last-child {
-        margin-bottom: 0;
-      }
-
-      .chat-history-content.markdown p,
-      .chat-history-content.markdown ul,
-      .chat-history-content.markdown ol,
-      .chat-history-content.markdown blockquote,
-      .chat-history-content.markdown pre {
-        margin: 0 0 10px;
-      }
-
-      .chat-history-content.markdown ul,
-      .chat-history-content.markdown ol {
-        padding-left: 22px;
-      }
-
-      .chat-history-content.markdown blockquote {
-        padding: 8px 12px;
-        border-left: 3px solid var(--border-strong);
-        background: rgba(15, 23, 42, 0.04);
-        color: #475467;
-      }
-
-      .chat-history-content.markdown code {
-        padding: 1px 5px;
-        border-radius: 5px;
-        background: rgba(15, 23, 42, 0.08);
-        color: #334155;
-        font-family: "Cascadia Code", Consolas, "SF Mono", monospace;
-        font-size: 0.94em;
-      }
-
-      .chat-history-content.markdown pre {
-        overflow: auto;
-        padding: 12px 14px;
-        border-radius: 8px;
-        background: var(--code-bg);
-        color: #e2e8f0;
-      }
-
-      .chat-history-content.markdown pre code {
-        padding: 0;
-        background: transparent;
-        color: inherit;
-      }
-
-      .chat-history-content.markdown a {
-        color: var(--primary);
-        text-decoration: underline;
-        text-underline-offset: 2px;
-      }
-
-      .panel-block {
-        margin-top: 18px;
-        padding-top: 16px;
-        border-top: 1px solid var(--border);
-      }
-
-      .panel-subtitle {
-        margin: 0 0 10px;
-        font-size: 14px;
-        font-weight: 700;
-      }
-
-      .channel-shell {
-        padding: 0;
-        overflow: hidden;
-      }
-
-      .channel-workspace .panel-header {
-        margin-bottom: 20px;
-        padding-bottom: 18px;
-        border-bottom: 1px solid var(--border);
-        gap: 18px;
-        align-items: stretch;
-      }
-
-      .channel-header-copy {
-        max-width: 620px;
-      }
-
-      .channel-header-actions {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, max-content));
-        align-items: stretch;
-        justify-content: flex-end;
-        gap: 12px;
-      }
-
-      .channel-action-group {
-        min-width: 220px;
-        padding: 14px 16px;
-        border: 1px solid var(--border);
-        border-radius: 12px;
-        background: linear-gradient(180deg, #ffffff 0%, var(--surface-soft) 100%);
-        box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
-        display: grid;
-        gap: 8px;
-      }
-
-      .channel-action-label {
-        font-size: 12px;
-        font-weight: 600;
-        color: var(--muted);
-      }
-
-      .channel-action-row {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-      }
-
-      .channel-action-hint {
-        font-size: 12px;
-        color: var(--muted);
-        line-height: 1.5;
-      }
-
-      .channel-action-row select {
-        min-width: 110px;
-        height: 40px;
-        padding: 0 12px;
-        border: 1px solid var(--border-strong);
-        border-radius: 8px;
-        background: #ffffff;
-        color: var(--text);
-      }
-
-      .channel-create-button,
-      .channel-refresh-button {
-        min-height: 40px;
-        font-weight: 600;
-        white-space: nowrap;
-        margin-top: 0;
-      }
-
-      .channel-create-button {
-        min-width: 128px;
-      }
-
-      .channel-refresh-button {
-        width: auto;
-        padding-inline: 16px;
-        background: var(--surface);
-      }
-
-      .channel-refresh-button:hover {
-        background: #f8fafc;
-      }
-
-      .channel-layout {
-        display: grid;
-        grid-template-columns: 280px minmax(0, 1fr);
-        gap: 20px;
-      }
-
-      .channel-sidebar {
-        border-right: 1px solid var(--border);
-        padding-right: 20px;
-        display: grid;
-        gap: 12px;
-        align-content: start;
-      }
-
-      .channel-sidebar-meta {
-        color: var(--muted);
-        font-size: 12px;
-      }
-
-      .channel-list {
-        display: grid;
-        gap: 8px;
-      }
-
-      .channel-list-item {
-        width: 100%;
-        text-align: left;
-        border-radius: 10px;
-        padding: 12px 14px;
-        display: grid;
-        gap: 8px;
-      }
-
-      .channel-list-item.active {
-        border-color: rgba(22, 119, 255, 0.30);
-        background: rgba(22, 119, 255, 0.06);
-        color: var(--text);
-      }
-
-      .channel-list-item-head {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        gap: 10px;
-      }
-
-      .channel-list-item-title {
-        font-weight: 700;
-        min-width: 0;
-        word-break: break-word;
-      }
-
-      .channel-list-item-provider,
-      .channel-list-item-meta {
-        color: var(--muted);
-        font-size: 12px;
-      }
-
-      .channel-list-item-stats {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        gap: 12px;
-        font-size: 12px;
-        color: var(--muted);
-      }
-
-      .channel-list-item-status {
-        color: var(--text);
-        font-weight: 600;
-      }
-
-      .channel-editor {
-        min-width: 0;
-      }
-
-      .channel-editor-summary {
-        display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 12px;
-        margin-bottom: 18px;
-      }
-
-      .channel-editor-stat {
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        background: var(--surface-soft);
-        padding: 12px 14px;
-        display: grid;
-        gap: 4px;
-      }
-
-      .channel-editor-stat strong {
-        font-size: 12px;
-        color: var(--muted);
-        font-weight: 600;
-      }
-
-      .channel-editor-stat span {
-        font-size: 14px;
-        font-weight: 700;
-        color: var(--text);
-      }
-
-      .editor-section {
-        border-top: 1px solid var(--border);
-        padding-top: 16px;
-        display: grid;
-        gap: 14px;
-      }
-
-      .editor-section-title {
-        margin: 0;
-        font-size: 14px;
-        font-weight: 700;
-      }
-
-      .toolbar-split {
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-start;
-        gap: 12px;
-        flex-wrap: wrap;
-      }
-
-      .toolbar-danger {
-        display: flex;
-        gap: 10px;
-        flex-wrap: wrap;
-      }
-
-      button.danger {
-        border-color: rgba(220, 38, 38, 0.24);
-        color: var(--danger);
-      }
-
-      button.danger:hover {
-        border-color: var(--danger);
-        color: var(--danger);
-      }
-
-      .inline-select {
-        display: inline-grid;
-        gap: 6px;
-        color: var(--muted);
-        font-size: 12px;
-        font-weight: 500;
-      }
-
-      .channel-tabs {
-        display: flex;
-        align-items: flex-end;
-        gap: 0;
-        padding: 0 20px;
-        border-bottom: 1px solid var(--border);
-        background: #ffffff;
-      }
-
-      .command-sections {
-        display: grid;
-        gap: 14px;
-      }
-
-      .command-section {
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        background: var(--surface-soft);
-        overflow: hidden;
-      }
-
-      .command-section-title {
-        margin: 0;
-        padding: 10px 14px;
-        font-size: 14px;
-        font-weight: 700;
-        border-bottom: 1px solid var(--border);
-        background: #ffffff;
-      }
-
-      .command-list {
-        display: grid;
-      }
-
-      .command-list-head,
-      .command-item {
-        display: grid;
-        grid-template-columns: 220px 320px minmax(0, 1fr);
-        gap: 16px;
-        padding: 10px 14px;
-        align-items: start;
-      }
-
-      .command-list-head {
-        padding-top: 12px;
-        padding-bottom: 8px;
-        color: var(--muted);
-        font-size: 12px;
-        font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: .04em;
-        background: #fcfcfd;
-        border-top: 1px solid var(--border);
-      }
-
-      .command-item:first-child {
-        border-top: 0;
-      }
-
-      .command-item code {
-        word-break: break-all;
-      }
-
-      .command-col-command,
-      .command-col-original {
-        min-width: 0;
-      }
-
-      .command-col-desc {
-        color: #475467;
-      }
-
-      .channel-tab {
-        border: 0;
-        border-bottom: 2px solid transparent;
-        border-radius: 0;
-        padding: 14px 18px 12px;
-        background: transparent;
-        color: var(--muted);
-        margin-bottom: -1px;
-      }
-
-      .channel-tab.active {
-        color: var(--primary);
-        border-bottom-color: var(--primary);
-        background: transparent;
-      }
-
-      .channel-view {
-        display: none;
-        padding: 20px;
-      }
-
-      .channel-view.active {
-        display: block;
-      }
-
-      .binding-list {
-        display: grid;
-        gap: 10px;
-      }
-
-      .binding-tabs {
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
-        margin-bottom: 10px;
-      }
-
-      .binding-tab {
-        border: 1px solid var(--border);
-        border-radius: 999px;
-        background: #ffffff;
-        color: var(--muted);
-        padding: 7px 12px;
-      }
-
-      .binding-tab.active {
-        border-color: rgba(22, 119, 255, 0.30);
-        background: rgba(22, 119, 255, 0.08);
-        color: var(--primary);
-      }
-
-      .binding-item {
-        border: 1px solid var(--border);
-        border-radius: 10px;
-        background: var(--surface-soft);
-        padding: 12px 14px;
-      }
-
-      .binding-head {
-        display: flex;
-        justify-content: space-between;
-        align-items: baseline;
-        gap: 10px;
-        margin-bottom: 6px;
-      }
-
-      .binding-title {
-        font-weight: 700;
-      }
-
-      .binding-detail {
-        color: var(--muted);
-        font-size: 12px;
-        margin-top: 4px;
-        word-break: break-all;
-      }
-
-      .binding-controls {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) auto;
-        gap: 10px;
-        margin-top: 12px;
-      }
-
-      .binding-table-wrap {
-        margin-top: 12px;
-        border: 1px solid var(--border);
-        border-radius: 10px;
-        background: #ffffff;
-        overflow: hidden;
-      }
-
-      .binding-table {
-        width: 100%;
-        border-collapse: collapse;
-      }
-
-      .binding-table th,
-      .binding-table td {
-        padding: 10px 12px;
-        border-top: 1px solid var(--border);
-        text-align: left;
-        vertical-align: top;
-      }
-
-      .binding-table thead th {
-        border-top: 0;
-        background: #f8fafc;
-        color: var(--muted);
-        font-size: 12px;
-        font-weight: 700;
-      }
-
-      .binding-table tbody tr.current {
-        background: rgba(22, 119, 255, 0.04);
-      }
-
-      .binding-table-title {
-        font-weight: 700;
-        word-break: break-word;
-      }
-
-      .binding-table-thread,
-      .binding-table-path {
-        font-size: 12px;
-        color: var(--muted);
-        word-break: break-all;
-      }
-
-      .binding-table-mark {
-        display: inline-flex;
-        align-items: center;
-        margin-left: 8px;
-        padding: 1px 8px;
-        border-radius: 999px;
-        background: rgba(22, 119, 255, 0.10);
-        color: var(--primary);
-        font-size: 12px;
-      }
-
-      .pill {
-        display: inline-flex;
-        align-items: center;
-        margin-left: 8px;
-        padding: 1px 8px;
-        border-radius: 999px;
-        font-size: 12px;
-        font-weight: 700;
-        border: 1px solid var(--border);
-        background: #ffffff;
-        color: var(--muted);
-      }
-
-      .pill-bridge {
-        border-color: rgba(22, 119, 255, 0.30);
-        background: rgba(22, 119, 255, 0.08);
-        color: var(--primary);
-      }
-
-      .pill-desktop {
-        border-color: rgba(16, 185, 129, 0.35);
-        background: rgba(16, 185, 129, 0.10);
-        color: #047857;
-      }
-
-      .binding-target-btn {
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        background: #ffffff;
-        white-space: nowrap;
-      }
-
-      .binding-target-btn.current {
-        border-color: rgba(22, 119, 255, 0.30);
-        background: rgba(22, 119, 255, 0.08);
-        color: var(--primary);
-      }
-
-      .binding-empty {
-        padding: 12px 14px;
-        border: 1px dashed var(--border-strong);
-        border-radius: 8px;
-        color: var(--muted);
-        background: var(--surface-soft);
-      }
-
-      .logs {
-        min-height: 0;
-        height: 100%;
-        white-space: pre-wrap;
-        word-break: break-word;
-        background: var(--code-bg);
-        color: #e2e8f0;
-        border-radius: 10px;
-        padding: 16px;
-        overflow: auto;
-      }
-
-      .logs-panel {
-        height: calc(100vh - 148px);
-        min-height: 420px;
-        overflow: hidden;
-      }
-
-      .ghost,
-      .small {
-        color: var(--muted);
-        font-size: 12px;
-      }
-
-      @media (max-width: 1180px) {
-        .overview-grid,
-        .section-grid {
-          grid-template-columns: 1fr;
-        }
-      }
-
-      @media (max-width: 980px) {
-        .shell {
-          min-height: 100vh;
-          height: auto;
-          grid-template-columns: 1fr;
-          overflow: visible;
-        }
-        .sidebar {
-          height: auto;
-          overflow: visible;
-          border-right: 0;
-          border-bottom: 1px solid var(--sidebar-border);
-        }
-        .nav { grid-template-columns: repeat(6, minmax(0, 1fr)); }
-        .main {
-          height: auto;
-          overflow: visible;
-          padding: 20px 20px 28px;
-        }
-        .channel-layout { grid-template-columns: 1fr; }
-        .channel-sidebar { border-right: 0; padding-right: 0; }
-        .logs-panel,
-        .session-history-layout { height: calc(100vh - 188px); }
-        .channel-header-actions {
-          grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-          justify-content: stretch;
-        }
-        .channel-action-group { min-width: 0; }
-        .channel-editor-summary { grid-template-columns: 1fr; }
-        .field-row,
-        .field-row.triple,
-        .command-item,
-        .command-list-head,
-        .binding-controls { grid-template-columns: 1fr; }
-        .status-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-        .session-history-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      }
-
-      @media (max-width: 720px) {
-        .nav { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-        .status-grid { grid-template-columns: 1fr; }
-        .page-header,
-        .panel-header,
-        .project-group-head,
-        .binding-head,
-        .session-section-head { flex-direction: column; align-items: stretch; }
-        .channel-header-actions,
-        .channel-action-row { width: 100%; }
-        .channel-action-group,
-        .channel-refresh-button,
-        .channel-create-button { width: 100%; }
-        .channel-action-row { display: grid; grid-template-columns: 1fr; }
-        .channel-action-row select { width: 100%; }
-        .session-head { grid-template-columns: 1fr; }
-        .session-simple-item { grid-template-columns: 1fr; }
-        .session-history-summary { grid-template-columns: 1fr; }
-        .chat-history-list { padding: 12px; }
-        .session-actions { justify-content: flex-start; }
-      }
-    </style>
+    <style>${mainStyles}</style>
   </head>
   <body>
     <div class="shell">
@@ -2818,6 +1262,10 @@ function renderHtml(): string {
               </div>
               <div class="small">如果新建会话报 “Not inside a trusted directory”，可以打开这个选项。修改后需要重启 Bridge 才会生效。</div>
               <div class="checkbox-row" style="margin-top: 12px;">
+                <label class="checkbox"><input id="codexNetworkAccess" type="checkbox" /> 允许 workspace-write 沙箱访问网络</label>
+              </div>
+              <div class="small">对应 Codex 配置 <code>sandbox_workspace_write.network_access=true</code>；IM 会话也可用 <code>/net on</code> 单独覆盖。</div>
+              <div class="checkbox-row" style="margin-top: 12px;">
                 <label class="checkbox"><input id="uiAllowLan" type="checkbox" /> 允许局域网访问 Web 控制台</label>
               </div>
               <div class="notice" id="uiAccessSummary">默认仅允许本机访问当前工作台。</div>
@@ -2887,6 +1335,8 @@ function renderHtml(): string {
                   <div class="command-list-head"><div>命令</div><div>原始命令</div><div>说明</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/m</code></div><div class="command-col-original"><code>/mode</code></div><div class="command-col-desc">查看当前模式；可选 <code>code</code>、<code>plan</code>、<code>ask</code>。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/r</code></div><div class="command-col-original"><code>/reasoning</code></div><div class="command-col-desc">查看当前思考级别；可选 <code>1=minimal</code>、<code>2=low</code>、<code>3=medium</code>、<code>4=high</code>、<code>5=xhigh</code>。</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>/sb</code></div><div class="command-col-original"><code>/sandbox</code></div><div class="command-col-desc">查看或切换当前 IM 会话的 Codex 沙箱；可选 <code>read-only</code>、<code>workspace-write</code>、<code>danger-full-access</code>、<code>default</code>。</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>/net</code></div><div class="command-col-original"><code>/network</code></div><div class="command-col-desc">查看或切换当前 IM 会话的网络访问；可选 <code>on</code>、<code>off</code>、<code>default</code>。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/model [slug|default]</code></div><div class="command-col-original"><code>/model [slug|default]</code></div><div class="command-col-desc">查看或切换当前 IM 会话使用的模型；Desktop 不支持的模型会标注“仅 IM”，共享桌面线程只允许查看不允许切换。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/t 0</code></div><div class="command-col-original"><code>/thread 0</code></div><div class="command-col-desc">切换到当前聊天的临时草稿线程。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/t 0 reset</code></div><div class="command-col-original"><code>/thread 0 reset</code></div><div class="command-col-desc">丢弃当前草稿上下文并重建一条新的草稿线程。</div></div>
@@ -3076,8 +1526,37 @@ function renderHtml(): string {
         return option.label + ' · ' + option.description;
       }
 
+      function sessionFromBindingOption(option) {
+        const isBridge = option.kind === 'session';
+        return {
+          targetKey: option.key,
+          kind: isBridge ? 'bridge' : 'desktop',
+          sessionId: option.sessionId || (isBridge ? option.id : ''),
+          threadId: option.threadId || (isBridge ? '' : option.id),
+          title: option.label,
+          cwd: option.cwd || '',
+          originator: isBridge ? 'Bridge / IM' : 'Codex Desktop',
+          source: isBridge ? 'bridge' : 'desktop',
+          lastEventAt: '',
+        };
+      }
+
+      function selectableSessions() {
+        const byKey = new Map();
+        for (const session of state.desktopSessions || []) {
+          byKey.set(sessionTargetKey(session), session);
+        }
+        for (const option of state.bindingOptions || []) {
+          if (!option || !option.key) continue;
+          if (!byKey.has(option.key)) {
+            byKey.set(option.key, sessionFromBindingOption(option));
+          }
+        }
+        return Array.from(byKey.values());
+      }
+
       function renderBindingTable(binding) {
-        const sessions = state.desktopSessions || [];
+        const sessions = selectableSessions();
         if (!sessions.length) {
           return '<div class="binding-empty">当前没有可用的 Codex 会话记录。</div>';
         }
@@ -3142,6 +1621,7 @@ function renderHtml(): string {
           defaultModel: document.getElementById('defaultModel').value,
           codexSkipGitRepoCheck: document.getElementById('codexSkipGitRepoCheck').checked,
           codexSandboxMode: document.getElementById('codexSandboxMode').value,
+          codexNetworkAccess: document.getElementById('codexNetworkAccess').checked,
           codexReasoningEffort: document.getElementById('codexReasoningEffort').value,
           uiAllowLan: document.getElementById('uiAllowLan').checked,
           uiAccessToken: document.getElementById('uiAccessToken').value,
@@ -3391,6 +1871,7 @@ function renderHtml(): string {
         streamStatusCheckIntervalSeconds: '上次响应距今检查间隔',
         codexSkipGitRepoCheck: '允许在未信任 Git 目录运行 Codex',
         codexSandboxMode: 'Codex 文件系统权限',
+        codexNetworkAccess: '允许 workspace-write 沙箱访问网络',
         codexReasoningEffort: 'Codex 思考级别',
         uiAllowLan: '允许局域网访问 Web 控制台',
         uiAccessToken: '局域网访问 token',
@@ -3411,6 +1892,7 @@ function renderHtml(): string {
         'streamStatusIdleStartSeconds',
         'streamStatusCheckIntervalSeconds',
         'codexSandboxMode',
+        'codexNetworkAccess',
         'codexReasoningEffort',
         'uiAllowLan',
         'uiAccessToken',
@@ -3564,6 +2046,31 @@ function renderHtml(): string {
         return channel + ' · ' + (binding.chatDisplayName || binding.chatId);
       }
 
+      function renderSessionChannelControl(session) {
+        const bindings = state.bindings || [];
+        if (!bindings.length) return '';
+
+        const targetKey = sessionTargetKey(session);
+        const currentBinding = bindings.find((binding) => binding.currentTargetKey === targetKey);
+        const options = ['<option value="">指定通道...</option>'].concat(bindings.map((binding) => {
+          const isCurrent = binding.currentTargetKey === targetKey;
+          const suffix = isCurrent
+            ? '（当前）'
+            : binding.currentTargetLabel
+              ? '（已绑定：' + binding.currentTargetLabel + '）'
+              : '';
+          return '<option value="' + escapeHtml(binding.id) + '"' + (currentBinding && binding.id === currentBinding.id ? ' selected' : '') + '>'
+            + escapeHtml(formatBindingAccount(binding) + suffix)
+            + '</option>';
+        })).join('');
+
+        return ''
+          + '<div class="session-channel-control" data-session-target-key="' + escapeHtml(targetKey) + '">'
+          +   '<select data-role="session-channel-select" aria-label="指定通道">' + options + '</select>'
+          +   '<button type="button" data-action="assign-session-channel" data-target-key="' + escapeHtml(targetKey) + '">指定通道</button>'
+          + '</div>';
+      }
+
       function bindingRuntimeText(binding) {
         const status = binding.runtimeStatus || 'idle';
         const queuedCount = Number(binding.queuedCount || 0);
@@ -3602,6 +2109,7 @@ function renderHtml(): string {
             ? '<button type="button" data-action="copy-thread" data-thread-id="' + escapeHtml(session.threadId) + '">复制 thread</button>'
               + '<button type="button" data-action="copy-bind-command" data-thread-id="' + escapeHtml(session.threadId) + '">复制命令</button>'
             : '')
+          + renderSessionChannelControl(session)
           + '<button type="button" class="danger" data-action="delete-session" data-target-key="' + escapeHtml(targetKey) + '">删除</button>';
 
         return ''
@@ -3631,6 +2139,9 @@ function renderHtml(): string {
         const bindings = bindingsForSession(session);
         const marks = currentThreadMarks(session);
         const markHtml = marks.map((mark) => '<span class="session-mark">' + escapeHtml(mark) + '</span>').join('');
+        const identityLabel = session.threadId ? 'Thread' : 'Bridge 会话';
+        const identityValue = session.threadId || session.sessionId || '-';
+        const originator = session.originator || (session.kind === 'bridge' ? 'Bridge / IM' : 'Codex Desktop');
         const bindingTags = bindings.map((binding) => (
           '<div class="session-binding-tag">'
             + '<span class="session-binding-tag-label">' + escapeHtml(formatBindingAccount(binding)) + '</span>'
@@ -3643,7 +2154,7 @@ function renderHtml(): string {
           +   '<div class="session-head">'
           +     '<div class="session-main">'
           +       '<div class="session-title-row"><div class="session-title">' + escapeHtml(session.title || 'Untitled Session') + '</div>' + markHtml + '</div>'
-          +       '<div class="session-thread">Thread: <code>' + escapeHtml(session.threadId) + '</code></div>'
+          +       '<div class="session-thread">' + identityLabel + ': <code>' + escapeHtml(identityValue) + '</code></div>'
           +       '<div class="session-path">' + escapeHtml(session.cwd || '(no cwd)') + '</div>'
           +       '<div class="session-binding-tags">' + bindingTags + '</div>'
           +     '</div>'
@@ -3657,9 +2168,10 @@ function renderHtml(): string {
           +     '</div>'
           +     '<div class="session-cell">'
           +       '<div class="session-label">来源</div>'
-          +       '<div class="session-value">' + escapeHtml(session.originator || 'Codex Desktop') + '</div>'
+          +       '<div class="session-value">' + escapeHtml(originator) + '</div>'
           +       '<div class="session-actions">'
           +         '<button type="button" data-action="open-session-history" data-target-key="' + escapeHtml(targetKey) + '">查看历史</button>'
+          +         renderSessionChannelControl(session)
           +         '<button type="button" class="danger" data-action="delete-session" data-target-key="' + escapeHtml(targetKey) + '">删除</button>'
           +       '</div>'
           +     '</div>'
@@ -3679,6 +2191,7 @@ function renderHtml(): string {
             ? '<button type="button" data-action="copy-thread" data-thread-id="' + escapeHtml(session.threadId) + '">复制 thread</button>'
               + '<button type="button" data-action="copy-bind-command" data-thread-id="' + escapeHtml(session.threadId) + '">复制命令</button>'
             : '')
+          + renderSessionChannelControl(session)
           + '<button type="button" class="danger" data-action="delete-session" data-target-key="' + escapeHtml(targetKey) + '">删除</button>';
 
         return ''
@@ -4017,6 +2530,7 @@ function renderHtml(): string {
         renderDefaultModelOptions(config);
         document.getElementById('codexSkipGitRepoCheck').checked = config.codexSkipGitRepoCheck === true;
         document.getElementById('codexSandboxMode').value = config.codexSandboxMode || 'workspace-write';
+        document.getElementById('codexNetworkAccess').checked = config.codexNetworkAccess === true;
         document.getElementById('codexReasoningEffort').value = config.codexReasoningEffort || 'medium';
         document.getElementById('uiAllowLan').checked = config.uiAllowLan === true;
         document.getElementById('uiAccessToken').value = config.uiAccessToken || '';
@@ -4277,6 +2791,44 @@ function renderHtml(): string {
         setActivePage('sessions', true);
         showMessage('desktopMessage', 'success', '会话已删除。');
         return true;
+      }
+
+      async function assignSessionChannel(button) {
+        const targetKey = button.dataset.targetKey || '';
+        if (!targetKey) {
+          throw new Error('当前没有选中的会话。');
+        }
+
+        const control = button.closest('.session-channel-control');
+        const select = control ? control.querySelector('select[data-role="session-channel-select"]') : null;
+        const bindingId = select ? select.value : '';
+        if (!bindingId) {
+          throw new Error('请先选择要指定的通道。');
+        }
+
+        const binding = (state.bindings || []).find((item) => item.id === bindingId);
+        if (!binding) {
+          throw new Error('指定的通道绑定不存在，请刷新后重试。');
+        }
+        if (binding.currentTargetKey === targetKey) {
+          showMessage('desktopMessage', 'success', '该通道已经绑定到当前会话。');
+          return;
+        }
+
+        const session = findSessionSummaryByTargetKey(targetKey);
+        const targetLabel = session && session.title ? session.title : targetKey;
+        const currentLabel = binding.currentTargetLabel || binding.currentSessionName || binding.currentSessionId || binding.chatId;
+        const channelLabel = formatBindingAccount(binding);
+        if (binding.currentTargetKey && !window.confirm('通道“' + channelLabel + '”当前已绑定到“' + currentLabel + '”。确认换绑到“' + targetLabel + '”？')) {
+          return;
+        }
+
+        const result = await api('/api/bindings/update', {
+          method: 'POST',
+          body: JSON.stringify({ bindingId, targetKey }),
+        });
+        renderBindings(result);
+        showMessage('desktopMessage', 'success', '通道已指定到当前会话。');
       }
 
       async function loadBindings() {
@@ -4742,6 +3294,14 @@ function renderHtml(): string {
               await copyText(shortThreadCommand(target.dataset.threadId || ''), '接管命令已复制。');
               return;
             }
+            if (target.dataset.action === 'assign-session-channel') {
+              await assignSessionChannel(target);
+              return;
+            }
+          }
+
+          if (source.closest('.session-channel-control')) {
+            return;
           }
 
           const card = source.closest('[data-session-target-key]');
