@@ -128,6 +128,7 @@ export interface BridgeSession {
 export interface BridgeMessage {
   role: string;
   content: string;
+  timestamp?: string;
 }
 
 // ── Host Interface: Settings ─────────────────────────────────

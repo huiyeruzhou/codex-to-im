@@ -2,6 +2,7 @@ import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import crypto from 'node:crypto';
 import net from 'node:net';
 import os from 'node:os';
+import MarkdownIt from 'markdown-it';
 
 import {
   CTI_HOME,
@@ -66,6 +67,11 @@ const AUTH_COOKIE_NAME = 'cti_ui_auth';
 const availableCodexModels = listSelectableCodexModels();
 const availableCodexModelSlugs = new Set(availableCodexModels.map((model) => model.slug));
 const FEISHU_CHAT_LABEL_TTL_MS = 5 * 60 * 1000;
+const markdownRenderer = new MarkdownIt({
+  html: false,
+  linkify: true,
+  breaks: true,
+});
 const feishuChatLabelCache = new Map<string, { label: string; userId?: string; expiresAt: number }>();
 const feishuTenantTokenCache = new Map<
   string,
@@ -240,7 +246,21 @@ interface UiSessionSummary {
 interface UiSessionHistoryMessage {
   role: string;
   content: string;
+  renderedContent: string;
   timestamp: string;
+}
+
+function renderHistoryMarkdown(content: string): string {
+  return markdownRenderer.render(content || '');
+}
+
+function uiHistoryMessage(role: string, content: string, timestamp: string): UiSessionHistoryMessage {
+  return {
+    role,
+    content,
+    renderedContent: renderHistoryMarkdown(content),
+    timestamp,
+  };
 }
 
 function getBridgeSessionTitle(session: BridgeSession): string {
@@ -335,11 +355,7 @@ function getUiSessionHistory(store: JsonFileStore, targetKey: string): {
       return {
         session: desktopSummary || bridgeSessionToSummary(session),
         source: 'desktop',
-        messages: events.map((event) => ({
-          role: event.role,
-          content: event.content,
-          timestamp: event.timestamp,
-        })),
+        messages: events.map((event) => uiHistoryMessage(event.role, event.content, event.timestamp)),
       };
     }
 
@@ -347,11 +363,7 @@ function getUiSessionHistory(store: JsonFileStore, targetKey: string): {
     return {
       session: bridgeSessionToSummary(session),
       source: 'bridge',
-      messages: messages.map((message) => ({
-        role: message.role,
-        content: message.content,
-        timestamp: '',
-      })),
+      messages: messages.map((message) => uiHistoryMessage(message.role, message.content, message.timestamp || '')),
     };
   }
 
@@ -366,11 +378,7 @@ function getUiSessionHistory(store: JsonFileStore, targetKey: string): {
     return {
       session: summary,
       source: 'desktop',
-      messages: events.map((event) => ({
-        role: event.role,
-        content: event.content,
-        timestamp: event.timestamp,
-      })),
+      messages: events.map((event) => uiHistoryMessage(event.role, event.content, event.timestamp)),
     };
   }
 
@@ -1128,12 +1136,15 @@ function renderHtml(): string {
       }
 
       .shell {
-        min-height: 100vh;
+        height: 100vh;
         display: grid;
         grid-template-columns: 232px minmax(0, 1fr);
+        overflow: hidden;
       }
 
       .sidebar {
+        height: 100vh;
+        overflow: auto;
         background: var(--sidebar);
         color: var(--sidebar-text);
         padding: 20px 16px;
@@ -1186,6 +1197,9 @@ function renderHtml(): string {
       }
 
       .main {
+        min-height: 0;
+        height: 100vh;
+        overflow: auto;
         padding: 28px 32px 36px;
       }
 
@@ -1765,7 +1779,11 @@ function renderHtml(): string {
 
       .session-history-layout {
         display: grid;
+        grid-template-rows: auto minmax(0, 1fr) auto;
         gap: 16px;
+        height: calc(100vh - 148px);
+        min-height: 420px;
+        overflow: hidden;
       }
 
       .session-history-summary {
@@ -1796,15 +1814,52 @@ function renderHtml(): string {
       }
 
       .chat-history-list {
-        display: grid;
+        min-height: 0;
+        overflow: auto;
+        display: flex;
+        flex-direction: column;
         gap: 12px;
+        padding: 18px;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: #ffffff;
       }
 
       .chat-history-message {
+        width: 100%;
         border: 1px solid var(--border);
-        border-radius: 8px;
+        border-left-width: 4px;
+        border-radius: 10px;
         background: var(--surface-soft);
+        box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+      }
+
+      .chat-history-bubble {
         padding: 12px 14px;
+      }
+
+      .chat-history-message.user {
+        border-left-color: var(--primary);
+        background: rgba(22, 119, 255, 0.06);
+      }
+
+      .chat-history-message.assistant {
+        border-left-color: #16a34a;
+        background: #ffffff;
+      }
+
+      .chat-history-message.system {
+        border-left-color: #d97706;
+        background: rgba(245, 158, 11, 0.08);
+      }
+
+      .chat-history-message.tool {
+        border-left-color: #7c3aed;
+        background: rgba(124, 58, 237, 0.07);
+      }
+
+      .chat-history-message.other {
+        border-left-color: var(--border-strong);
       }
 
       .chat-history-message-head {
@@ -1822,9 +1877,86 @@ function renderHtml(): string {
         font-weight: 700;
       }
 
+      .chat-history-message-meta {
+        display: inline-flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+
+      .chat-history-copy {
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: 12px;
+        background: #ffffff;
+      }
+
       .chat-history-content {
-        white-space: pre-wrap;
         word-break: break-word;
+        color: #1f2937;
+        line-height: 1.65;
+      }
+
+      .chat-history-content.raw {
+        white-space: pre-wrap;
+      }
+
+      .chat-history-content.markdown > :first-child {
+        margin-top: 0;
+      }
+
+      .chat-history-content.markdown > :last-child {
+        margin-bottom: 0;
+      }
+
+      .chat-history-content.markdown p,
+      .chat-history-content.markdown ul,
+      .chat-history-content.markdown ol,
+      .chat-history-content.markdown blockquote,
+      .chat-history-content.markdown pre {
+        margin: 0 0 10px;
+      }
+
+      .chat-history-content.markdown ul,
+      .chat-history-content.markdown ol {
+        padding-left: 22px;
+      }
+
+      .chat-history-content.markdown blockquote {
+        padding: 8px 12px;
+        border-left: 3px solid var(--border-strong);
+        background: rgba(15, 23, 42, 0.04);
+        color: #475467;
+      }
+
+      .chat-history-content.markdown code {
+        padding: 1px 5px;
+        border-radius: 5px;
+        background: rgba(15, 23, 42, 0.08);
+        color: #334155;
+        font-family: "Cascadia Code", Consolas, "SF Mono", monospace;
+        font-size: 0.94em;
+      }
+
+      .chat-history-content.markdown pre {
+        overflow: auto;
+        padding: 12px 14px;
+        border-radius: 8px;
+        background: var(--code-bg);
+        color: #e2e8f0;
+      }
+
+      .chat-history-content.markdown pre code {
+        padding: 0;
+        background: transparent;
+        color: inherit;
+      }
+
+      .chat-history-content.markdown a {
+        color: var(--primary);
+        text-decoration: underline;
+        text-underline-offset: 2px;
       }
 
       .panel-block {
@@ -2333,14 +2465,21 @@ function renderHtml(): string {
       }
 
       .logs {
+        min-height: 0;
+        height: 100%;
         white-space: pre-wrap;
         word-break: break-word;
         background: var(--code-bg);
         color: #e2e8f0;
         border-radius: 10px;
         padding: 16px;
-        min-height: 420px;
         overflow: auto;
+      }
+
+      .logs-panel {
+        height: calc(100vh - 148px);
+        min-height: 420px;
+        overflow: hidden;
       }
 
       .ghost,
@@ -2357,12 +2496,28 @@ function renderHtml(): string {
       }
 
       @media (max-width: 980px) {
-        .shell { grid-template-columns: 1fr; }
-        .sidebar { border-right: 0; border-bottom: 1px solid var(--sidebar-border); }
+        .shell {
+          min-height: 100vh;
+          height: auto;
+          grid-template-columns: 1fr;
+          overflow: visible;
+        }
+        .sidebar {
+          height: auto;
+          overflow: visible;
+          border-right: 0;
+          border-bottom: 1px solid var(--sidebar-border);
+        }
         .nav { grid-template-columns: repeat(6, minmax(0, 1fr)); }
-        .main { padding: 20px 20px 28px; }
+        .main {
+          height: auto;
+          overflow: visible;
+          padding: 20px 20px 28px;
+        }
         .channel-layout { grid-template-columns: 1fr; }
         .channel-sidebar { border-right: 0; padding-right: 0; }
+        .logs-panel,
+        .session-history-layout { height: calc(100vh - 188px); }
         .channel-header-actions {
           grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
           justify-content: stretch;
@@ -2396,6 +2551,7 @@ function renderHtml(): string {
         .session-head { grid-template-columns: 1fr; }
         .session-simple-item { grid-template-columns: 1fr; }
         .session-history-summary { grid-template-columns: 1fr; }
+        .chat-history-list { padding: 12px; }
         .session-actions { justify-content: flex-start; }
       }
     </style>
@@ -2565,6 +2721,7 @@ function renderHtml(): string {
             <div class="toolbar">
               <button id="backToSessionsBtn">返回会话列表</button>
               <button id="refreshSessionHistoryBtn">刷新历史</button>
+              <button id="toggleSessionHistoryViewBtn">显示原文</button>
               <button class="danger" id="deleteSessionBtn">删除会话</button>
             </div>
           </div>
@@ -2810,7 +2967,7 @@ function renderHtml(): string {
             </div>
           </div>
 
-          <section class="panel" id="logs">
+          <section class="panel logs-panel" id="logs">
             <div class="logs" id="logsOutput">等待加载日志…</div>
           </section>
         </section>
@@ -2834,9 +2991,12 @@ function renderHtml(): string {
         activePage: 'overview',
         activeSessionTargetKey: '',
         sessionHistory: null,
+        sessionHistoryViewMode: 'markdown',
         activeChannelId: '',
         channelDraft: null,
         weixinLoginPollers: {},
+        pageRefreshTimer: null,
+        pageRefreshInFlight: {},
       };
 
       function escapeHtml(value) {
@@ -3020,6 +3180,65 @@ function renderHtml(): string {
         }, 2200);
       }
 
+      function stopActivePageRefresh() {
+        if (!state.pageRefreshTimer) return;
+        window.clearInterval(state.pageRefreshTimer);
+        state.pageRefreshTimer = null;
+      }
+
+      async function refreshSessionHistoryData() {
+        if (!state.activeSessionTargetKey) return;
+        const result = await api('/api/session-history?targetKey=' + encodeURIComponent(state.activeSessionTargetKey));
+        renderSessionHistory(result);
+      }
+
+      async function refreshPageData(page) {
+        if (state.pageRefreshInFlight[page]) return;
+        state.pageRefreshInFlight[page] = true;
+        try {
+          if (page === 'overview') {
+            await loadStatus();
+            await loadBindings();
+            await loadDesktopSessions();
+            return;
+          }
+          if (page === 'sessions') {
+            await loadBindings();
+            await loadDesktopSessions();
+            return;
+          }
+          if (page === 'session-history') {
+            await refreshSessionHistoryData();
+            return;
+          }
+          if (page === 'channels') {
+            await loadRuntimeStatusOnly();
+            await loadBindings();
+            return;
+          }
+          if (page === 'logs') {
+            await loadLogs();
+          }
+        } catch (error) {
+          // Keep background refresh quiet; manual refresh buttons still show errors.
+          console.warn('[ui] Auto refresh failed:', error);
+        } finally {
+          state.pageRefreshInFlight[page] = false;
+        }
+      }
+
+      function startActivePageRefresh(page) {
+        stopActivePageRefresh();
+        const refreshablePages = new Set(['overview', 'sessions', 'session-history', 'channels', 'logs']);
+        if (!refreshablePages.has(page)) return;
+        void refreshPageData(page);
+        state.pageRefreshTimer = window.setInterval(() => {
+          if (state.activePage !== page) return;
+          if (document.hidden) return;
+          void refreshPageData(page);
+        }, 5000);
+      }
+
       function setActivePage(page, syncHash) {
         const nextPage = ['overview', 'sessions', 'session-history', 'config', 'commands', 'channels', 'logs'].includes(page) ? page : 'overview';
         state.activePage = nextPage;
@@ -3044,6 +3263,8 @@ function renderHtml(): string {
             history.replaceState(null, '', hash);
           }
         }
+
+        startActivePageRefresh(nextPage);
       }
 
       function setActiveChannel(channelId, syncHash) {
@@ -3887,12 +4108,35 @@ function renderHtml(): string {
 
       async function loadLogs() {
         const logs = await api('/api/logs?lines=220');
-        document.getElementById('logsOutput').textContent = logs.logs || '暂无日志';
+        const output = document.getElementById('logsOutput');
+        const wasNearBottom = output.scrollHeight - output.scrollTop - output.clientHeight < 48;
+        const previousTop = output.scrollTop;
+        output.textContent = logs.logs || '暂无日志';
+        output.scrollTop = wasNearBottom ? output.scrollHeight : previousTop;
       }
 
       async function loadDesktopSessions() {
         const result = await api('/api/desktop-sessions');
         renderDesktopSessions(result);
+      }
+
+      async function loadRuntimeStatusOnly() {
+        const status = await api('/api/status');
+        state.uiAccess = status.uiAccess || null;
+        state.bridgeStatus = status.bridge || null;
+        state.autostartStatus = status.autostart || null;
+        state.weixinAccounts = status.weixin && Array.isArray(status.weixin.linkedAccounts) ? status.weixin.linkedAccounts : [];
+
+        const adapters = adapterStatuses();
+        const runningAdapters = adapters.filter((item) => item.running);
+        document.getElementById('bridgeStatus').textContent = status.bridge.running ? '运行中' : '已停止';
+        document.getElementById('bridgeStatusMeta').textContent = adapters.length
+          ? ('运行实例 ' + runningAdapters.length + ' / ' + adapters.length)
+          : '当前没有通道实例在运行';
+        renderAutostartStatus(status.autostart || null);
+        document.getElementById('integrationStatus').textContent = status.codexIntegrationInstalled ? '已安装' : '未安装';
+        document.getElementById('overviewHomeStatus').textContent = status.home;
+        document.getElementById('packageRoot').textContent = status.packageRoot;
       }
 
       function sessionSourceLabel(source) {
@@ -3905,6 +4149,30 @@ function renderHtml(): string {
         if (role === 'system') return '系统';
         if (role === 'tool') return '工具';
         return role || '消息';
+      }
+
+      function chatRoleClass(role) {
+        if (role === 'user' || role === 'assistant' || role === 'system' || role === 'tool') {
+          return role;
+        }
+        return 'other';
+      }
+
+      function messageTimeLabel(value) {
+        return value ? formatTime(value) : '无时间记录';
+      }
+
+      function renderHistoryMessageContent(message) {
+        if (state.sessionHistoryViewMode === 'raw') {
+          return '<div class="chat-history-content raw">' + escapeHtml(message.content || '') + '</div>';
+        }
+        return '<div class="chat-history-content markdown">' + (message.renderedContent || escapeHtml(message.content || '')) + '</div>';
+      }
+
+      function updateSessionHistoryViewToggle() {
+        const button = document.getElementById('toggleSessionHistoryViewBtn');
+        if (!button) return;
+        button.textContent = state.sessionHistoryViewMode === 'raw' ? '显示 Markdown' : '显示原文';
       }
 
       function renderSessionHistory(result) {
@@ -3920,6 +4188,8 @@ function renderHtml(): string {
           : '查看当前 session 的 chat_history。';
         document.getElementById('deleteSessionBtn').disabled = !targetKey;
         document.getElementById('refreshSessionHistoryBtn').disabled = !targetKey;
+        document.getElementById('toggleSessionHistoryViewBtn').disabled = !targetKey;
+        updateSessionHistoryViewToggle();
 
         document.getElementById('sessionHistorySummary').innerHTML = session
           ? ''
@@ -3930,20 +4200,31 @@ function renderHtml(): string {
           : '';
 
         const list = document.getElementById('sessionHistoryList');
+        const wasNearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 48;
+        const previousTop = list.scrollTop;
+        const shouldStickToBottom = wasNearBottom || list.dataset.loaded !== 'true';
         if (!messages.length) {
           list.innerHTML = '<div class="binding-empty">当前 session 没有可显示的 chat_history。</div>';
+          list.dataset.loaded = 'true';
           return;
         }
 
-        list.innerHTML = messages.map((message) => (
-          '<article class="chat-history-message">'
-            + '<div class="chat-history-message-head">'
-            +   '<span class="chat-history-role">' + escapeHtml(chatRoleLabel(message.role)) + '</span>'
-            +   '<span>' + escapeHtml(formatTime(message.timestamp || '')) + '</span>'
+        list.innerHTML = messages.map((message, index) => (
+          '<article class="chat-history-message ' + escapeHtml(chatRoleClass(message.role)) + '">'
+            + '<div class="chat-history-bubble">'
+            +   '<div class="chat-history-message-head">'
+            +     '<span class="chat-history-role">' + escapeHtml(chatRoleLabel(message.role)) + '</span>'
+            +     '<span class="chat-history-message-meta">'
+            +       '<span>' + escapeHtml(messageTimeLabel(message.timestamp || '')) + '</span>'
+            +       '<button type="button" class="chat-history-copy" data-action="copy-history-message" data-message-index="' + escapeHtml(String(index)) + '">复制原文</button>'
+            +     '</span>'
+            +   '</div>'
+            +   renderHistoryMessageContent(message)
             + '</div>'
-            + '<div class="chat-history-content">' + escapeHtml(message.content || '') + '</div>'
           + '</article>'
         )).join('');
+        list.dataset.loaded = 'true';
+        list.scrollTop = shouldStickToBottom ? list.scrollHeight : previousTop;
       }
 
       async function openSessionHistory(targetKey, syncHash) {
@@ -3955,15 +4236,14 @@ function renderHtml(): string {
           messages: [],
         });
 
-        const result = await api('/api/session-history?targetKey=' + encodeURIComponent(state.activeSessionTargetKey));
-        renderSessionHistory(result);
+        await refreshSessionHistoryData();
       }
 
       async function refreshSessionHistory() {
         if (!state.activeSessionTargetKey) {
           throw new Error('当前没有选中的会话。');
         }
-        await openSessionHistory(state.activeSessionTargetKey, false);
+        await refreshSessionHistoryData();
       }
 
       function findSessionSummaryByTargetKey(targetKey) {
@@ -4275,6 +4555,11 @@ function renderHtml(): string {
       });
 
       window.addEventListener('hashchange', syncPageFromHash);
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) {
+          void refreshPageData(state.activePage);
+        }
+      });
 
       document.getElementById('copyUiTokenBtn').addEventListener('click', async () => {
         try {
@@ -4507,6 +4792,31 @@ function renderHtml(): string {
       document.getElementById('deleteSessionBtn').addEventListener('click', async () => {
         try {
           await deleteSessionByTargetKey(state.activeSessionTargetKey);
+        } catch (error) {
+          showMessage('sessionHistoryMessage', 'error', error.message);
+        }
+      });
+
+      document.getElementById('toggleSessionHistoryViewBtn').addEventListener('click', () => {
+        state.sessionHistoryViewMode = state.sessionHistoryViewMode === 'raw' ? 'markdown' : 'raw';
+        updateSessionHistoryViewToggle();
+        if (state.sessionHistory) {
+          renderSessionHistory(state.sessionHistory);
+        }
+      });
+
+      document.getElementById('sessionHistoryList').addEventListener('click', async (event) => {
+        const source = event.target instanceof Element ? event.target : null;
+        const target = source ? source.closest('button[data-action="copy-history-message"]') : null;
+        if (!target) return;
+        const index = Number(target.dataset.messageIndex || '-1');
+        const messages = state.sessionHistory && Array.isArray(state.sessionHistory.messages)
+          ? state.sessionHistory.messages
+          : [];
+        const message = Number.isInteger(index) ? messages[index] : null;
+        if (!message) return;
+        try {
+          await copyText(message.content || '', '消息原文已复制。');
         } catch (error) {
           showMessage('sessionHistoryMessage', 'error', error.message);
         }

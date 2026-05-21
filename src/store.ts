@@ -473,7 +473,7 @@ export class JsonFileStore implements BridgeStore {
 
   addMessage(sessionId: string, role: string, content: string, _usage?: string | null): void {
     const msgs = this.loadMessages(sessionId);
-    msgs.push({ role, content });
+    msgs.push({ role, content, timestamp: now() });
     this.persistMessages(sessionId);
   }
 
