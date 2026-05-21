@@ -183,12 +183,15 @@ function buildInlineToolBlock(params: {
   const title = `${params.isError ? '❌' : '🔧'} \`${params.name || 'tool'}\``;
   const sections: string[] = [title];
 
-  if (typeof params.input !== 'undefined') {
+  const isEditTool = /^edit$/i.test(params.name || '');
+  const isBashTool = /^(bash|shell_command)$/i.test(params.name || '');
+
+  if (!isEditTool && typeof params.input !== 'undefined') {
     const inputText = summarizeToolInputForInline(params.input);
     const masked = maskSecrets(inputText);
     const { text } = sanitizeInput(masked, 1200);
     if (text.trim()) {
-      sections.push(`输入：\n${buildFencedCodeBlock(text.trim(), 'json')}`);
+      sections.push(`输入：\n${buildFencedCodeBlock(text.trim(), isBashTool ? 'bash' : 'json')}`);
     }
   }
 

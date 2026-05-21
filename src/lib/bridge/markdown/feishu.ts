@@ -137,8 +137,10 @@ export function buildToolProgressMarkdown(
     const icon = tool.status === 'running' ? '🔄' : tool.status === 'error' ? '❌' : '✅';
     const header = `${icon} \`${tool.name || 'tool'}\`（${statusLabel}）`;
     const details: string[] = [];
-    if (tool.input && tool.input.trim()) {
-      details.push(`输入：\n${buildFencedCodeBlock(tool.input.trim(), 'json')}`);
+    const isEditTool = /^edit$/i.test(tool.name || '');
+    const isBashTool = /^(bash|shell_command)$/i.test(tool.name || '');
+    if (!isEditTool && tool.input && tool.input.trim()) {
+      details.push(`输入：\n${buildFencedCodeBlock(tool.input.trim(), isBashTool ? 'bash' : 'json')}`);
     }
     if (tool.output && tool.output.trim()) {
       details.push(`输出：\n${buildFencedCodeBlock(tool.output.trim(), 'text')}`);
