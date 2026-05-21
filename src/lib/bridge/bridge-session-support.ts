@@ -81,7 +81,7 @@ export function resolveDisplayedModel(
 }
 
 export function formatDisplayedModel(model: string): string {
-  const metadata = AVAILABLE_CODEX_MODEL_MAP.get(model);
+  const metadata = AVAILABLE_CODEX_MODEL_MAP.get(model) || findSelectableCodexModel(model);
   return metadata && isCliOnlyCodexModel(metadata)
     ? `${model}（仅 IM / CLI）`
     : model;
@@ -104,7 +104,7 @@ export function resolveNewWorkingDirectory(rawArgs: string): { ok: true; workDir
     return { ok: false, message: '缺少路径参数。' };
   }
 
-  if (path.isAbsolute(trimmed)) {
+  if (path.isAbsolute(trimmed) || path.win32.isAbsolute(trimmed)) {
     const validated = validateWorkingDirectory(trimmed);
     if (!validated) {
       return { ok: false, message: '路径无效。必须是绝对路径，且不能包含目录穿越或特殊字符。' };

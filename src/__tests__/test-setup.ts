@@ -23,6 +23,20 @@ if (
   process.env.CTI_HOME = createdTempHome;
 }
 
+if (!process.env.CODEX_HOME) {
+  const codexHome = path.join(process.env.CTI_HOME!, 'codex-home');
+  fs.mkdirSync(codexHome, { recursive: true });
+  process.env.CODEX_HOME = codexHome;
+  try {
+    fs.writeFileSync(path.join(codexHome, 'models_cache.json'), JSON.stringify({
+      models: [
+        { slug: 'gpt-5.4', display_name: 'gpt-5.4', visibility: 'list', supported_in_api: true },
+        { slug: 'gpt-5.3-codex-spark', display_name: 'gpt-5.3-codex-spark', visibility: 'list', supported_in_api: false },
+      ],
+    }), 'utf-8');
+  } catch {}
+}
+
 if (createdTempHome) {
   process.on('exit', () => {
     try {

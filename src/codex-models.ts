@@ -9,7 +9,9 @@ export interface CachedCodexModel {
   supportedInApi: boolean;
 }
 
-export const DEFAULT_CODEX_CONFIG_PATH = path.join(os.homedir(), '.codex', 'config.toml');
+const DEFAULT_CODEX_HOME = path.join(os.homedir(), '.codex');
+export const CODEX_HOME = process.env.CODEX_HOME || DEFAULT_CODEX_HOME;
+export const DEFAULT_CODEX_CONFIG_PATH = path.join(CODEX_HOME, 'config.toml');
 
 interface RawModelsCache {
   models?: Array<{
@@ -20,7 +22,7 @@ interface RawModelsCache {
   }>;
 }
 
-export const DEFAULT_CODEX_MODELS_CACHE_PATH = path.join(os.homedir(), '.codex', 'models_cache.json');
+export const DEFAULT_CODEX_MODELS_CACHE_PATH = path.join(CODEX_HOME, 'models_cache.json');
 
 export function readConfiguredCodexModel(configPath = DEFAULT_CODEX_CONFIG_PATH): string | null {
   try {

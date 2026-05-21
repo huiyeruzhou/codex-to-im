@@ -963,14 +963,17 @@ export function isCodexIntegrationInstalled(): boolean {
 export function openBrowser(url: string): void {
   if (process.platform === 'win32') {
     const child = spawn('cmd', ['/c', 'start', '', url], { detached: true, stdio: 'ignore', ...WINDOWS_HIDE });
+    child.on('error', () => {});
     child.unref();
     return;
   }
   if (process.platform === 'darwin') {
     const child = spawn('open', [url], { detached: true, stdio: 'ignore' });
+    child.on('error', () => {});
     child.unref();
     return;
   }
   const child = spawn('xdg-open', [url], { detached: true, stdio: 'ignore' });
+  child.on('error', () => {});
   child.unref();
 }

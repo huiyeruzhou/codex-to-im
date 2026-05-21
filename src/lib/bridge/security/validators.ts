@@ -39,25 +39,26 @@ export function validateWorkingDirectory(rawPath: string): string | null {
   if (!rawPath || !rawPath.trim()) return null;
 
   const trimmed = rawPath.trim();
+  const normalizedForHost = path.isAbsolute(trimmed)
+    ? trimmed
+    : (path.win32.isAbsolute(trimmed) ? path.resolve(trimmed) : '');
 
-  // Must be absolute
-  if (!path.isAbsolute(trimmed)) return null;
+  if (!normalizedForHost) return null;
 
   // Reject null bytes
-  if (trimmed.includes('\0')) return null;
+  if (normalizedForHost.includes('\0')) return null;
 
   // Reject path traversal segments
-  const segments = trimmed.split(/[/\\]/);
+  const segments = normalizedForHost.split(/[/\\]/);
   if (segments.some(s => s === '..')) return null;
 
   // Reject if too long
-  if (trimmed.length > MAX_PATH_LENGTH) return null;
+  if (normalizedForHost.length > MAX_PATH_LENGTH) return null;
 
   // Reject shell metacharacters that have no place in a directory path
-  if (/[$`;|&><(){}\x00-\x1f]/.test(trimmed)) return null;
+  if (/[$`;|&><(){}\x00-\x1f]/.test(normalizedForHost)) return null;
 
-  // Normalize the path (resolves redundant slashes, etc.)
-  return path.normalize(trimmed);
+  return path.normalize(normalizedForHost);
 }
 
 /**

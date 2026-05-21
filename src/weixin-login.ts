@@ -377,15 +377,18 @@ function openQrHtml(): boolean {
   try {
     if (process.platform === 'darwin') {
       const child = spawn('open', [HTML_PATH], { detached: true, stdio: 'ignore' });
+      child.on('error', () => {});
       child.unref();
       return true;
     }
     if (process.platform === 'win32') {
       const child = spawn('cmd', ['/c', 'start', '', HTML_PATH], { detached: true, stdio: 'ignore', windowsHide: true });
+      child.on('error', () => {});
       child.unref();
       return true;
     }
     const child = spawn('xdg-open', [HTML_PATH], { detached: true, stdio: 'ignore' });
+    child.on('error', () => {});
     child.unref();
     return true;
   } catch {

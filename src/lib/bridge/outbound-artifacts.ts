@@ -21,7 +21,7 @@ export interface ParsedOutboundArtifacts {
 function normalizeInstruction(raw: RawSendInstruction): OutboundAttachment | null {
   const type = typeof raw.type === 'string' ? raw.type.trim().toLowerCase() : '';
   const filePath = typeof raw.path === 'string' ? raw.path.trim() : '';
-  if ((type !== 'image' && type !== 'file') || !filePath || !path.isAbsolute(filePath)) {
+  if ((type !== 'image' && type !== 'file') || !filePath || !(path.isAbsolute(filePath) || path.win32.isAbsolute(filePath))) {
     return null;
   }
 
