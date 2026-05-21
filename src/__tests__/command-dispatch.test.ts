@@ -124,6 +124,43 @@ describe('command-dispatch', () => {
     assert.match(response, /第一条助手回复/);
   });
 
+  it('updates session sandbox and network overrides with slash commands', async () => {
+    const store = initTestContext();
+    const sent: string[] = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      send: async (message: { text: string }) => {
+        sent.push(message.text);
+        return { ok: true, messageId: `reply-${sent.length}` };
+      },
+    };
+    const address = { channelType: 'feishu', chatId: 'chat-runtime-options' } as const;
+    const binding = router.createBinding(address, 'D:\\workspace\\runtime-options');
+
+    const deps = {
+      getActiveTask: () => undefined,
+      diagnoseSessionHealth: async () => null,
+      diagnoseAllActiveSessions: async () => [],
+    };
+
+    await handleBridgeCommand(adapter, {
+      address,
+      text: '/sandbox danger-full-access',
+      messageId: 'incoming-sandbox',
+    } as any, '/sandbox danger-full-access', deps);
+    await handleBridgeCommand(adapter, {
+      address,
+      text: '/net on',
+      messageId: 'incoming-network',
+    } as any, '/net on', deps);
+
+    const session = store.getSession(binding.codepilotSessionId);
+    assert.equal(session?.codex_sandbox_mode, 'danger-full-access');
+    assert.equal(session?.codex_network_access, true);
+    assert.match(sent[0] || '', /已更新 Codex 沙箱/);
+    assert.match(sent[1] || '', /已更新 Codex 网络/);
+  });
+
   it('renders // health diagnostics for the current session', async () => {
     initTestContext();
     const sent: string[] = [];

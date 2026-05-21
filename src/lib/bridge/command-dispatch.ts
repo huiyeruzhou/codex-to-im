@@ -31,6 +31,7 @@ import type { BridgeSession } from './host.js';
 import type { ChannelBinding, InboundMessage } from './types.js';
 import { recordBindingChange, type BindingChangeAction } from './binding-audit.js';
 import { isDangerousInput, validateMode, validateSessionId } from './security/validators.js';
+import { parseSandboxMode } from '../../runtime-options.js';
 import {
   ensureWorkingDirectoryExists,
   formatDisplayedModel,
@@ -42,6 +43,7 @@ import {
   getSelectableCodexModel,
   resetDraftSession,
   resolveDisplayedModel,
+  resolveEffectiveNetworkAccess,
   resolveEffectiveReasoningEffort,
   resolveEffectiveSandboxMode,
   resolveNewSessionWorkingDirectory,
@@ -55,12 +57,31 @@ import { getExplicitDesktopThreadId } from './turns/turn-classifier.js';
 
 const MODE_OPTIONS_TEXT = '可选：`code`（直接执行，默认） `plan`（先分析再行动） `ask`（轻对话 / 草稿）';
 const REASONING_OPTIONS_TEXT = '可选：`1=minimal` `2=low` `3=medium` `4=high` `5=xhigh`';
+const SANDBOX_OPTIONS_TEXT = '可选：`read-only` `workspace-write` `danger-full-access` `default`（回到全局默认）';
+const NETWORK_OPTIONS_TEXT = '可选：`on`/`true` 开启网络，`off`/`false` 关闭网络，`default` 回到全局默认。';
 
 function parseForceFlag(args: string): { args: string; force: boolean } {
   const forcePattern = /(^|\s)--force(?=\s|$)/;
   const force = forcePattern.test(args);
   const cleaned = args.replace(/(^|\s)--force(?=\s|$)/g, ' ').replace(/\s+/g, ' ').trim();
   return { args: cleaned, force };
+}
+
+function parseNetworkAccessArg(raw: string): boolean | 'default' | null {
+  const token = raw.trim().toLowerCase();
+  if (!token) return null;
+  if (token === 'default' || token === 'reset') return 'default';
+  if (token === 'on' || token === 'true' || token === '1' || token === 'yes' || token === 'enable' || token === 'enabled') {
+    return true;
+  }
+  if (token === 'off' || token === 'false' || token === '0' || token === 'no' || token === 'disable' || token === 'disabled') {
+    return false;
+  }
+  return null;
+}
+
+function formatNetworkAccess(enabled: boolean): string {
+  return enabled ? 'enabled' : 'disabled';
 }
 
 function buildActiveTaskSwitchBlockedResponse(
@@ -498,6 +519,105 @@ export async function handleBridgeCommand(
       break;
     }
 
+    case '/sandbox': {
+      const binding = currentBinding || router.resolve(msg.address);
+      const session = store.getSession(binding.codepilotSessionId);
+      if (!session) {
+        response = '当前会话不存在。';
+        break;
+      }
+      if (!args) {
+        response = buildCommandFields(
+          '当前 Codex 沙箱',
+          [
+            ['沙箱', resolveEffectiveSandboxMode(session)],
+            ['来源', session.codex_sandbox_mode ? '当前会话' : '全局默认'],
+          ],
+          [SANDBOX_OPTIONS_TEXT, '发送 `/sandbox workspace-write` 可切换；修改从下一轮 Codex 请求开始生效。'],
+          responseParseMode === 'Markdown',
+        );
+        break;
+      }
+      const requestedSandbox = args.trim().toLowerCase();
+      if (requestedSandbox === 'default' || requestedSandbox === 'reset') {
+        store.updateSession(session.id, { codex_sandbox_mode: undefined });
+        response = buildCommandFields(
+          '已恢复默认 Codex 沙箱',
+          [['沙箱', resolveEffectiveSandboxMode(store.getSession(session.id))]],
+          ['当前会话将继续使用 Web 配置里的全局默认值；下一轮 Codex 请求生效。'],
+          responseParseMode === 'Markdown',
+        );
+        break;
+      }
+      const sandboxMode = parseSandboxMode(requestedSandbox);
+      if (!sandboxMode) {
+        response = buildCommandFields(
+          'Codex 沙箱用法',
+          [['命令', '`/sandbox read-only|workspace-write|danger-full-access|default`']],
+          [SANDBOX_OPTIONS_TEXT],
+          responseParseMode === 'Markdown',
+        );
+        break;
+      }
+      store.updateSession(session.id, { codex_sandbox_mode: sandboxMode });
+      response = buildCommandFields(
+        '已更新 Codex 沙箱',
+        [['沙箱', sandboxMode]],
+        ['修改从下一轮 Codex 请求开始生效；正在运行的任务请先 `/stop` 后重发。'],
+        responseParseMode === 'Markdown',
+      );
+      break;
+    }
+
+    case '/network': {
+      const binding = currentBinding || router.resolve(msg.address);
+      const session = store.getSession(binding.codepilotSessionId);
+      if (!session) {
+        response = '当前会话不存在。';
+        break;
+      }
+      if (!args) {
+        response = buildCommandFields(
+          '当前 Codex 网络',
+          [
+            ['网络', formatNetworkAccess(resolveEffectiveNetworkAccess(session))],
+            ['来源', typeof session.codex_network_access === 'boolean' ? '当前会话' : '全局默认'],
+          ],
+          [NETWORK_OPTIONS_TEXT, '这个开关会传给 `sandbox_workspace_write.network_access`；下一轮 Codex 请求生效。'],
+          responseParseMode === 'Markdown',
+        );
+        break;
+      }
+      const networkAccess = parseNetworkAccessArg(args);
+      if (networkAccess === null) {
+        response = buildCommandFields(
+          'Codex 网络用法',
+          [['命令', '`/network on|off|default`']],
+          [NETWORK_OPTIONS_TEXT],
+          responseParseMode === 'Markdown',
+        );
+        break;
+      }
+      if (networkAccess === 'default') {
+        store.updateSession(session.id, { codex_network_access: undefined });
+        response = buildCommandFields(
+          '已恢复默认 Codex 网络',
+          [['网络', formatNetworkAccess(resolveEffectiveNetworkAccess(store.getSession(session.id)))]],
+          ['当前会话将继续使用 Web 配置里的全局默认值；下一轮 Codex 请求生效。'],
+          responseParseMode === 'Markdown',
+        );
+        break;
+      }
+      store.updateSession(session.id, { codex_network_access: networkAccess });
+      response = buildCommandFields(
+        '已更新 Codex 网络',
+        [['网络', formatNetworkAccess(networkAccess)]],
+        ['修改从下一轮 Codex 请求开始生效；正在运行的任务请先 `/stop` 后重发。'],
+        responseParseMode === 'Markdown',
+      );
+      break;
+    }
+
     case '/model': {
       const binding = currentBinding || router.resolve(msg.address);
       const session = store.getSession(binding.codepilotSessionId);
@@ -614,7 +734,8 @@ export async function handleBridgeCommand(
 
       const desktopThreadId = getExplicitDesktopThreadId(session);
       const threadTitle = getDesktopThreadTitle(desktopThreadId);
-      const sandboxMode = resolveEffectiveSandboxMode();
+      const sandboxMode = resolveEffectiveSandboxMode(session);
+      const networkAccess = resolveEffectiveNetworkAccess(session);
       const reasoningEffort = resolveEffectiveReasoningEffort(session);
       const currentModel = resolveDisplayedModel(
         binding,
@@ -636,6 +757,7 @@ export async function handleBridgeCommand(
           ['运行状态', formatRuntimeStatus(session)],
           ['共享镜像', formatMirrorStatus(session)],
           ['文件系统权限', sandboxMode],
+          ['网络访问', formatNetworkAccess(networkAccess)],
           ['思考级别', formatReasoningEffort(reasoningEffort)],
         ],
         [
@@ -841,6 +963,8 @@ export async function handleBridgeCommand(
         '**设置**',
         '- `/m` 查看模式；可用 `code | plan | ask`',
         '- `/r` 查看思考级别；可用 `1 | 2 | 3 | 4 | 5`',
+        '- `/sb` 查看或切换 Codex 沙箱；可用 `read-only | workspace-write | danger-full-access | default`',
+        '- `/net` 查看或切换 Codex 网络；可用 `on | off | default`',
         '- `/model` 查看当前模型；`/model gpt-5.4` 可切换，`/model default` 回退到默认模型',
         '- `/t 0` 临时草稿线程',
         '- `/t 0 reset` 重置草稿线程',

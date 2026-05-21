@@ -30,6 +30,10 @@ export function resolveCommandAlias(rawCommand: string, args: string): string {
       return '/mode';
     case '/r':
       return '/reasoning';
+    case '/sb':
+      return '/sandbox';
+    case '/net':
+      return '/network';
     case '/his':
       return '/history';
     default:
