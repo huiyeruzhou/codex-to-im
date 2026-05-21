@@ -1,7 +1,9 @@
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
+import path from 'node:path';
 import MarkdownIt from 'markdown-it';
 
 import {
@@ -60,7 +62,6 @@ import { listWeixinAccounts } from './weixin-store.js';
 import { listSelectableCodexModels, readConfiguredCodexModel } from './codex-models.js';
 import type { BridgeSession } from './lib/bridge/host.js';
 import { accessDeniedStyles, loginStyles, mainStyles } from './ui-assets.js';
-import { getCodexThreadId } from './lib/bridge/turns/turn-classifier.js';
 
 let port = 4781;
 const serverStartTime = new Date().toISOString();
@@ -68,6 +69,7 @@ const AUTH_COOKIE_NAME = 'cti_ui_auth';
 const availableCodexModels = listSelectableCodexModels();
 const availableCodexModelSlugs = new Set(availableCodexModels.map((model) => model.slug));
 const FEISHU_CHAT_LABEL_TTL_MS = 5 * 60 * 1000;
+const UI_SESSION_META_PATH = path.join(CTI_HOME, 'data', 'ui-session-meta.json');
 const markdownRenderer = new MarkdownIt({
   html: false,
   linkify: true,
@@ -232,6 +234,34 @@ function createUiStore(): JsonFileStore {
   return new JsonFileStore(configToSettings(loadConfig()));
 }
 
+interface UiSessionMeta {
+  name?: string;
+}
+
+function readUiSessionMeta(): Record<string, UiSessionMeta> {
+  try {
+    return JSON.parse(fs.readFileSync(UI_SESSION_META_PATH, 'utf-8')) as Record<string, UiSessionMeta>;
+  } catch {
+    return {};
+  }
+}
+
+function writeUiSessionMeta(meta: Record<string, UiSessionMeta>): void {
+  fs.mkdirSync(path.dirname(UI_SESSION_META_PATH), { recursive: true });
+  fs.writeFileSync(UI_SESSION_META_PATH, JSON.stringify(meta, null, 2));
+}
+
+function updateUiSessionName(targetKey: string, name: string | undefined): void {
+  const meta = readUiSessionMeta();
+  const trimmed = name?.trim();
+  if (!trimmed) {
+    delete meta[targetKey];
+  } else {
+    meta[targetKey] = { ...(meta[targetKey] || {}), name: trimmed };
+  }
+  writeUiSessionMeta(meta);
+}
+
 interface UiSessionSummary {
   targetKey: string;
   kind: 'bridge' | 'desktop';
@@ -242,6 +272,22 @@ interface UiSessionSummary {
   originator: string;
   source: string;
   lastEventAt: string;
+}
+
+interface UiSessionCounts {
+  desktopPhysical: number;
+  bridgeStored: number;
+  bridgeWithoutCodexThread: number;
+  bridgeCodexLinked: number;
+  dedupedBridgeRows: number;
+  totalDisplayable: number;
+  displayed: number;
+}
+
+interface UiSessionListPayload {
+  root: string;
+  sessions: UiSessionSummary[];
+  counts: UiSessionCounts;
 }
 
 interface UiSessionHistoryMessage {
@@ -273,68 +319,134 @@ function getBridgeSessionTitle(session: BridgeSession): string {
   return session.id.slice(0, 8);
 }
 
-function listUiSessions(store: JsonFileStore, limit?: number): UiSessionSummary[] {
-  const bridgeSessions = store.listSessions()
-    .filter((session) => session.hidden !== true && session.session_type !== 'draft')
-    .filter((session) => !session.desktop_thread_id)
-    .map((session) => ({
-      targetKey: `session:${session.id}`,
-      kind: 'bridge' as const,
-      sessionId: session.id,
-      threadId: getCodexThreadId(session) || '',
-      title: getBridgeSessionTitle(session),
-      cwd: session.working_directory || '',
-      originator: 'Bridge / IM',
-      source: 'bridge',
-      lastEventAt: session.updated_at || session.created_at || '',
-    }));
-
-  const desktopSessions = listDesktopSessions(limit).map((session) => ({
-    targetKey: `desktop:${session.threadId}`,
-    kind: 'desktop' as const,
-    threadId: session.threadId,
-    title: session.title,
-    cwd: session.cwd,
-    originator: session.originator || 'Codex Desktop',
-    source: 'desktop',
-    lastEventAt: session.lastEventAt,
-  }));
-
-  const combined = [...bridgeSessions, ...desktopSessions]
-    .sort((left, right) => (right.lastEventAt || '').localeCompare(left.lastEventAt || ''));
-
-  return typeof limit === 'number' && Number.isFinite(limit) && limit > 0
-    ? combined.slice(0, Math.floor(limit))
-    : combined;
+function getStoredCodexThreadId(session: Pick<BridgeSession, 'codex_thread_id'>): string {
+  return session.codex_thread_id?.trim() || '';
 }
 
-function bridgeSessionToSummary(session: BridgeSession): UiSessionSummary {
-  return {
+function findBridgeSessionByDesktopThread(store: JsonFileStore, threadId: string): BridgeSession | undefined {
+  if (!threadId) return undefined;
+  return store.listSessions().find((session) => (
+    session.hidden !== true
+    && session.session_type !== 'draft'
+    && getStoredCodexThreadId(session) === threadId
+  ));
+}
+
+function applyUiSessionMeta(summary: UiSessionSummary, meta: Record<string, UiSessionMeta>): UiSessionSummary {
+  const name = meta[summary.targetKey]?.name?.trim();
+  return name ? { ...summary, title: name } : summary;
+}
+
+function visibleBridgeSessions(store: JsonFileStore): BridgeSession[] {
+  return store.listSessions()
+    .filter((session) => session.hidden !== true && session.session_type !== 'draft')
+    .sort((left, right) => (
+      (right.updated_at || right.created_at || '').localeCompare(left.updated_at || left.created_at || '')
+    ));
+}
+
+function bridgeSummary(session: BridgeSession, meta: Record<string, UiSessionMeta>): UiSessionSummary {
+  return applyUiSessionMeta({
     targetKey: `session:${session.id}`,
     kind: 'bridge',
     sessionId: session.id,
-    threadId: getCodexThreadId(session) || '',
+    threadId: getStoredCodexThreadId(session),
     title: getBridgeSessionTitle(session),
     cwd: session.working_directory || '',
     originator: 'Bridge / IM',
     source: 'bridge',
     lastEventAt: session.updated_at || session.created_at || '',
+  }, meta);
+}
+
+function buildUiSessionsPayload(store: JsonFileStore, limit?: number): UiSessionListPayload {
+  const meta = readUiSessionMeta();
+  const desktopRawSessions = listDesktopSessions();
+  const desktopThreadIds = new Set(desktopRawSessions.map((session) => session.threadId));
+  const bridgeRawSessions = visibleBridgeSessions(store);
+  const bridgeByCodexThreadId = new Map<string, BridgeSession>();
+  for (const session of bridgeRawSessions) {
+    const threadId = getStoredCodexThreadId(session);
+    if (threadId && !bridgeByCodexThreadId.has(threadId)) {
+      bridgeByCodexThreadId.set(threadId, session);
+    }
+  }
+
+  let dedupedBridgeRows = 0;
+  const seenThreadIds = new Set(desktopThreadIds);
+  const bridgeSessions: UiSessionSummary[] = [];
+  for (const session of bridgeRawSessions) {
+    const threadId = getStoredCodexThreadId(session);
+    if (threadId) {
+      if (seenThreadIds.has(threadId)) {
+        dedupedBridgeRows += 1;
+        continue;
+      }
+      seenThreadIds.add(threadId);
+    }
+    bridgeSessions.push(bridgeSummary(session, meta));
+  }
+
+  const desktopSessions = desktopRawSessions.map((session) => {
+    const linked = bridgeByCodexThreadId.get(session.threadId);
+    return applyUiSessionMeta({
+      targetKey: `desktop:${session.threadId}`,
+      kind: 'desktop' as const,
+      sessionId: linked?.id,
+      threadId: session.threadId,
+      title: linked ? getBridgeSessionTitle(linked) : session.title,
+      cwd: session.cwd,
+      originator: session.originator || 'Codex Desktop',
+      source: session.source || 'desktop',
+      lastEventAt: session.lastEventAt,
+    }, meta);
+  });
+
+  const combined = [...bridgeSessions, ...desktopSessions]
+    .sort((left, right) => (right.lastEventAt || '').localeCompare(left.lastEventAt || ''));
+
+  const sessions = typeof limit === 'number' && Number.isFinite(limit) && limit > 0
+    ? combined.slice(0, Math.floor(limit))
+    : combined;
+
+  const bridgeWithoutCodexThread = bridgeRawSessions
+    .filter((session) => !getStoredCodexThreadId(session))
+    .length;
+
+  return {
+    root: getCodexSessionsRoot(),
+    sessions,
+    counts: {
+      desktopPhysical: desktopRawSessions.length,
+      bridgeStored: bridgeRawSessions.length,
+      bridgeWithoutCodexThread,
+      bridgeCodexLinked: bridgeRawSessions.length - bridgeWithoutCodexThread,
+      dedupedBridgeRows,
+      totalDisplayable: combined.length,
+      displayed: sessions.length,
+    },
   };
 }
 
-function desktopSessionToSummary(threadId: string): UiSessionSummary | null {
+function bridgeSessionToSummary(session: BridgeSession): UiSessionSummary {
+  return bridgeSummary(session, readUiSessionMeta());
+}
+
+function desktopSessionToSummary(threadId: string, store?: JsonFileStore): UiSessionSummary | null {
   const session = getDesktopSessionByThreadId(threadId);
   if (!session) return null;
-  return {
+  const linked = store ? findBridgeSessionByDesktopThread(store, threadId) : undefined;
+  return applyUiSessionMeta({
     targetKey: `desktop:${session.threadId}`,
     kind: 'desktop',
+    sessionId: linked?.id,
     threadId: session.threadId,
-    title: session.title,
+    title: linked ? getBridgeSessionTitle(linked) : session.title,
     cwd: session.cwd,
     originator: session.originator || 'Codex Desktop',
-    source: 'desktop',
+    source: session.source || 'desktop',
     lastEventAt: session.lastEventAt,
-  };
+  }, readUiSessionMeta());
 }
 
 function getUiSessionHistory(store: JsonFileStore, targetKey: string): {
@@ -349,9 +461,9 @@ function getUiSessionHistory(store: JsonFileStore, targetKey: string): {
       throw new Error('指定的 Bridge 会话不存在。');
     }
 
-    const desktopThreadId = session.desktop_thread_id || '';
+    const desktopThreadId = getStoredCodexThreadId(session);
     if (desktopThreadId) {
-      const desktopSummary = desktopSessionToSummary(desktopThreadId);
+      const desktopSummary = desktopSessionToSummary(desktopThreadId, store);
       const events = readDesktopSessionEventStream(desktopThreadId);
       return {
         session: desktopSummary || bridgeSessionToSummary(session),
@@ -370,7 +482,7 @@ function getUiSessionHistory(store: JsonFileStore, targetKey: string): {
 
   if (targetKey.startsWith('desktop:')) {
     const threadId = targetKey.slice('desktop:'.length);
-    const summary = desktopSessionToSummary(threadId);
+    const summary = desktopSessionToSummary(threadId, store);
     if (!summary) {
       throw new Error('指定的 Desktop 会话不存在。');
     }
@@ -386,6 +498,87 @@ function getUiSessionHistory(store: JsonFileStore, targetKey: string): {
   throw new Error('不支持的会话目标。');
 }
 
+function findConfigurableBridgeSession(store: JsonFileStore, targetKey: string): BridgeSession {
+  if (targetKey.startsWith('session:')) {
+    const sessionId = targetKey.slice('session:'.length);
+    const session = store.getSession(sessionId);
+    if (!session || session.hidden === true || session.session_type === 'draft') {
+      throw new Error('指定的 Bridge 会话不存在。');
+    }
+    return session;
+  }
+
+  if (targetKey.startsWith('desktop:')) {
+    const threadId = targetKey.slice('desktop:'.length);
+    const session = store.listSessions().find((item) => (
+      item.hidden !== true
+      && item.session_type !== 'draft'
+      && getStoredCodexThreadId(item) === threadId
+    ));
+    if (session) return session;
+    throw new Error('这个 Desktop 会话还没有绑定到 IM 通道，暂时不能保存会话级配置。');
+  }
+
+  throw new Error('不支持的会话目标。');
+}
+
+function sanitizeSessionConfig(payload: Record<string, unknown>): Partial<BridgeSession> {
+  const updates: Partial<BridgeSession> = {};
+  if (typeof payload.name === 'string') {
+    updates.name = payload.name.trim() || undefined;
+  }
+  if (typeof payload.workingDirectory === 'string') {
+    updates.working_directory = payload.workingDirectory.trim() || process.cwd();
+  }
+  if (typeof payload.model === 'string') {
+    updates.model = payload.model.trim();
+  }
+  if (payload.preferredMode === 'code' || payload.preferredMode === 'plan' || payload.preferredMode === 'ask') {
+    updates.preferred_mode = payload.preferredMode;
+  }
+  if (typeof payload.systemPrompt === 'string') {
+    updates.system_prompt = payload.systemPrompt.trim() || undefined;
+  }
+  if (
+    payload.reasoningEffort === 'minimal'
+    || payload.reasoningEffort === 'low'
+    || payload.reasoningEffort === 'medium'
+    || payload.reasoningEffort === 'high'
+    || payload.reasoningEffort === 'xhigh'
+    || payload.reasoningEffort === ''
+  ) {
+    updates.reasoning_effort = payload.reasoningEffort ? payload.reasoningEffort : undefined;
+  }
+  if (
+    payload.codexSandboxMode === 'read-only'
+    || payload.codexSandboxMode === 'workspace-write'
+    || payload.codexSandboxMode === 'danger-full-access'
+    || payload.codexSandboxMode === ''
+  ) {
+    updates.codex_sandbox_mode = payload.codexSandboxMode ? payload.codexSandboxMode : undefined;
+  }
+  if (payload.codexNetworkAccess === true || payload.codexNetworkAccess === false) {
+    updates.codex_network_access = payload.codexNetworkAccess;
+  }
+  return updates;
+}
+
+function sessionConfigPayload(session: BridgeSession) {
+  return {
+    id: session.id,
+    targetKey: `session:${session.id}`,
+    name: session.name || '',
+    title: getBridgeSessionTitle(session),
+    workingDirectory: session.working_directory || '',
+    model: session.model || '',
+    preferredMode: session.preferred_mode || 'code',
+    systemPrompt: session.system_prompt || '',
+    reasoningEffort: session.reasoning_effort || '',
+    codexSandboxMode: session.codex_sandbox_mode || '',
+    codexNetworkAccess: session.codex_network_access,
+  };
+}
+
 function deleteUiSession(store: JsonFileStore, targetKey: string): { deleted: UiSessionSummary; deletedBridgeSessionIds: string[] } {
   if (targetKey.startsWith('session:')) {
     const sessionId = targetKey.slice('session:'.length);
@@ -395,12 +588,13 @@ function deleteUiSession(store: JsonFileStore, targetKey: string): { deleted: Ui
     }
     const summary = bridgeSessionToSummary(session);
     store.deleteSession(session.id);
+    updateUiSessionName(targetKey, undefined);
     return { deleted: summary, deletedBridgeSessionIds: [session.id] };
   }
 
   if (targetKey.startsWith('desktop:')) {
     const threadId = targetKey.slice('desktop:'.length);
-    const summary = desktopSessionToSummary(threadId);
+    const summary = desktopSessionToSummary(threadId, store);
     if (!summary) {
       throw new Error('指定的 Desktop 会话不存在。');
     }
@@ -411,15 +605,13 @@ function deleteUiSession(store: JsonFileStore, targetKey: string): { deleted: Ui
     }
 
     const linkedSessionIds = store.listSessions()
-      .filter((session) => (
-        session.desktop_thread_id === threadId
-        || session.codex_thread_id === threadId
-        || session.sdk_session_id === threadId
-      ))
+      .filter((session) => getStoredCodexThreadId(session) === threadId)
       .map((session) => session.id);
     for (const sessionId of linkedSessionIds) {
       store.deleteSession(sessionId);
+      updateUiSessionName(`session:${sessionId}`, undefined);
     }
+    updateUiSessionName(targetKey, undefined);
 
     return { deleted: summary, deletedBridgeSessionIds: linkedSessionIds };
   }
@@ -550,7 +742,7 @@ function configToPayload(config: Config) {
     streamStatusCheckIntervalSeconds: config.streamStatusCheckIntervalSeconds ?? 10,
     codexSkipGitRepoCheck: config.codexSkipGitRepoCheck === true,
     codexSandboxMode: config.codexSandboxMode || 'workspace-write',
-    codexNetworkAccess: config.codexNetworkAccess === true,
+    codexNetworkAccess: config.codexNetworkAccess !== false,
     codexReasoningEffort: config.codexReasoningEffort || 'medium',
     uiAllowLan: config.uiAllowLan === true,
     uiAccessToken: config.uiAccessToken || '',
@@ -596,7 +788,7 @@ function mergeConfig(payload: Record<string, unknown>): Config {
       || payload.codexSandboxMode === 'danger-full-access'
       ? payload.codexSandboxMode
       : 'workspace-write',
-    codexNetworkAccess: payload.codexNetworkAccess === true,
+    codexNetworkAccess: payload.codexNetworkAccess !== false,
     codexReasoningEffort: payload.codexReasoningEffort === 'minimal'
       || payload.codexReasoningEffort === 'low'
       || payload.codexReasoningEffort === 'high'
@@ -1027,19 +1219,6 @@ function renderHtml(): string {
 
           <section class="status-grid">
             <div class="status-card">
-              <strong>桥接服务</strong>
-              <div class="status-value" id="bridgeStatus">-</div>
-              <div class="status-meta" id="bridgeStatusMeta">-</div>
-            </div>
-            <div class="status-card">
-              <strong>桥接服务开机自启动</strong>
-              <div class="status-value" id="autostartStatus">-</div>
-            </div>
-            <div class="status-card">
-              <strong>Codex 技能</strong>
-              <div class="status-value" id="integrationStatus">-</div>
-            </div>
-            <div class="status-card">
               <strong>运行时</strong>
               <div class="status-value" id="runtimeStatus">-</div>
             </div>
@@ -1157,16 +1336,19 @@ function renderHtml(): string {
         </section>
 
         <section class="page" data-page="session-history">
-          <div class="page-header">
-            <div>
-              <h1 class="page-title" id="sessionHistoryTitle">会话历史</h1>
-              <p class="page-copy" id="sessionHistorySubtitle">查看当前 session 的 chat_history。</p>
+          <div class="page-header session-history-header">
+            <div class="session-history-titlebar">
+              <button type="button" class="icon-btn ghost-icon" id="backToSessionsBtn" aria-label="返回会话列表" title="返回会话列表">
+                <span aria-hidden="true">←</span>
+              </button>
+              <div>
+                <h1 class="page-title session-history-title" id="sessionHistoryTitle">会话历史</h1>
+                <p class="page-copy" id="sessionHistorySubtitle">查看当前 session 的 chat_history。</p>
+              </div>
             </div>
-            <div class="toolbar">
-              <button id="backToSessionsBtn">返回会话列表</button>
-              <button id="refreshSessionHistoryBtn">刷新历史</button>
-              <button id="toggleSessionHistoryViewBtn">显示原文</button>
-              <button class="danger" id="deleteSessionBtn">删除会话</button>
+            <div class="toolbar icon-toolbar">
+              <button type="button" class="icon-btn" id="refreshSessionHistoryBtn" aria-label="刷新历史" title="刷新历史"><span aria-hidden="true">↻</span></button>
+              <button type="button" class="icon-btn danger" id="deleteSessionBtn" aria-label="删除会话" title="删除会话"><span aria-hidden="true">⌫</span></button>
             </div>
           </div>
 
@@ -1191,7 +1373,7 @@ function renderHtml(): string {
             <div class="panel-header">
               <div>
                 <h2>基础配置</h2>
-                <p>保存后会写入本地配置目录。未绑定聊天会先进入临时草稿线程；默认工作空间、Sandbox、思考级别等会在下一次请求生效；通道启停会自动同步；只有少数运行时配置需要重启 Bridge。</p>
+                <p>保存后会写入本地配置目录；Runtime 和“允许在未信任 Git 目录运行 Codex”需要重启 Bridge，其余多数选项会在下一次请求生效。</p>
               </div>
               <div class="toolbar">
                 <button class="primary" id="saveConfigBtn">保存配置</button>
@@ -1215,29 +1397,29 @@ function renderHtml(): string {
                   </select>
                 </label>
                 <label>
-                  /history 返回条数
+                  <span class="field-title">/history 返回条数 <span class="help-tip" tabindex="0" data-tip="控制 IM 中 /history 命令最多返回多少条最近消息。">?</span></span>
                   <input id="historyMessageLimit" type="number" min="1" max="20" value="8" />
                 </label>
                 <label>
-                  上次响应距今显示启动时长（秒）
+                  <span class="field-title">长任务提示延迟（秒） <span class="help-tip" tabindex="0" data-tip="距离上次响应超过这个时长后，飞书长任务底部才开始显示“上次响应距今 X”。">?</span></span>
                   <input id="streamStatusIdleStartSeconds" type="number" min="1" value="180" />
                 </label>
                 <label>
-                  上次响应距今检查间隔（秒）
+                  <span class="field-title">长任务提示刷新间隔（秒） <span class="help-tip" tabindex="0" data-tip="长任务提示出现后，每隔多少秒刷新一次“上次响应距今 X”。">?</span></span>
                   <input id="streamStatusCheckIntervalSeconds" type="number" min="1" value="10" />
                 </label>
               </div>
               <label>
-                默认工作空间
+                <span class="field-title">/new 相对路径根目录 <span class="help-tip" tabindex="0" data-tip="当 /new 使用项目名或相对路径时，会以这里作为根目录；留空时使用 ~/cx2im。">?</span></span>
                 <input id="defaultWorkspaceRoot" placeholder="留空时使用 ~/cx2im" />
               </label>
               <div class="field-row triple">
                 <label>
-                  默认模型
+                  <span class="field-title">默认模型 <span class="help-tip" tabindex="0" data-tip="留空则跟随 Codex 当前默认模型；隐藏模型不会展示，Desktop 不支持的模型会标成“仅 IM”。">?</span></span>
                   <select id="defaultModel"></select>
                 </label>
                 <label>
-                  Codex 文件系统权限
+                  <span class="field-title">Codex 文件系统权限 <span class="help-tip" tabindex="0" data-tip="设置 Codex 默认 sandbox。IM 会话仍可用命令单独覆盖。">?</span></span>
                   <select id="codexSandboxMode">
                     <option value="workspace-write">workspace-write</option>
                     <option value="read-only">read-only</option>
@@ -1245,7 +1427,7 @@ function renderHtml(): string {
                   </select>
                 </label>
                 <label>
-                  Codex 思考级别
+                  <span class="field-title">Codex 思考级别 <span class="help-tip" tabindex="0" data-tip="设置 Codex 默认 reasoning effort。IM 会话仍可用命令单独覆盖。">?</span></span>
                   <select id="codexReasoningEffort">
                     <option value="medium">medium</option>
                     <option value="minimal">minimal</option>
@@ -1254,21 +1436,21 @@ function renderHtml(): string {
                     <option value="xhigh">xhigh</option>
                   </select>
                 </label>
+                <label>
+                  <span class="field-title">Codex 网络访问 <span class="help-tip" tabindex="0" data-tip="允许 Codex 在 workspace-write sandbox 下访问网络；IM 会话仍可用 /net 单独覆盖。">?</span></span>
+                  <span class="checkbox checkbox-field">
+                    <input id="codexNetworkAccess" type="checkbox" checked />
+                    允许 Codex 访问网络
+                  </span>
+                </label>
               </div>
-              <div class="small">未绑定的 IM 聊天会先进入临时草稿线程（等同 <code>/t 0</code>）；“默认工作空间”只用于 <code>/new proj1</code> 这类相对项目名。留空时会按当前系统自动回退到 <code>~/cx2im</code>。默认模型候选项来自启动时读取的 Codex 模型缓存：隐藏模型不会展示，Desktop 不支持的模型会标成“仅 IM”。留空则继续跟随 Codex 当前默认模型。文件系统权限是全局默认值，思考级别可在 IM 会话里再单独覆盖。上次响应距今配置只影响飞书长任务底部“上次响应距今 X”的出现时机。</div>
-              <div class="small">当前需要重启 Bridge 的配置：<code>Runtime</code>、<code>允许在未信任 Git 目录运行 Codex</code>。通道实例的接入配置请在“通道”页维护。</div>
               <div class="checkbox-row">
-                <label class="checkbox"><input id="codexSkipGitRepoCheck" type="checkbox" checked /> 允许在未信任 Git 目录运行 Codex</label>
+                <label class="checkbox"><input id="codexSkipGitRepoCheck" type="checkbox" checked /> 允许在未信任 Git 目录运行 Codex <span class="help-tip" tabindex="0" data-tip="如果新建会话报 Not inside a trusted directory，可以打开这个选项；修改后需要重启 Bridge。">?</span></label>
               </div>
-              <div class="small">如果新建会话报 “Not inside a trusted directory”，可以打开这个选项。修改后需要重启 Bridge 才会生效。</div>
               <div class="checkbox-row" style="margin-top: 12px;">
-                <label class="checkbox"><input id="codexNetworkAccess" type="checkbox" /> 允许 workspace-write 沙箱访问网络</label>
+                <label class="checkbox"><input id="uiAllowLan" type="checkbox" /> 允许局域网访问 Web 控制台 <span class="help-tip" tabindex="0" data-tip="默认仅允许本机访问当前工作台。开启后，局域网设备需要先输入访问 token。">?</span></label>
               </div>
-              <div class="small">对应 Codex 配置 <code>sandbox_workspace_write.network_access=true</code>；IM 会话也可用 <code>/net on</code> 单独覆盖。</div>
-              <div class="checkbox-row" style="margin-top: 12px;">
-                <label class="checkbox"><input id="uiAllowLan" type="checkbox" /> 允许局域网访问 Web 控制台</label>
-              </div>
-              <div class="notice" id="uiAccessSummary">默认仅允许本机访问当前工作台。</div>
+              <div class="notice" id="uiAccessSummary">局域网访问未开启。</div>
               <div id="uiLanDetails" hidden>
                 <div class="field-row" style="margin-top: 16px;">
                   <label>
@@ -1424,6 +1606,68 @@ function renderHtml(): string {
       </main>
     </div>
     <div id="globalMessageHost" class="global-message-host" aria-live="polite"></div>
+    <div id="sessionChannelModal" class="modal-backdrop" hidden>
+      <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="sessionChannelModalTitle">
+        <div class="modal-head">
+          <div>
+            <h2 id="sessionChannelModalTitle">指定通道</h2>
+            <p id="sessionChannelModalSubtitle">选择一个聊天入口，将它切换到当前会话。</p>
+          </div>
+          <button type="button" class="icon-btn ghost-icon" data-action="close-session-channel-modal" aria-label="关闭" title="关闭"><span aria-hidden="true">×</span></button>
+        </div>
+        <div id="sessionChannelModalList" class="modal-list"></div>
+      </section>
+    </div>
+    <div id="sessionRenameModal" class="modal-backdrop" hidden>
+      <section class="modal-card modal-card-narrow" role="dialog" aria-modal="true" aria-labelledby="sessionRenameTitle">
+        <div class="modal-head">
+          <div>
+            <h2 id="sessionRenameTitle">重命名会话</h2>
+            <p id="sessionRenameSubtitle">给当前会话设置一个更好识别的名字。</p>
+          </div>
+          <button type="button" class="icon-btn ghost-icon" data-action="close-session-rename-modal" aria-label="关闭" title="关闭"><span aria-hidden="true">×</span></button>
+        </div>
+        <label>
+          会话名称
+          <input id="sessionRenameInput" />
+        </label>
+        <div class="toolbar modal-actions">
+          <button type="button" data-action="close-session-rename-modal">取消</button>
+          <button type="button" class="primary" data-action="save-session-rename">保存名称</button>
+        </div>
+      </section>
+    </div>
+    <div id="sessionConfigModal" class="modal-backdrop" hidden>
+      <section class="modal-card modal-card-wide" role="dialog" aria-modal="true" aria-labelledby="sessionConfigTitle">
+        <div class="modal-head">
+          <div>
+            <h2 id="sessionConfigTitle">会话配置</h2>
+            <p id="sessionConfigSubtitle">这些设置只影响当前会话。</p>
+          </div>
+          <button type="button" class="icon-btn ghost-icon" data-action="close-session-config-modal" aria-label="关闭" title="关闭"><span aria-hidden="true">×</span></button>
+        </div>
+        <div class="fields">
+          <div class="field-row">
+            <label>会话名称<input id="sessionConfigName" /></label>
+            <label>工作目录<input id="sessionConfigCwd" /></label>
+          </div>
+          <div class="field-row triple">
+            <label>模型<select id="sessionConfigModel"></select></label>
+            <label>默认模式<select id="sessionConfigMode"><option value="code">code</option><option value="plan">plan</option><option value="ask">ask</option></select></label>
+            <label>思考级别<select id="sessionConfigReasoning"><option value="">跟随全局</option><option value="medium">medium</option><option value="minimal">minimal</option><option value="low">low</option><option value="high">high</option><option value="xhigh">xhigh</option></select></label>
+          </div>
+          <div class="field-row">
+            <label>文件系统权限<select id="sessionConfigSandbox"><option value="">跟随全局</option><option value="workspace-write">workspace-write</option><option value="read-only">read-only</option><option value="danger-full-access">danger-full-access</option></select></label>
+            <label>网络访问<span class="checkbox checkbox-field"><input id="sessionConfigNetwork" type="checkbox" /> 允许 Codex 访问网络</span></label>
+          </div>
+          <label>系统提示<textarea id="sessionConfigPrompt" placeholder="留空则不覆盖系统提示"></textarea></label>
+        </div>
+        <div class="toolbar modal-actions">
+          <button type="button" data-action="close-session-config-modal">取消</button>
+          <button type="button" class="primary" data-action="save-session-config">保存配置</button>
+        </div>
+      </section>
+    </div>
 
     <script>
       const state = {
@@ -1433,6 +1677,7 @@ function renderHtml(): string {
         bridgeStatus: null,
         autostartStatus: null,
         desktopSessions: [],
+        desktopSessionCounts: null,
         bindings: [],
         bindingOptions: [],
         activeBindingByChannelId: {},
@@ -1441,9 +1686,12 @@ function renderHtml(): string {
         activePage: 'overview',
         activeSessionTargetKey: '',
         sessionHistory: null,
-        sessionHistoryViewMode: 'markdown',
+        sessionHistoryMessageModes: {},
         activeChannelId: '',
         channelDraft: null,
+        activeSessionRenameTargetKey: '',
+        activeSessionConfigTargetKey: '',
+        sourceDisplayByTargetKey: {},
         weixinLoginPollers: {},
         pageRefreshTimer: null,
         pageRefreshInFlight: {},
@@ -1455,6 +1703,40 @@ function renderHtml(): string {
           .replaceAll('<', '&lt;')
           .replaceAll('>', '&gt;')
           .replaceAll('"', '&quot;');
+      }
+
+      function setText(id, value) {
+        const node = document.getElementById(id);
+        if (node) node.textContent = value;
+      }
+
+      function actionIcon(name) {
+        const icons = {
+          copy: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8.5A2.5 2.5 0 0 1 10.5 6h7A2.5 2.5 0 0 1 20 8.5v7A2.5 2.5 0 0 1 17.5 18h-7A2.5 2.5 0 0 1 8 15.5v-7Z"/><path d="M5.5 14H5a2 2 0 0 1-2-2V5.5A2.5 2.5 0 0 1 5.5 3H12a2 2 0 0 1 2 2v.5"/></svg>',
+          command: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 9 3 3-3 3"/><path d="M13 15h3"/><path d="M4 5h16v14H4z"/></svg>',
+          channel: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7-6 10-6 10S6 15 6 8Z"/><path d="M10 8a2 2 0 1 0 4 0 2 2 0 0 0-4 0Z"/></svg>',
+          swap: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h11"/><path d="m15 4 3 3-3 3"/><path d="M17 17H6"/><path d="m9 14-3 3 3 3"/></svg>',
+          edit: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4l11-11a2.8 2.8 0 0 0-4-4L4 16v4Z"/><path d="m13 7 4 4"/></svg>',
+          settings: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.08A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.08A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.08A1.7 1.7 0 0 0 15 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.08A1.7 1.7 0 0 0 19.4 15Z"/></svg>',
+          delete: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M6 7l1 13h10l1-13"/><path d="M9 7V4h6v3"/></svg>',
+          raw: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 8-4 4 4 4"/><path d="m15 8 4 4-4 4"/></svg>',
+          markdown: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16v12H4z"/><path d="M7 15V9l3 3 3-3v6"/><path d="M17 9v6"/><path d="m15 13 2 2 2-2"/></svg>',
+        };
+        return icons[name] || '';
+      }
+
+      function iconButton(action, iconName, label, attrs, extraClass) {
+        return '<button type="button" class="icon-btn ' + escapeHtml(extraClass || '') + '" data-action="' + escapeHtml(action) + '"'
+          + (attrs ? ' ' + attrs : '')
+          + ' aria-label="' + escapeHtml(label) + '" title="' + escapeHtml(label) + '">'
+          + actionIcon(iconName)
+          + '</button>';
+      }
+
+      function disabledIconButton(iconName, label, extraClass) {
+        return '<button type="button" class="icon-btn ' + escapeHtml(extraClass || '') + '" disabled aria-label="' + escapeHtml(label) + '" title="' + escapeHtml(label) + '">'
+          + actionIcon(iconName)
+          + '</button>';
       }
 
       function renderDefaultModelOptions(config) {
@@ -1495,6 +1777,27 @@ function renderHtml(): string {
         select.value = currentValue;
       }
 
+      function renderModelOptionsForSelect(select, currentValue, emptyLabel) {
+        const config = state.config || {};
+        const options = Array.isArray(state.availableModels) ? state.availableModels : [];
+        const codexDefaultModel = typeof config.codexDefaultModel === 'string' ? config.codexDefaultModel : '';
+        const value = typeof currentValue === 'string' ? currentValue : '';
+        const items = [];
+        const seen = new Set();
+        items.push('<option value="">' + escapeHtml(emptyLabel || (codexDefaultModel ? '跟随全局 / Codex 默认（当前 ' + codexDefaultModel + '）' : '跟随全局 / Codex 默认')) + '</option>');
+        for (const model of options) {
+          if (!model || typeof model.slug !== 'string' || !model.slug) continue;
+          if (seen.has(model.slug)) continue;
+          seen.add(model.slug);
+          items.push('<option value="' + escapeHtml(model.slug) + '">' + escapeHtml(model.slug + (model.supportedInApi === false ? '（仅 IM）' : '')) + '</option>');
+        }
+        if (value && !seen.has(value)) {
+          items.push('<option value="' + escapeHtml(value) + '">当前会话值（已不可用）：' + escapeHtml(value) + '</option>');
+        }
+        select.innerHTML = items.join('');
+        select.value = value;
+      }
+
       function shortId(value) {
         if (!value) return '-';
         return value.length > 14 ? value.slice(0, 8) + '...' + value.slice(-4) : value;
@@ -1503,6 +1806,46 @@ function renderHtml(): string {
       function shortThreadCommand(value) {
         if (!value) return '/thread';
         return '/thread ' + value.slice(0, 12);
+      }
+
+      function canConfigureSession(session) {
+        return session && (session.kind === 'bridge' || bindingsForSession(session).length > 0);
+      }
+
+      function sessionSourceTag(session) {
+        const source = String((session && session.source) || '').toLowerCase();
+        const originator = String((session && session.originator) || '').toLowerCase();
+        if (session && session.kind === 'bridge') return { label: 'Bridge', className: 'bridge' };
+        if (source === 'codex_sdk_ts' || originator.includes('codex_sdk_ts')) return { label: 'SDK', className: 'sdk' };
+        if (originator.includes('vscode') || source.includes('vscode')) return { label: 'VS Code', className: 'vscode' };
+        if (originator.includes('tui') || source.includes('tui') || source.includes('codex_tui')) return { label: 'TUI / CLI', className: 'tui' };
+        if (originator.includes('cli') || source.includes('cli')) return { label: 'TUI / CLI', className: 'tui' };
+        if (originator.includes('desktop') || source.includes('desktop')) return { label: 'Desktop', className: 'desktop' };
+        return { label: 'Desktop', className: 'desktop' };
+      }
+
+      function renderSourceBadge(session) {
+        const tag = sessionSourceTag(session);
+        return '<span class="pill pill-' + escapeHtml(tag.className) + '">' + escapeHtml(tag.label) + '</span>';
+      }
+
+      function renderSourceToggle(session) {
+        const targetKey = sessionTargetKey(session);
+        const raw = (session.source || session.originator || 'Desktop') + (session.originator ? ' / ' + session.originator : '');
+        const content = state.sourceDisplayByTargetKey[targetKey] === 'raw'
+          ? escapeHtml(raw)
+          : renderSourceBadge(session);
+        return '<button type="button" class="source-toggle" data-action="toggle-source-display" data-target-key="' + escapeHtml(targetKey) + '" title="点击切换来源显示">' + content + '</button>';
+      }
+
+      function renderSessionTitle(session, marksHtml) {
+        const targetKey = sessionTargetKey(session);
+        return ''
+          + '<div class="session-title-row">'
+          +   '<span class="session-title" title="' + escapeHtml(session.title || 'Untitled Session') + '">' + escapeHtml(session.title || 'Untitled Session') + '</span>'
+          +   (marksHtml || '')
+          +   iconButton('open-session-rename-modal', 'edit', '重命名会话', 'data-target-key="' + escapeHtml(targetKey) + '"', 'mini-icon')
+          + '</div>';
       }
 
       function pathSegments(value) {
@@ -1606,7 +1949,6 @@ function renderHtml(): string {
           +   '<div class="binding-detail">运行状态：' + escapeHtml(bindingRuntimeText(binding)) + '</div>'
           +   '<div class="binding-detail">共享镜像：' + escapeHtml(bindingMirrorText(binding)) + '</div>'
           +   '<div class="binding-detail">目录：' + escapeHtml(binding.workingDirectory || '~') + '</div>'
-          +   renderBindingTable(binding)
           + '</article>';
       }
 
@@ -1863,15 +2205,15 @@ function renderHtml(): string {
 
       const CONFIG_FIELD_LABELS = {
         runtime: 'Runtime',
-        defaultWorkspaceRoot: '默认工作空间',
+        defaultWorkspaceRoot: '/new 相对路径根目录',
         defaultModel: '默认模型',
         defaultMode: '默认模式',
         historyMessageLimit: '/history 返回条数',
-        streamStatusIdleStartSeconds: '上次响应距今显示启动时长',
-        streamStatusCheckIntervalSeconds: '上次响应距今检查间隔',
+        streamStatusIdleStartSeconds: '长任务提示延迟',
+        streamStatusCheckIntervalSeconds: '长任务提示刷新间隔',
         codexSkipGitRepoCheck: '允许在未信任 Git 目录运行 Codex',
         codexSandboxMode: 'Codex 文件系统权限',
-        codexNetworkAccess: '允许 workspace-write 沙箱访问网络',
+        codexNetworkAccess: 'Codex 网络访问',
         codexReasoningEffort: 'Codex 思考级别',
         uiAllowLan: '允许局域网访问 Web 控制台',
         uiAccessToken: '局域网访问 token',
@@ -2051,24 +2393,35 @@ function renderHtml(): string {
         if (!bindings.length) return '';
 
         const targetKey = sessionTargetKey(session);
-        const currentBinding = bindings.find((binding) => binding.currentTargetKey === targetKey);
-        const options = ['<option value="">指定通道...</option>'].concat(bindings.map((binding) => {
-          const isCurrent = binding.currentTargetKey === targetKey;
-          const suffix = isCurrent
-            ? '（当前）'
-            : binding.currentTargetLabel
-              ? '（已绑定：' + binding.currentTargetLabel + '）'
-              : '';
-          return '<option value="' + escapeHtml(binding.id) + '"' + (currentBinding && binding.id === currentBinding.id ? ' selected' : '') + '>'
-            + escapeHtml(formatBindingAccount(binding) + suffix)
-            + '</option>';
-        })).join('');
+        return iconButton(
+          'open-session-channel-modal',
+          'swap',
+          '转换通道',
+          'data-target-key="' + escapeHtml(targetKey) + '"',
+          'swap-icon'
+        );
+      }
+
+      function renderSessionActions(session) {
+        const targetKey = sessionTargetKey(session);
+        const identity = session.threadId || session.sessionId || '';
+        const identityAction = session.threadId ? 'copy-thread' : 'copy-session-id';
+        const identityLabel = session.threadId ? '复制 thread' : '复制 Bridge 会话 ID';
+        const identityAttr = session.threadId
+          ? 'data-thread-id="' + escapeHtml(session.threadId) + '"'
+          : 'data-session-id="' + escapeHtml(session.sessionId || '') + '"';
+        const configurable = canConfigureSession(session);
 
         return ''
-          + '<div class="session-channel-control" data-session-target-key="' + escapeHtml(targetKey) + '">'
-          +   '<select data-role="session-channel-select" aria-label="指定通道">' + options + '</select>'
-          +   '<button type="button" data-action="assign-session-channel" data-target-key="' + escapeHtml(targetKey) + '">指定通道</button>'
-          + '</div>';
+          + (identity ? iconButton(identityAction, 'copy', identityLabel, identityAttr, '') : '')
+          + (session.threadId
+            ? iconButton('copy-bind-command', 'command', '复制接管命令', 'data-thread-id="' + escapeHtml(session.threadId) + '"', '')
+            : '')
+          + (configurable
+            ? iconButton('open-session-config-modal', 'settings', '会话配置', 'data-target-key="' + escapeHtml(targetKey) + '"', '')
+            : disabledIconButton('settings', '未绑定到 IM 通道的 Desktop 会话暂不能设置会话配置', ''))
+          + renderSessionChannelControl(session)
+          + iconButton('delete-session', 'delete', '删除会话', 'data-target-key="' + escapeHtml(targetKey) + '"', 'danger');
       }
 
       function bindingRuntimeText(binding) {
@@ -2103,25 +2456,18 @@ function renderHtml(): string {
         const threadHtml = session.threadId
           ? 'Thread: <code>' + escapeHtml(session.threadId) + '</code><button type="button" class="session-inline-action" data-action="copy-thread" data-thread-id="' + escapeHtml(session.threadId) + '">复制</button>'
           : 'Bridge 会话：<code>' + escapeHtml(session.sessionId || '-') + '</code>';
-        const actionHtml =
-          '<button type="button" data-action="open-session-history" data-target-key="' + escapeHtml(targetKey) + '">查看历史</button>'
-          + (session.threadId
-            ? '<button type="button" data-action="copy-thread" data-thread-id="' + escapeHtml(session.threadId) + '">复制 thread</button>'
-              + '<button type="button" data-action="copy-bind-command" data-thread-id="' + escapeHtml(session.threadId) + '">复制命令</button>'
-            : '')
-          + renderSessionChannelControl(session)
-          + '<button type="button" class="danger" data-action="delete-session" data-target-key="' + escapeHtml(targetKey) + '">删除</button>';
+        const actionHtml = renderSessionActions(session);
 
         return ''
           + '<article class="session-card session-openable' + (marks.length ? ' current-thread' : '') + '" data-session-target-key="' + escapeHtml(targetKey) + '">'
           +   '<div class="session-head">'
           +     '<div class="session-main">'
-          +       '<div class="session-title-row"><div class="session-title">' + escapeHtml(session.title || 'Untitled Session') + '</div>' + markHtml + '</div>'
+          +       renderSessionTitle(session, markHtml)
           +       '<div class="session-thread">' + threadHtml + '</div>'
           +     '</div>'
           +     '<div class="session-cell">'
           +       '<div class="session-label">来源</div>'
-          +       '<div class="session-value">' + escapeHtml(originator) + '</div>'
+          +       '<div class="session-value">' + renderSourceToggle(session) + '</div>'
           +     '</div>'
           +     '<div class="session-cell">'
           +       '<div class="session-label">目录</div>'
@@ -2141,10 +2487,10 @@ function renderHtml(): string {
         const markHtml = marks.map((mark) => '<span class="session-mark">' + escapeHtml(mark) + '</span>').join('');
         const identityLabel = session.threadId ? 'Thread' : 'Bridge 会话';
         const identityValue = session.threadId || session.sessionId || '-';
-        const originator = session.originator || (session.kind === 'bridge' ? 'Bridge / IM' : 'Codex Desktop');
         const bindingTags = bindings.map((binding) => (
           '<div class="session-binding-tag">'
             + '<span class="session-binding-tag-label">' + escapeHtml(formatBindingAccount(binding)) + '</span>'
+            + iconButton('open-session-config-modal', 'settings', '会话配置', 'data-target-key="' + escapeHtml(targetKey) + '"', 'mini-icon')
             + '<button type="button" data-action="unbind-binding" data-binding-id="' + escapeHtml(binding.id) + '" data-channel="' + escapeHtml(binding.channelType) + '">解绑</button>'
           + '</div>'
         )).join('');
@@ -2153,7 +2499,7 @@ function renderHtml(): string {
           + '<article class="session-card session-openable' + (marks.length ? ' current-thread' : '') + '" data-session-target-key="' + escapeHtml(targetKey) + '">'
           +   '<div class="session-head">'
           +     '<div class="session-main">'
-          +       '<div class="session-title-row"><div class="session-title">' + escapeHtml(session.title || 'Untitled Session') + '</div>' + markHtml + '</div>'
+          +       renderSessionTitle(session, markHtml)
           +       '<div class="session-thread">' + identityLabel + ': <code>' + escapeHtml(identityValue) + '</code></div>'
           +       '<div class="session-path">' + escapeHtml(session.cwd || '(no cwd)') + '</div>'
           +       '<div class="session-binding-tags">' + bindingTags + '</div>'
@@ -2164,15 +2510,13 @@ function renderHtml(): string {
           +     '</div>'
           +     '<div class="session-cell">'
           +       '<div class="session-label">最近活动</div>'
-          +       '<div class="session-value">' + escapeHtml(formatTime(session.lastEventAt || '')) + '</div>'
+          +       '<div class="session-value session-date">' + escapeHtml(formatTime(session.lastEventAt || '')) + '</div>'
           +     '</div>'
           +     '<div class="session-cell">'
           +       '<div class="session-label">来源</div>'
-          +       '<div class="session-value">' + escapeHtml(originator) + '</div>'
+          +       '<div class="session-value">' + renderSourceToggle(session) + '</div>'
           +       '<div class="session-actions">'
-          +         '<button type="button" data-action="open-session-history" data-target-key="' + escapeHtml(targetKey) + '">查看历史</button>'
-          +         renderSessionChannelControl(session)
-          +         '<button type="button" class="danger" data-action="delete-session" data-target-key="' + escapeHtml(targetKey) + '">删除</button>'
+          +         renderSessionActions(session)
           +       '</div>'
           +     '</div>'
           +   '</div>'
@@ -2185,40 +2529,47 @@ function renderHtml(): string {
         const markHtml = marks.map((mark) => '<span class="binding-table-mark">' + escapeHtml(mark) + '</span>').join('');
         const identityLabel = session.threadId ? 'Thread' : 'Bridge 会话';
         const identityValue = session.threadId || session.sessionId || '-';
-        const actionHtml =
-          '<button type="button" data-action="open-session-history" data-target-key="' + escapeHtml(targetKey) + '">查看历史</button>'
-          + (session.threadId
-            ? '<button type="button" data-action="copy-thread" data-thread-id="' + escapeHtml(session.threadId) + '">复制 thread</button>'
-              + '<button type="button" data-action="copy-bind-command" data-thread-id="' + escapeHtml(session.threadId) + '">复制命令</button>'
-            : '')
-          + renderSessionChannelControl(session)
-          + '<button type="button" class="danger" data-action="delete-session" data-target-key="' + escapeHtml(targetKey) + '">删除</button>';
+        const actionHtml = renderSessionActions(session);
 
         return ''
-          + '<article class="session-simple-item" data-session-target-key="' + escapeHtml(targetKey) + '">'
-          +   '<div class="session-simple-main">'
-          +     '<div class="session-title-row"><div class="session-simple-title">' + escapeHtml(session.title || 'Untitled Session') + '</div>' + markHtml + '</div>'
-          +     '<div class="session-simple-thread">' + identityLabel + ': <code>' + escapeHtml(identityValue) + '</code></div>'
-          +     '<div class="session-simple-time">最近活动：' + escapeHtml(formatTime(session.lastEventAt || '')) + '</div>'
-          +   '</div>'
-          +   '<div class="session-simple-side">'
-          +     '<div class="session-simple-path">' + escapeHtml(session.cwd || '(no cwd)') + '</div>'
-          +     '<div class="session-simple-time">来源：' + escapeHtml(session.originator || 'Codex Desktop') + '</div>'
-          +   '</div>'
-          +   '<div class="session-actions">'
-          +     actionHtml
-          +   '</div>'
-          + '</article>';
+          + '<tr class="session-table-row" data-session-target-key="' + escapeHtml(targetKey) + '">'
+          +   '<td><div class="binding-table-title session-table-title">' + renderSessionTitle(session, markHtml) + '</div><div class="binding-table-thread">' + identityLabel + ': <code>' + escapeHtml(identityValue) + '</code></div></td>'
+          +   '<td><div class="binding-table-path">' + escapeHtml(session.cwd || '(no cwd)') + '</div></td>'
+          +   '<td><div class="binding-table-source">' + renderSourceToggle(session) + '</div></td>'
+          +   '<td><div class="binding-table-thread session-date">' + escapeHtml(formatTime(session.lastEventAt || '')) + '</div></td>'
+          +   '<td><div class="session-actions compact-actions">' + actionHtml + '</div></td>'
+          + '</tr>';
       }
 
       function renderDesktopSessions(result) {
         state.desktopSessions = result.sessions || [];
         state.desktopRoot = result.root || '-';
+        state.desktopSessionCounts = result.counts || null;
         const sessions = state.desktopSessions || [];
+        const counts = state.desktopSessionCounts || {};
+        const totalDisplayable = Number.isFinite(Number(counts.totalDisplayable))
+          ? Number(counts.totalDisplayable)
+          : sessions.length;
+        const desktopPhysical = Number.isFinite(Number(counts.desktopPhysical))
+          ? Number(counts.desktopPhysical)
+          : sessions.filter((session) => session.kind === 'desktop').length;
+        const bridgeStored = Number.isFinite(Number(counts.bridgeStored))
+          ? Number(counts.bridgeStored)
+          : sessions.filter((session) => session.kind === 'bridge').length;
+        const bridgeWithoutCodexThread = Number.isFinite(Number(counts.bridgeWithoutCodexThread))
+          ? Number(counts.bridgeWithoutCodexThread)
+          : 0;
+        const dedupedBridgeRows = Number.isFinite(Number(counts.dedupedBridgeRows))
+          ? Number(counts.dedupedBridgeRows)
+          : 0;
         const boundSessions = sessions.filter((session) => bindingsForSession(session).length > 0);
-        document.getElementById('desktopSessionCount').textContent = String(state.desktopSessions.length);
+        document.getElementById('desktopSessionCount').textContent = String(totalDisplayable);
         document.getElementById('desktopSessionMeta').textContent =
-          '扫描目录：' + state.desktopRoot + ' · ' + state.desktopSessions.length + ' 条 Codex 会话';
+          '扫描目录：' + state.desktopRoot
+          + ' · 物理 Codex ' + desktopPhysical + ' 条'
+          + ' · Bridge 存储 ' + bridgeStored + ' 条'
+          + (bridgeWithoutCodexThread > 0 ? '（' + bridgeWithoutCodexThread + ' 条缺少 codex_thread_id）' : '')
+          + (dedupedBridgeRows > 0 ? ' · 已按 codex_thread_id 合并 ' + dedupedBridgeRows + ' 条重复映射' : '');
         document.getElementById('desktopRootStatus').textContent = state.desktopRoot;
 
         const boundList = document.getElementById('boundSessionsList');
@@ -2228,7 +2579,8 @@ function renderHtml(): string {
         boundMeta.textContent = boundSessions.length > 0
           ? '当前有 ' + boundSessions.length + ' 条会话已绑定到聊天。'
           : '当前没有已绑定到聊天的会话。';
-        allMeta.textContent = '按最近活动排序，共 ' + sessions.length + ' 条。';
+        allMeta.textContent = '按最近活动排序，当前展示 ' + sessions.length
+          + (totalDisplayable === sessions.length ? ' 条。' : ' / ' + totalDisplayable + ' 条。');
 
         if (boundSessions.length === 0) {
           boundList.innerHTML = '<div class="binding-empty">当前没有任何会话正在绑定到聊天入口。</div>';
@@ -2242,8 +2594,14 @@ function renderHtml(): string {
           return;
         }
 
-        list.innerHTML = '<div class="session-simple-list">'
-          + sessions.map((session) => renderDesktopSessionListItem(session)).join('')
+        list.innerHTML = ''
+          + '<div class="binding-table-wrap session-table-wrap">'
+          +   '<table class="binding-table session-table">'
+          +     '<thead><tr><th>会话</th><th>目录</th><th>来源</th><th>最近活动</th><th>操作</th></tr></thead>'
+          +     '<tbody>'
+          +       sessions.map((session) => renderDesktopSessionListItem(session)).join('')
+          +     '</tbody>'
+          +   '</table>'
           + '</div>';
 
         renderChannelsWorkspace();
@@ -2254,6 +2612,7 @@ function renderHtml(): string {
         renderDesktopSessions({
           root: state.desktopRoot,
           sessions: state.desktopSessions,
+          counts: state.desktopSessionCounts,
         });
       }
 
@@ -2496,12 +2855,12 @@ function renderHtml(): string {
         copyLanLinkBtn.disabled = !allowLan || !token || lanUrls.length === 0;
 
         if (!allowLan) {
-          summary.textContent = '默认仅允许本机访问当前工作台。开启后，局域网设备需要先输入访问 token。';
+          summary.textContent = '局域网访问未开启。';
           urlList.innerHTML = '';
           return;
         }
 
-        summary.textContent = '局域网访问已开启。非本机设备访问时需要先输入 token；本机访问仍然不受影响。';
+        summary.textContent = '局域网访问已开启。';
         const items = [
           '<div class="info-item"><strong>本机地址</strong><div class="mono">' + escapeHtml(localUrl) + '</div></div>',
         ];
@@ -2530,7 +2889,7 @@ function renderHtml(): string {
         renderDefaultModelOptions(config);
         document.getElementById('codexSkipGitRepoCheck').checked = config.codexSkipGitRepoCheck === true;
         document.getElementById('codexSandboxMode').value = config.codexSandboxMode || 'workspace-write';
-        document.getElementById('codexNetworkAccess').checked = config.codexNetworkAccess === true;
+        document.getElementById('codexNetworkAccess').checked = config.codexNetworkAccess !== false;
         document.getElementById('codexReasoningEffort').value = config.codexReasoningEffort || 'medium';
         document.getElementById('uiAllowLan').checked = config.uiAllowLan === true;
         document.getElementById('uiAccessToken').value = config.uiAccessToken || '';
@@ -2562,15 +2921,15 @@ function renderHtml(): string {
         fillForm(config);
         const adapters = adapterStatuses();
         const runningAdapters = adapters.filter((item) => item.running);
-        document.getElementById('bridgeStatus').textContent = status.bridge.running ? '运行中' : '已停止';
-        document.getElementById('bridgeStatusMeta').textContent = adapters.length
+        setText('bridgeStatus', status.bridge.running ? '运行中' : '已停止');
+        setText('bridgeStatusMeta', adapters.length
           ? ('运行实例 ' + runningAdapters.length + ' / ' + adapters.length)
-          : '当前没有通道实例在运行';
+          : '当前没有通道实例在运行');
         renderAutostartStatus(status.autostart || null);
-        document.getElementById('integrationStatus').textContent = status.codexIntegrationInstalled ? '已安装' : '未安装';
-        document.getElementById('runtimeStatus').textContent = config.runtime || 'codex';
-        document.getElementById('overviewHomeStatus').textContent = status.home;
-        document.getElementById('packageRoot').textContent = status.packageRoot;
+        setText('integrationStatus', status.codexIntegrationInstalled ? '已安装' : '未安装');
+        setText('runtimeStatus', config.runtime || 'codex');
+        setText('overviewHomeStatus', status.home);
+        setText('packageRoot', status.packageRoot);
         renderBindings({
           bindings: state.bindings,
           options: state.bindingOptions,
@@ -2583,7 +2942,7 @@ function renderHtml(): string {
         const refreshBtn = document.getElementById('refreshAutostartBtn');
 
         if (!status || status.supported !== true) {
-          valueEl.textContent = '不支持';
+          if (valueEl) valueEl.textContent = '不支持';
           noticeEl.textContent = status && status.error
             ? status.error
             : '当前系统暂不支持桥接服务开机自启动。';
@@ -2592,14 +2951,14 @@ function renderHtml(): string {
         }
 
         if (status.error) {
-          valueEl.textContent = '配置异常';
+          if (valueEl) valueEl.textContent = '配置异常';
           noticeEl.textContent = status.error;
           refreshBtn.disabled = false;
           return;
         }
 
         if (!status.installed) {
-          valueEl.textContent = '未启用';
+          if (valueEl) valueEl.textContent = '未启用';
           noticeEl.textContent = [
             '如需启用，请以管理员身份打开 PowerShell 或终端执行：',
             'codex-to-im autostart install',
@@ -2610,7 +2969,7 @@ function renderHtml(): string {
           return;
         }
 
-        valueEl.textContent = status.enabled ? '已启用' : '已禁用';
+        if (valueEl) valueEl.textContent = status.enabled ? '已启用' : '已禁用';
         noticeEl.textContent = [
           '方式：Windows 任务计划程序（开机触发）',
           status.runAsUser ? '运行账号：' + status.runAsUser : '',
@@ -2620,12 +2979,26 @@ function renderHtml(): string {
         refreshBtn.disabled = false;
       }
 
+      function renderHighlightedLogs(raw) {
+        const lines = String(raw || '暂无日志').split(/\\r?\\n/);
+        return lines.map((line) => {
+          const escaped = escapeHtml(line);
+          const levelMatch = line.match(/\\b(ERROR|WARN|WARNING|INFO|DEBUG|TRACE)\\b/i);
+          const level = levelMatch ? levelMatch[1].toLowerCase() : 'info';
+          const highlighted = escaped
+            .replace(/(\\d{4}-\\d{2}-\\d{2}[ T]\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z)?)/g, '<span class="log-date">$1</span>')
+            .replace(/(\\[[^\\]]+\\])/g, '<span class="log-tag">$1</span>')
+            .replace(/\\b(ERROR|WARN|WARNING|INFO|DEBUG|TRACE)\\b/gi, '<span class="log-level">$1</span>');
+          return '<div class="log-line log-' + escapeHtml(level) + '">' + highlighted + '</div>';
+        }).join('');
+      }
+
       async function loadLogs() {
         const logs = await api('/api/logs?lines=220');
         const output = document.getElementById('logsOutput');
         const wasNearBottom = output.scrollHeight - output.scrollTop - output.clientHeight < 48;
         const previousTop = output.scrollTop;
-        output.textContent = logs.logs || '暂无日志';
+        output.innerHTML = renderHighlightedLogs(logs.logs || '暂无日志');
         output.scrollTop = wasNearBottom ? output.scrollHeight : previousTop;
       }
 
@@ -2643,14 +3016,14 @@ function renderHtml(): string {
 
         const adapters = adapterStatuses();
         const runningAdapters = adapters.filter((item) => item.running);
-        document.getElementById('bridgeStatus').textContent = status.bridge.running ? '运行中' : '已停止';
-        document.getElementById('bridgeStatusMeta').textContent = adapters.length
+        setText('bridgeStatus', status.bridge.running ? '运行中' : '已停止');
+        setText('bridgeStatusMeta', adapters.length
           ? ('运行实例 ' + runningAdapters.length + ' / ' + adapters.length)
-          : '当前没有通道实例在运行';
+          : '当前没有通道实例在运行');
         renderAutostartStatus(status.autostart || null);
-        document.getElementById('integrationStatus').textContent = status.codexIntegrationInstalled ? '已安装' : '未安装';
-        document.getElementById('overviewHomeStatus').textContent = status.home;
-        document.getElementById('packageRoot').textContent = status.packageRoot;
+        setText('integrationStatus', status.codexIntegrationInstalled ? '已安装' : '未安装');
+        setText('overviewHomeStatus', status.home);
+        setText('packageRoot', status.packageRoot);
       }
 
       function sessionSourceLabel(source) {
@@ -2676,17 +3049,12 @@ function renderHtml(): string {
         return value ? formatTime(value) : '无时间记录';
       }
 
-      function renderHistoryMessageContent(message) {
-        if (state.sessionHistoryViewMode === 'raw') {
+      function renderHistoryMessageContent(message, index) {
+        const mode = state.sessionHistoryMessageModes[String(index)] || 'markdown';
+        if (mode === 'raw') {
           return '<div class="chat-history-content raw">' + escapeHtml(message.content || '') + '</div>';
         }
         return '<div class="chat-history-content markdown">' + (message.renderedContent || escapeHtml(message.content || '')) + '</div>';
-      }
-
-      function updateSessionHistoryViewToggle() {
-        const button = document.getElementById('toggleSessionHistoryViewBtn');
-        if (!button) return;
-        button.textContent = state.sessionHistoryViewMode === 'raw' ? '显示 Markdown' : '显示原文';
       }
 
       function renderSessionHistory(result) {
@@ -2702,8 +3070,6 @@ function renderHtml(): string {
           : '查看当前 session 的 chat_history。';
         document.getElementById('deleteSessionBtn').disabled = !targetKey;
         document.getElementById('refreshSessionHistoryBtn').disabled = !targetKey;
-        document.getElementById('toggleSessionHistoryViewBtn').disabled = !targetKey;
-        updateSessionHistoryViewToggle();
 
         document.getElementById('sessionHistorySummary').innerHTML = session
           ? ''
@@ -2724,16 +3090,17 @@ function renderHtml(): string {
         }
 
         list.innerHTML = messages.map((message, index) => (
-          '<article class="chat-history-message ' + escapeHtml(chatRoleClass(message.role)) + '">'
+          '<article class="chat-history-message ' + escapeHtml(chatRoleClass(message.role)) + '" data-message-index="' + escapeHtml(String(index)) + '">'
             + '<div class="chat-history-bubble">'
             +   '<div class="chat-history-message-head">'
             +     '<span class="chat-history-role">' + escapeHtml(chatRoleLabel(message.role)) + '</span>'
             +     '<span class="chat-history-message-meta">'
             +       '<span>' + escapeHtml(messageTimeLabel(message.timestamp || '')) + '</span>'
-            +       '<button type="button" class="chat-history-copy" data-action="copy-history-message" data-message-index="' + escapeHtml(String(index)) + '">复制原文</button>'
+            +       iconButton('toggle-history-message-mode', state.sessionHistoryMessageModes[String(index)] === 'raw' ? 'markdown' : 'raw', state.sessionHistoryMessageModes[String(index)] === 'raw' ? '显示 Markdown' : '显示原文', 'data-message-index="' + escapeHtml(String(index)) + '"', 'chat-history-icon')
+            +       iconButton('copy-history-message', 'copy', '复制原文', 'data-message-index="' + escapeHtml(String(index)) + '"', 'chat-history-icon')
             +     '</span>'
             +   '</div>'
-            +   renderHistoryMessageContent(message)
+            +   renderHistoryMessageContent(message, index)
             + '</div>'
           + '</article>'
         )).join('');
@@ -2743,6 +3110,7 @@ function renderHtml(): string {
 
       async function openSessionHistory(targetKey, syncHash) {
         state.activeSessionTargetKey = targetKey || '';
+        state.sessionHistoryMessageModes = {};
         setActivePage('session-history', syncHash);
         renderSessionHistory({
           session: null,
@@ -2793,15 +3161,11 @@ function renderHtml(): string {
         return true;
       }
 
-      async function assignSessionChannel(button) {
-        const targetKey = button.dataset.targetKey || '';
+      async function assignSessionChannelByBinding(targetKey, bindingId) {
         if (!targetKey) {
           throw new Error('当前没有选中的会话。');
         }
 
-        const control = button.closest('.session-channel-control');
-        const select = control ? control.querySelector('select[data-role="session-channel-select"]') : null;
-        const bindingId = select ? select.value : '';
         if (!bindingId) {
           throw new Error('请先选择要指定的通道。');
         }
@@ -2829,6 +3193,142 @@ function renderHtml(): string {
         });
         renderBindings(result);
         showMessage('desktopMessage', 'success', '通道已指定到当前会话。');
+      }
+
+      function closeSessionChannelModal() {
+        const modal = document.getElementById('sessionChannelModal');
+        if (!modal) return;
+        modal.hidden = true;
+        modal.dataset.targetKey = '';
+      }
+
+      function openSessionChannelModal(targetKey) {
+        if (!targetKey) {
+          throw new Error('当前没有选中的会话。');
+        }
+        const bindings = state.bindings || [];
+        if (!bindings.length) {
+          throw new Error('当前没有可指定的通道绑定。');
+        }
+
+        const session = findSessionSummaryByTargetKey(targetKey);
+        const modal = document.getElementById('sessionChannelModal');
+        const list = document.getElementById('sessionChannelModalList');
+        const subtitle = document.getElementById('sessionChannelModalSubtitle');
+        modal.dataset.targetKey = targetKey;
+        subtitle.textContent = '目标会话：' + ((session && session.title) ? session.title : targetKey);
+        list.innerHTML = bindings.map((binding) => {
+          const isCurrent = binding.currentTargetKey === targetKey;
+          const currentLabel = binding.currentTargetLabel || binding.currentSessionName || binding.currentSessionId || '';
+          return ''
+            + '<button type="button" class="modal-list-item' + (isCurrent ? ' active' : '') + '" data-action="assign-session-channel-choice" data-binding-id="' + escapeHtml(binding.id) + '">'
+            +   '<span class="modal-list-title">' + escapeHtml(formatBindingAccount(binding)) + '</span>'
+            +   '<span class="modal-list-meta">' + escapeHtml(isCurrent ? '当前已绑定到此会话' : (currentLabel ? '当前：' + currentLabel : '未绑定会话')) + '</span>'
+            + '</button>';
+        }).join('');
+        modal.hidden = false;
+      }
+
+      function closeSessionRenameModal() {
+        const modal = document.getElementById('sessionRenameModal');
+        if (!modal) return;
+        modal.hidden = true;
+        modal.dataset.targetKey = '';
+        state.activeSessionRenameTargetKey = '';
+      }
+
+      function openSessionRenameModal(targetKey) {
+        if (!targetKey) throw new Error('当前没有选中的会话。');
+        const session = findSessionSummaryByTargetKey(targetKey);
+        const modal = document.getElementById('sessionRenameModal');
+        const input = document.getElementById('sessionRenameInput');
+        document.getElementById('sessionRenameSubtitle').textContent = '当前会话：' + ((session && session.title) ? session.title : targetKey);
+        modal.dataset.targetKey = targetKey;
+        state.activeSessionRenameTargetKey = targetKey;
+        input.value = session && session.title ? session.title : '';
+        modal.hidden = false;
+        input.focus();
+        input.select();
+      }
+
+      async function saveSessionRename() {
+        const modal = document.getElementById('sessionRenameModal');
+        const targetKey = modal.dataset.targetKey || state.activeSessionRenameTargetKey || '';
+        const name = document.getElementById('sessionRenameInput').value;
+        const result = await api('/api/sessions/rename', {
+          method: 'POST',
+          body: JSON.stringify({ targetKey, name }),
+        });
+        closeSessionRenameModal();
+        await loadBindings();
+        await loadDesktopSessions();
+        if (state.sessionHistory && sessionTargetKey(state.sessionHistory.session || {}) === targetKey) {
+          await refreshSessionHistoryData();
+        }
+        showMessage('desktopMessage', 'success', '会话已重命名。');
+        return result;
+      }
+
+      function closeSessionConfigModal() {
+        const modal = document.getElementById('sessionConfigModal');
+        if (!modal) return;
+        modal.hidden = true;
+        modal.dataset.targetKey = '';
+        state.activeSessionConfigTargetKey = '';
+      }
+
+      function fillSessionConfigForm(config) {
+        document.getElementById('sessionConfigName').value = config.name || config.title || '';
+        document.getElementById('sessionConfigCwd').value = config.workingDirectory || '';
+        renderModelOptionsForSelect(document.getElementById('sessionConfigModel'), config.model || '', '跟随全局 / Codex 默认模型');
+        document.getElementById('sessionConfigMode').value = config.preferredMode || 'code';
+        document.getElementById('sessionConfigReasoning').value = config.reasoningEffort || '';
+        document.getElementById('sessionConfigSandbox').value = config.codexSandboxMode || '';
+        document.getElementById('sessionConfigNetwork').checked = config.codexNetworkAccess === undefined
+          ? ((state.config || {}).codexNetworkAccess !== false)
+          : config.codexNetworkAccess !== false;
+        document.getElementById('sessionConfigPrompt').value = config.systemPrompt || '';
+      }
+
+      function sessionConfigPayload() {
+        return {
+          targetKey: state.activeSessionConfigTargetKey,
+          name: document.getElementById('sessionConfigName').value,
+          workingDirectory: document.getElementById('sessionConfigCwd').value,
+          model: document.getElementById('sessionConfigModel').value,
+          preferredMode: document.getElementById('sessionConfigMode').value,
+          reasoningEffort: document.getElementById('sessionConfigReasoning').value,
+          codexSandboxMode: document.getElementById('sessionConfigSandbox').value,
+          codexNetworkAccess: document.getElementById('sessionConfigNetwork').checked,
+          systemPrompt: document.getElementById('sessionConfigPrompt').value,
+        };
+      }
+
+      async function openSessionConfigModal(targetKey) {
+        if (!targetKey) throw new Error('当前没有选中的会话。');
+        const session = findSessionSummaryByTargetKey(targetKey);
+        const result = await api('/api/session-config?targetKey=' + encodeURIComponent(targetKey));
+        const modal = document.getElementById('sessionConfigModal');
+        modal.dataset.targetKey = targetKey;
+        state.activeSessionConfigTargetKey = targetKey;
+        document.getElementById('sessionConfigSubtitle').textContent = '当前会话：' + ((session && session.title) ? session.title : targetKey);
+        fillSessionConfigForm(result.config || {});
+        modal.hidden = false;
+      }
+
+      async function saveSessionConfig() {
+        const result = await api('/api/session-config', {
+          method: 'POST',
+          body: JSON.stringify(sessionConfigPayload()),
+        });
+        closeSessionConfigModal();
+        await loadBindings();
+        await loadDesktopSessions();
+        if (state.sessionHistory && state.activeSessionTargetKey === state.activeSessionConfigTargetKey) {
+          await refreshSessionHistoryData();
+        }
+        showMessage('desktopMessage', 'success', '会话配置已保存。');
+        return result;
       }
 
       async function loadBindings() {
@@ -3282,6 +3782,14 @@ function renderHtml(): string {
               await openSessionHistory(target.dataset.targetKey || '', true);
               return;
             }
+            if (target.dataset.action === 'toggle-source-display') {
+              const targetKey = target.dataset.targetKey || '';
+              if (targetKey) {
+                state.sourceDisplayByTargetKey[targetKey] = state.sourceDisplayByTargetKey[targetKey] === 'raw' ? 'badge' : 'raw';
+              }
+              renderDesktopSessions({ sessions: state.desktopSessions, root: state.desktopRoot });
+              return;
+            }
             if (target.dataset.action === 'delete-session') {
               await deleteSessionByTargetKey(target.dataset.targetKey || '');
               return;
@@ -3290,31 +3798,47 @@ function renderHtml(): string {
               await copyText(target.dataset.threadId || '', 'Thread ID 已复制。');
               return;
             }
+            if (target.dataset.action === 'copy-session-id') {
+              await copyText(target.dataset.sessionId || '', 'Bridge 会话 ID 已复制。');
+              return;
+            }
             if (target.dataset.action === 'copy-bind-command') {
-              await copyText(shortThreadCommand(target.dataset.threadId || ''), '接管命令已复制。');
+              await copyText(shortThreadCommand(target.dataset.threadId || ''), '接管命令已复制。直接在 SNS 上发给机器人即可切换。');
               return;
             }
-            if (target.dataset.action === 'assign-session-channel') {
-              await assignSessionChannel(target);
+            if (target.dataset.action === 'open-session-rename-modal') {
+              openSessionRenameModal(target.dataset.targetKey || '');
+              return;
+            }
+            if (target.dataset.action === 'open-session-config-modal') {
+              await openSessionConfigModal(target.dataset.targetKey || '');
+              return;
+            }
+            if (target.dataset.action === 'open-session-channel-modal') {
+              openSessionChannelModal(target.dataset.targetKey || '');
               return;
             }
           }
 
-          if (source.closest('.session-channel-control')) {
-            return;
-          }
+        } catch (error) {
+          showMessage('desktopMessage', 'error', error.message);
+        }
+      }
 
-          const card = source.closest('[data-session-target-key]');
-          if (card) {
-            await openSessionHistory(card.dataset.sessionTargetKey || '', true);
-            return;
-          }
+      async function handleSessionListDblClick(event) {
+        const source = event.target instanceof Element ? event.target : null;
+        if (!source || source.closest('button, input, select, textarea, a')) return;
+        const card = source.closest('[data-session-target-key]');
+        if (!card) return;
+        try {
+          await openSessionHistory(card.dataset.sessionTargetKey || '', true);
         } catch (error) {
           showMessage('desktopMessage', 'error', error.message);
         }
       }
 
       document.getElementById('desktopSessionsList').addEventListener('click', handleSessionListAction);
+      document.getElementById('desktopSessionsList').addEventListener('dblclick', handleSessionListDblClick);
       document.getElementById('boundSessionsList').addEventListener('click', async (event) => {
         const source = event.target instanceof Element ? event.target : null;
         const target = source ? source.closest('button[data-action]') : null;
@@ -3334,6 +3858,72 @@ function renderHtml(): string {
         }
 
         await handleSessionListAction(event);
+      });
+      document.getElementById('boundSessionsList').addEventListener('dblclick', handleSessionListDblClick);
+
+      document.getElementById('sessionChannelModal').addEventListener('click', async (event) => {
+        const source = event.target instanceof Element ? event.target : null;
+        if (!source) return;
+        const modal = document.getElementById('sessionChannelModal');
+        const target = source.closest('button[data-action]');
+        if (source === modal || (target && target.dataset.action === 'close-session-channel-modal')) {
+          closeSessionChannelModal();
+          return;
+        }
+        if (target && target.dataset.action === 'assign-session-channel-choice') {
+          try {
+            await assignSessionChannelByBinding(modal.dataset.targetKey || '', target.dataset.bindingId || '');
+            closeSessionChannelModal();
+          } catch (error) {
+            showMessage('desktopMessage', 'error', error.message);
+          }
+        }
+      });
+
+      document.getElementById('sessionRenameModal').addEventListener('click', async (event) => {
+        const source = event.target instanceof Element ? event.target : null;
+        if (!source) return;
+        const modal = document.getElementById('sessionRenameModal');
+        const target = source.closest('button[data-action]');
+        if (source === modal || (target && target.dataset.action === 'close-session-rename-modal')) {
+          closeSessionRenameModal();
+          return;
+        }
+        if (target && target.dataset.action === 'save-session-rename') {
+          try {
+            await saveSessionRename();
+          } catch (error) {
+            showMessage('desktopMessage', 'error', error.message);
+          }
+        }
+      });
+
+      document.getElementById('sessionRenameInput').addEventListener('keydown', async (event) => {
+        if (event.key !== 'Enter') return;
+        event.preventDefault();
+        try {
+          await saveSessionRename();
+        } catch (error) {
+          showMessage('desktopMessage', 'error', error.message);
+        }
+      });
+
+      document.getElementById('sessionConfigModal').addEventListener('click', async (event) => {
+        const source = event.target instanceof Element ? event.target : null;
+        if (!source) return;
+        const modal = document.getElementById('sessionConfigModal');
+        const target = source.closest('button[data-action]');
+        if (source === modal || (target && target.dataset.action === 'close-session-config-modal')) {
+          closeSessionConfigModal();
+          return;
+        }
+        if (target && target.dataset.action === 'save-session-config') {
+          try {
+            await saveSessionConfig();
+          } catch (error) {
+            showMessage('desktopMessage', 'error', error.message);
+          }
+        }
       });
 
       document.getElementById('backToSessionsBtn').addEventListener('click', () => {
@@ -3357,17 +3947,9 @@ function renderHtml(): string {
         }
       });
 
-      document.getElementById('toggleSessionHistoryViewBtn').addEventListener('click', () => {
-        state.sessionHistoryViewMode = state.sessionHistoryViewMode === 'raw' ? 'markdown' : 'raw';
-        updateSessionHistoryViewToggle();
-        if (state.sessionHistory) {
-          renderSessionHistory(state.sessionHistory);
-        }
-      });
-
       document.getElementById('sessionHistoryList').addEventListener('click', async (event) => {
         const source = event.target instanceof Element ? event.target : null;
-        const target = source ? source.closest('button[data-action="copy-history-message"]') : null;
+        const target = source ? source.closest('button[data-action]') : null;
         if (!target) return;
         const index = Number(target.dataset.messageIndex || '-1');
         const messages = state.sessionHistory && Array.isArray(state.sessionHistory.messages)
@@ -3375,6 +3957,13 @@ function renderHtml(): string {
           : [];
         const message = Number.isInteger(index) ? messages[index] : null;
         if (!message) return;
+        if (target.dataset.action === 'toggle-history-message-mode') {
+          const key = String(index);
+          state.sessionHistoryMessageModes[key] = state.sessionHistoryMessageModes[key] === 'raw' ? 'markdown' : 'raw';
+          renderSessionHistory(state.sessionHistory);
+          return;
+        }
+        if (target.dataset.action !== 'copy-history-message') return;
         try {
           await copyText(message.content || '', '消息原文已复制。');
         } catch (error) {
@@ -3527,10 +4116,7 @@ const server = http.createServer(async (request, response) => {
       const limitParam = url.searchParams.get('limit');
       const limit = limitParam ? parsePositiveInt(limitParam, 10) : undefined;
       const store = createUiStore();
-      json(response, 200, {
-        root: getCodexSessionsRoot(),
-        sessions: listUiSessions(store, limit),
-      });
+      json(response, 200, buildUiSessionsPayload(store, limit));
       return;
     }
 
@@ -3544,6 +4130,76 @@ const server = http.createServer(async (request, response) => {
       const store = createUiStore();
       try {
         json(response, 200, getUiSessionHistory(store, targetKey));
+      } catch (error) {
+        json(response, 404, { error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/session-config') {
+      const targetKey = asString(url.searchParams.get('targetKey'));
+      if (!targetKey) {
+        json(response, 400, { error: 'targetKey 不能为空。' });
+        return;
+      }
+
+      const store = createUiStore();
+      try {
+        const session = findConfigurableBridgeSession(store, targetKey);
+        json(response, 200, { ok: true, config: sessionConfigPayload(session) });
+      } catch (error) {
+        json(response, 404, { error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/sessions/rename') {
+      const payload = await readJsonBody<Record<string, unknown>>(request);
+      const targetKey = asString(payload.targetKey);
+      if (!targetKey) {
+        json(response, 400, { error: 'targetKey 不能为空。' });
+        return;
+      }
+
+      const store = createUiStore();
+      try {
+        const name = typeof payload.name === 'string' ? payload.name.trim() || undefined : undefined;
+        if (targetKey.startsWith('desktop:')) {
+          const threadId = targetKey.slice('desktop:'.length);
+          const linked = findBridgeSessionByDesktopThread(store, threadId);
+          if (linked) {
+            store.updateSession(linked.id, { name });
+          }
+          updateUiSessionName(targetKey, name);
+          json(response, 200, { ok: true });
+          return;
+        }
+
+        const session = findConfigurableBridgeSession(store, targetKey);
+        store.updateSession(session.id, { name });
+        updateUiSessionName(targetKey, name);
+        const updated = store.getSession(session.id) || session;
+        json(response, 200, { ok: true, config: sessionConfigPayload(updated) });
+      } catch (error) {
+        json(response, 404, { error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/session-config') {
+      const payload = await readJsonBody<Record<string, unknown>>(request);
+      const targetKey = asString(payload.targetKey);
+      if (!targetKey) {
+        json(response, 400, { error: 'targetKey 不能为空。' });
+        return;
+      }
+
+      const store = createUiStore();
+      try {
+        const session = findConfigurableBridgeSession(store, targetKey);
+        store.updateSession(session.id, sanitizeSessionConfig(payload));
+        const updated = store.getSession(session.id) || session;
+        json(response, 200, { ok: true, config: sessionConfigPayload(updated) });
       } catch (error) {
         json(response, 404, { error: error instanceof Error ? error.message : String(error) });
       }
