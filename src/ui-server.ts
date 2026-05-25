@@ -28,8 +28,9 @@ import {
   getCodexSessionsRoot,
   getDesktopSessionByThreadId,
   listDesktopSessions,
-  readDesktopSessionEventStream,
+  readDesktopSessionMirrorRecordStreamByFilePath,
 } from './desktop-sessions.js';
+import { buildUiHistoryEntriesFromDesktopRecords } from './ui-session-history.js';
 import {
   type BindingSummary,
   listChannelDefaultTargetSummaries,
@@ -313,6 +314,15 @@ function uiHistoryMessage(role: string, content: string, timestamp: string): UiS
   };
 }
 
+function uiDesktopHistoryMessages(threadId: string): UiSessionHistoryMessage[] {
+  const session = getDesktopSessionByThreadId(threadId);
+  if (!session) return [];
+  const entries = buildUiHistoryEntriesFromDesktopRecords(
+    readDesktopSessionMirrorRecordStreamByFilePath(session.filePath),
+  );
+  return entries.map((entry) => uiHistoryMessage(entry.role, entry.content, entry.timestamp));
+}
+
 function getBridgeSessionTitle(session: BridgeSession): string {
   if (session.name?.trim()) return session.name.trim();
   if (session.working_directory) {
@@ -467,11 +477,10 @@ function getUiSessionHistory(store: JsonFileStore, targetKey: string): {
     const desktopThreadId = getStoredCodexThreadId(session);
     if (desktopThreadId) {
       const desktopSummary = desktopSessionToSummary(desktopThreadId, store);
-      const events = readDesktopSessionEventStream(desktopThreadId);
       return {
         session: desktopSummary || bridgeSessionToSummary(session),
         source: 'desktop',
-        messages: events.map((event) => uiHistoryMessage(event.role, event.content, event.timestamp)),
+        messages: uiDesktopHistoryMessages(desktopThreadId),
       };
     }
 
@@ -490,11 +499,10 @@ function getUiSessionHistory(store: JsonFileStore, targetKey: string): {
       throw new Error('指定的 Desktop 会话不存在。');
     }
 
-    const events = readDesktopSessionEventStream(threadId);
     return {
       session: summary,
       source: 'desktop',
-      messages: events.map((event) => uiHistoryMessage(event.role, event.content, event.timestamp)),
+      messages: uiDesktopHistoryMessages(threadId),
     };
   }
 
