@@ -248,9 +248,10 @@ describe('interactive-message-runner', () => {
       },
     );
 
-    assert.deepEqual(deliveredTexts, ['最终回复']);
+    assert.deepEqual(deliveredTexts, []);
     assert.equal(adapter.streamEnds.length, 1);
     assert.equal(adapter.streamEnds[0]?.status, 'completed');
+    assert.equal(adapter.streamEnds[0]?.text, '最终回复');
     assert.equal(clock.activeCount(), 0);
 
     const statusCountAfterFinish = adapter.streamedStatuses.length;
@@ -434,7 +435,7 @@ describe('interactive-message-runner', () => {
 
     assert.equal(finalized, false);
     assert.deepEqual(adapter.streamEnds, [{ status: 'completed', text: '桌面最终回复' }]);
-    assert.deepEqual(deliveredTexts, ['桌面最终回复']);
+    assert.deepEqual(deliveredTexts, []);
     assert.deepEqual(healthEnds, [{
       outcome: 'completed',
       detail: '检测到桌面线程已完成当前任务。',
@@ -1074,10 +1075,7 @@ describe('interactive-message-runner', () => {
       },
     );
 
-    assert.equal(deliveredTexts.length, 1);
-    assert.match(deliveredTexts[0] || '', /旧会话「旧任务」任务已结束/);
-    assert.match(deliveredTexts[0] || '', /当前聊天已切换到其他会话，回复已跳过/);
-    assert.doesNotMatch(deliveredTexts[0] || '', /旧会话最终回复/);
+    assert.equal(deliveredTexts.length, 0);
     assert.equal(adapter.streamEnds[0]?.status, 'completed');
     assert.match(adapter.streamEnds[0]?.text || '', /旧会话「旧任务」任务已结束/);
   });
@@ -1175,7 +1173,7 @@ describe('interactive-message-runner', () => {
     await runPromise;
 
     assert.equal(adapter.streamedStatuses.length, statusCountWhileFinalizing);
-    assert.deepEqual(deliveredTexts, ['最终回复']);
+    assert.deepEqual(deliveredTexts, []);
     assert.equal(clock.activeCount(), 0);
   });
 
@@ -1255,7 +1253,7 @@ describe('interactive-message-runner', () => {
     assert.match(adapter.streamEnds[0]?.text || '', /^Error\b/);
     assert.match(adapter.streamEnds[0]?.text || '', /bridge_session_id:/);
     assert.ok(!(adapter.streamEnds[0]?.text || '').includes('secret123456'));
-    assert.ok(deliveredTexts.length >= 1);
+    assert.deepEqual(deliveredTexts, []);
     assert.ok(errors.length >= 1);
   });
 });

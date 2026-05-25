@@ -419,6 +419,33 @@ async function consumeStream(
   const toolPreview = new Map<string, { name: string; input: unknown }>();
   let lastReasoningNote: string | null = null;
 
+  const formatSseErrorPayload = (raw: string): string => {
+    const trimmed = (raw || '').trim();
+    if (!trimmed) return 'Unknown error';
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (typeof parsed === 'string') return parsed.trim() || 'Unknown error';
+      if (!parsed || typeof parsed !== 'object') return trimmed;
+      const record = parsed as Record<string, unknown>;
+      const name = typeof record.name === 'string' ? record.name.trim() : '';
+      const message = typeof record.message === 'string'
+        ? record.message.trim()
+        : typeof record.error === 'string'
+          ? record.error.trim()
+          : '';
+      const stack = typeof record.stack === 'string' ? record.stack.trim() : '';
+      const code = typeof record.code === 'string' ? record.code.trim() : '';
+      const pieces = [
+        name && message ? `${name}: ${message}` : (name || message),
+        code ? `code: ${code}` : '',
+        stack,
+      ].filter(Boolean);
+      return pieces.length > 0 ? pieces.join('\n') : trimmed;
+    } catch {
+      return trimmed;
+    }
+  };
+
   try {
     await consumeSseEvents(stream, async (event: SSEEvent) => {
       switch (event.type) {
@@ -574,7 +601,7 @@ async function consumeStream(
 
         case 'error':
           hasError = true;
-          errorMessage = event.data || 'Unknown error';
+          errorMessage = formatSseErrorPayload(event.data);
           break;
 
         case 'result': {
@@ -669,7 +696,9 @@ async function consumeStream(
       outboundAttachments: [],
       tokenUsage,
       hasError: true,
-      errorMessage: isAbort ? 'Task stopped by user' : (e instanceof Error ? e.message : 'Stream consumption error'),
+      errorMessage: isAbort
+        ? 'Task stopped by user'
+        : (e instanceof Error ? (e.stack || e.message) : 'Stream consumption error'),
       permissionRequests,
       sdkSessionId: capturedSdkSessionId,
     };

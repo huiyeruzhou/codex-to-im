@@ -564,6 +564,13 @@ export async function runInteractiveMessage(
     }
     return taskState.streamFinalized;
   };
+
+  const shouldSkipTextDelivery = (): boolean => {
+    if (!hasStreamingCards) return false;
+    if (taskState.structuredStreamUiActive) return true;
+    if (adapter.hasActiveStreamingUi?.(msg.address.chatId, streamKey)) return true;
+    return false;
+  };
   const endMessageUiOnce = () => {
     if (taskState.uiEnded) return;
     adapter.onMessageEnd?.(msg.address.chatId, streamKey);
@@ -826,6 +833,10 @@ export async function runInteractiveMessage(
           return terminalResponse.text.trim() ? `${terminalResponse.text.trim()}\n\n${detail}` : detail;
         })()
         : terminalResponse.text;
+      if (hasStreamingCards && cardText.trim()) {
+        pushStreamFeedbackText(streamFeedbackTarget, cardText);
+        syncStructuredStreamUiSnapshot();
+      }
       const cardFinalized = await finalizeStreamUiOnce(streamEndStatus, cardText);
       if (hasFinalResponsePayload(terminalResponse)) {
         await deliverFinalResponse({
@@ -834,7 +845,7 @@ export async function runInteractiveMessage(
           sessionId: binding.codepilotSessionId,
           replyToMessageId: msg.messageId,
           deliverResponse: deps.deliverResponse,
-        }, terminalResponse, { skipText: cardFinalized });
+        }, terminalResponse, { skipText: shouldSkipTextDelivery() || cardFinalized });
       }
       return;
     }
@@ -901,6 +912,10 @@ export async function runInteractiveMessage(
           return baseCardText.trim() ? `${baseCardText.trim()}\n\n${detail}` : detail;
         })()
         : baseCardText;
+      if (cardText.trim()) {
+        pushStreamFeedbackText(streamFeedbackTarget, cardText);
+        syncStructuredStreamUiSnapshot();
+      }
       cardFinalized = await finalizeStreamUiOnce(streamEndStatus, cardText);
     }
 
@@ -911,7 +926,7 @@ export async function runInteractiveMessage(
         sessionId: binding.codepilotSessionId,
         replyToMessageId: msg.messageId,
         deliverResponse: deps.deliverResponse,
-      }, staleResponse, { skipText: cardFinalized });
+      }, staleResponse, { skipText: shouldSkipTextDelivery() || cardFinalized });
     } else if (hasFinalResponsePayload(effectiveResponse)) {
       await deliverFinalResponse({
         adapter,
@@ -919,13 +934,17 @@ export async function runInteractiveMessage(
         sessionId: binding.codepilotSessionId,
         replyToMessageId: msg.messageId,
         deliverResponse: deps.deliverResponse,
-      }, effectiveResponse, { skipText: cardFinalized });
+      }, effectiveResponse, { skipText: shouldSkipTextDelivery() || cardFinalized });
     } else if (result.hasError && !taskAbort.signal.aborted) {
       const fallbackErrorText = formatStreamingErrorForCard(result.errorMessage, {
         bridgeSessionId: binding.codepilotSessionId,
         codexThreadId: result.sdkSessionId || binding.sdkSessionId || null,
         workingDirectory: binding.workingDirectory || null,
       });
+      if (hasStreamingCards && fallbackErrorText.trim()) {
+        pushStreamFeedbackText(streamFeedbackTarget, fallbackErrorText);
+        syncStructuredStreamUiSnapshot();
+      }
       await deliverFinalResponse({
           adapter,
           address: msg.address,
@@ -938,6 +957,7 @@ export async function runInteractiveMessage(
           hasError: true,
           errorMessage: result.errorMessage,
         }),
+        { skipText: shouldSkipTextDelivery() },
       );
     }
 
