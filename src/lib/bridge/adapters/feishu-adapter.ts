@@ -64,7 +64,7 @@ const MAX_FILE_SIZE = 20 * 1024 * 1024;
 /** Feishu emoji type for completed tasks. */
 const COMPLETED_EMOJI = 'DONE';
 /** Feishu emoji type for failed tasks. */
-const ERROR_EMOJI = 'ERROR';
+const ERROR_EMOJI = 'WAIL';
 
 /** State for an active CardKit v2 streaming card. */
 interface FeishuCardState {

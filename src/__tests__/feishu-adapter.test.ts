@@ -167,7 +167,7 @@ describe('feishu-adapter structured streaming regions', () => {
     assert.equal(finalized, true);
     assert.deepEqual(reactionCreateCalls, [{
       path: { message_id: 'card-message-1' },
-      data: { reaction_type: { emoji_type: 'ERROR' } },
+      data: { reaction_type: { emoji_type: 'WAIL' } },
     }]);
   });
 
