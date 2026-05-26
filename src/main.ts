@@ -40,6 +40,10 @@ const PROXY_ENV_KEYS = [
 ];
 
 async function resolveProvider(): Promise<LLMProvider> {
+  const { CodexTmuxProvider, shouldUseCodexTmuxTui } = await import('./codex-tmux-provider.js');
+  if (shouldUseCodexTmuxTui()) {
+    return new CodexTmuxProvider();
+  }
   const { CodexProvider } = await import('./codex-provider.js');
   return new CodexProvider();
 }

@@ -5,6 +5,7 @@ import {
   buildAdapterSyncPlan,
   listEnabledAdapterInstances,
 } from './adapter-sync-plan.js';
+import { isBridgeCommandText } from './command-aliases.js';
 
 export interface AdapterMeta {
   lastMessageAt: string | null;
@@ -160,7 +161,7 @@ export function createAdapterRuntime(
 
           if (
             msg.callbackData ||
-            msg.text.trim().startsWith('/') ||
+            isBridgeCommandText(msg.text) ||
             deps.isNumericPermissionShortcut(adapter.provider, msg.text.trim(), msg.address.chatId)
           ) {
             await deps.handleMessage(adapter, msg);

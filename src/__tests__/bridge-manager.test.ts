@@ -228,8 +228,20 @@ describe('bridge-manager resolveCommandAlias', () => {
     assert.equal(_testOnly.resolveCommandAlias('/', ''), '/status');
   });
 
-  it('maps double slash to health', () => {
-    assert.equal(_testOnly.resolveCommandAlias('//', ''), '/health');
+  it('maps /check to health', () => {
+    assert.equal(_testOnly.resolveCommandAlias('/check', ''), '/health');
+  });
+
+  it('leaves double slash for model prompt escaping', () => {
+    assert.equal(_testOnly.resolveCommandAlias('//', ''), '//');
+  });
+
+  it('treats double slash as an escaped model prompt prefix', () => {
+    assert.equal(_testOnly.isBridgeCommandText('/status'), true);
+    assert.equal(_testOnly.isBridgeCommandText('/check'), true);
+    assert.equal(_testOnly.isBridgeCommandText('//status'), false);
+    assert.equal(_testOnly.toModelPromptText('//status'), '/status');
+    assert.equal(_testOnly.toModelPromptText('//'), '/');
   });
 
   it('maps short desktop thread alias based on args', () => {

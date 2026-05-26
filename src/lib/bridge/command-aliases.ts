@@ -12,7 +12,7 @@ export function parseListIndex(raw: string): number | null {
 
 export function resolveCommandAlias(rawCommand: string, args: string): string {
   switch (rawCommand) {
-    case '//':
+    case '/check':
       return '/health';
     case '/':
       return '/status';
@@ -39,6 +39,20 @@ export function resolveCommandAlias(rawCommand: string, args: string): string {
     default:
       return rawCommand;
   }
+}
+
+export function isEscapedSlashPrompt(rawText: string): boolean {
+  return rawText.trim().startsWith('//');
+}
+
+export function isBridgeCommandText(rawText: string): boolean {
+  const trimmed = rawText.trim();
+  return trimmed.startsWith('/') && !trimmed.startsWith('//');
+}
+
+export function toModelPromptText(rawText: string): string {
+  const trimmed = rawText.trim();
+  return trimmed.startsWith('//') ? trimmed.slice(1) : trimmed;
 }
 
 export function parseDesktopThreadListArgs(args: string): { showAll: boolean; limit: number } | null {

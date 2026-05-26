@@ -243,7 +243,7 @@ describe('command-dispatch', () => {
     assert.match(sent[1] || '', /已更新 Codex 网络/);
   });
 
-  it('renders // health diagnostics for the current session', async () => {
+  it('renders /check health diagnostics for the current session', async () => {
     initTestContext();
     const sent: string[] = [];
     const adapter: any = {
@@ -260,10 +260,10 @@ describe('command-dispatch', () => {
       adapter,
       {
         address,
-        text: '//',
+        text: '/check',
         messageId: 'incoming-3',
       } as any,
-      '//',
+      '/check',
       {
         getActiveTask: () => undefined,
         diagnoseSessionHealth: async (sessionId) => ({
@@ -298,7 +298,7 @@ describe('command-dispatch', () => {
     assert.match(response, /shell_command/);
   });
 
-  it('renders // diagnostics for an explicit session id', async () => {
+  it('renders /check diagnostics for an explicit session id', async () => {
     initTestContext();
     const sent: string[] = [];
     const requestedSessionIds: string[] = [];
@@ -317,10 +317,10 @@ describe('command-dispatch', () => {
       adapter,
       {
         address,
-        text: `// ${explicitSessionId}`,
+        text: `/check ${explicitSessionId}`,
         messageId: 'incoming-health-explicit',
       } as any,
-      `// ${explicitSessionId}`,
+      `/check ${explicitSessionId}`,
       {
         getActiveTask: () => undefined,
         diagnoseSessionHealth: async (sessionId) => {
@@ -392,7 +392,7 @@ describe('command-dispatch', () => {
     assert.deepEqual(readAuditSummaries(), []);
   });
 
-  it('renders // without creating a session or binding for an unbound chat', async () => {
+  it('renders /check without creating a session or binding for an unbound chat', async () => {
     const store = initTestContext();
     const sent: string[] = [];
     let diagnoseCalls = 0;
@@ -409,10 +409,10 @@ describe('command-dispatch', () => {
       adapter,
       {
         address,
-        text: '//',
+        text: '/check',
         messageId: 'incoming-health-unbound',
       } as any,
-      '//',
+      '/check',
       {
         getActiveTask: () => undefined,
         diagnoseSessionHealth: async () => {

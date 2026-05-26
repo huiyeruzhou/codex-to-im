@@ -174,6 +174,8 @@ You can also specify a directory explicitly:
 ## Common Commands
 
 - `/` or `/status`: inspect the current session, thread, model, mode, reasoning effort, and shared-mirror status.
+- `/check`: inspect session health; use `/check all` for active sessions.
+- `//...`: send text that starts with `/` to the model, for example `//status` is sent as `/status`.
 - `/t`: list the latest 10 desktop threads.
 - `/t all`: list up to 200 desktop threads.
 - `/t n 100`: list the latest 100 desktop threads, capped at 200.

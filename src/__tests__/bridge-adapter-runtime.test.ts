@@ -81,5 +81,33 @@ describe('bridge-adapter-runtime', () => {
 
     assert.deepEqual(handled, ['/status']);
     assert.deepEqual(locked, []);
+
+    handled.length = 0;
+    locked.length = 0;
+
+    let runningEscapedSlash = true;
+    let escapedSlashConsumed = false;
+    const escapedSlashAdapter = {
+      channelType: 'feishu-default',
+      provider: 'feishu',
+      isRunning: () => runningEscapedSlash || !escapedSlashConsumed,
+      consumeOne: async () => {
+        if (escapedSlashConsumed) return null;
+        escapedSlashConsumed = true;
+        runningEscapedSlash = false;
+        return {
+          messageId: 'msg-escaped-slash',
+          address: { channelType: 'feishu-default', chatId: 'chat-escaped-slash' },
+          text: '//status',
+          timestamp: Date.now(),
+        };
+      },
+    };
+
+    runtime.runAdapterLoop(escapedSlashAdapter as never);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    assert.deepEqual(handled, ['//status']);
+    assert.deepEqual(locked, ['session:chat-escaped-slash']);
   });
 });

@@ -31,6 +31,8 @@ import {
   normalizeReasoningEffort,
   parseDesktopThreadListArgs,
   resolveCommandAlias,
+  isBridgeCommandText,
+  toModelPromptText,
   toUserVisibleBindingError,
   toUserVisibleCommandError,
 } from './command-helpers.js';
@@ -804,14 +806,18 @@ async function handleMessage(
     }
   }
 
-  // Check for IM commands (before sanitization — commands are validated individually)
-  if (rawText.startsWith('/')) {
-    const parts = rawText.split(/\s+/);
+  const modelText = toModelPromptText(rawText);
+
+  // Check for IM commands (before sanitization — commands are validated individually).
+  // A leading double slash escapes one slash so users can send model prompts
+  // that intentionally begin with "/" without invoking bridge commands.
+  if (isBridgeCommandText(rawText)) {
+    const parts = modelText.split(/\s+/);
     const rawCommand = parts[0].split('@')[0].toLowerCase();
     const args = parts.slice(1).join(' ').trim();
     const resolvedCommand = resolveCommandAlias(rawCommand, args);
     try {
-      await handleCommand(adapter, msg, rawText);
+      await handleCommand(adapter, msg, modelText);
     } catch (error) {
       console.error(`[bridge-manager] Command failed: ${resolvedCommand}`, error);
       await deliverBridgeNotice(adapter, msg.address, toUserVisibleCommandError(resolvedCommand, error), {
@@ -823,15 +829,15 @@ async function handleMessage(
   }
 
   // Sanitize general message text before routing to conversation engine
-  const { text, truncated } = sanitizeInput(rawText);
+  const { text, truncated } = sanitizeInput(modelText);
   if (truncated) {
-    console.warn(`[bridge-manager] Input truncated from ${rawText.length} to ${text.length} chars for chat ${msg.address.chatId}`);
+    console.warn(`[bridge-manager] Input truncated from ${modelText.length} to ${text.length} chars for chat ${msg.address.chatId}`);
     store.insertAuditLog({
       channelType: adapter.channelType,
       chatId: msg.address.chatId,
       direction: 'inbound',
       messageId: msg.messageId,
-      summary: `[TRUNCATED] Input truncated from ${rawText.length} chars`,
+      summary: `[TRUNCATED] Input truncated from ${modelText.length} chars`,
     });
   }
 
@@ -962,6 +968,8 @@ export const _testOnly = {
   resolveNewWorkingDirectory,
   resolveNewSessionWorkingDirectory,
   resolveCommandAlias,
+  isBridgeCommandText,
+  toModelPromptText,
   parseDesktopThreadListArgs,
   buildDesktopThreadsCommandResponse,
   formatCommandDateTime,
