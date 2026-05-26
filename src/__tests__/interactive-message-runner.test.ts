@@ -163,6 +163,91 @@ describe('interactive-message-runner', () => {
     assert.equal(formatInteractiveRuntimeStatus(1_000, 3_730_000), '已运行 1秒，上次响应距今 1小时2分10秒');
   });
 
+  it('uses the Chinese file description prompt for attachment-only messages', async () => {
+    const adapter = new FakeFeishuStreamingAdapter();
+    const address = {
+      channelType: 'feishu-default',
+      channelProvider: 'feishu',
+      chatId: 'chat-attachment-only',
+      userId: 'user-attachment-only',
+    } as const;
+    router.createBinding(address, 'D:\\workspace\\attachment-only');
+
+    const taskStateMap = new Map<string, InteractiveTaskState>();
+    let capturedPrompt = '';
+    let capturedFiles: InboundMessage['attachments'];
+
+    await runInteractiveMessage(
+      adapter,
+      {
+        messageId: 'incoming-attachment-only-1',
+        address,
+        text: '',
+        timestamp: Date.now(),
+        attachments: [{
+          id: 'file-1',
+          name: 'report.pdf',
+          type: 'application/pdf',
+          size: 128,
+          data: Buffer.from('file').toString('base64'),
+        }],
+      },
+      '',
+      [{
+        id: 'file-1',
+        name: 'report.pdf',
+        type: 'application/pdf',
+        size: 128,
+        data: Buffer.from('file').toString('base64'),
+      }],
+      {
+        registerInteractiveTask(task) {
+          taskStateMap.set(task.sessionId, task);
+        },
+        resetMirrorSessionForInteractiveRun() {},
+        isCurrentInteractiveTask(sessionId, taskId) {
+          return taskStateMap.get(sessionId)?.id === taskId;
+        },
+        touchInteractiveTask(sessionId, taskId) {
+          const task = taskStateMap.get(sessionId);
+          if (task?.id !== taskId) return;
+          task.lastActivityAt = Date.now();
+        },
+        recordInteractiveHealthStart() {},
+        recordInteractiveHealthProgress() {},
+        recordInteractiveHealthTool() {},
+        recordInteractiveHealthEnd() {},
+        beginMirrorSuppression() { return ''; },
+        abortMirrorSuppression() {},
+        settleMirrorSuppression() {},
+        releaseInteractiveTask(sessionId, taskId) {
+          if (taskStateMap.get(sessionId)?.id === taskId) {
+            taskStateMap.delete(sessionId);
+          }
+        },
+        async deliverResponse() {},
+        persistSdkSessionUpdate() {},
+        processMessageImpl: async (_binding, promptText, _onPermission, _abortSignal, files) => {
+          capturedPrompt = promptText;
+          capturedFiles = files;
+          return {
+            responseText: '',
+            outboundAttachments: [],
+            tokenUsage: null,
+            hasError: false,
+            errorMessage: '',
+            permissionRequests: [],
+            sdkSessionId: null,
+          };
+        },
+      },
+    );
+
+    assert.equal(capturedPrompt, '简单地描述文件');
+    assert.equal(capturedFiles?.[0]?.name, 'report.pdf');
+    assert.equal(taskStateMap.size, 0);
+  });
+
   it('keeps runtime visible and adds last response age after 10 seconds without a response', async () => {
     const adapter = new FakeFeishuStreamingAdapter();
     const address = {

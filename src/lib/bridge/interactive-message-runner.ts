@@ -61,6 +61,8 @@ const STREAM_DEFAULTS: Record<string, StreamConfig> = {
   default: { intervalMs: 1000, minDeltaChars: 30, maxChars: 4000 },
 };
 
+const DEFAULT_ATTACHMENT_PROMPT = '简单地描述文件';
+
 function formatStreamingErrorForCard(
   message: string,
   context: {
@@ -737,7 +739,7 @@ export async function runInteractiveMessage(
   };
 
   try {
-    const promptText = text || (attachments && attachments.length > 0 ? 'Describe this image.' : '');
+    const promptText = text || (attachments && attachments.length > 0 ? DEFAULT_ATTACHMENT_PROMPT : '');
 
     const processPromise = processMessageImpl(
       binding,
