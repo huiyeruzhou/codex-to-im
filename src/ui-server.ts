@@ -28,9 +28,8 @@ import {
   getCodexSessionsRoot,
   getDesktopSessionByThreadId,
   listDesktopSessions,
-  readDesktopSessionMirrorRecordStreamByFilePath,
+  readDesktopSessionJsonlHistoryStreamByFilePath,
 } from './desktop-sessions.js';
-import { buildUiHistoryEntriesFromDesktopRecords } from './ui-session-history.js';
 import {
   type BindingSummary,
   listChannelDefaultTargetSummaries,
@@ -296,31 +295,42 @@ interface UiSessionListPayload {
 
 interface UiSessionHistoryMessage {
   role: string;
+  kind: string;
   content: string;
   renderedContent: string;
   timestamp: string;
+  rawJsonl: string;
 }
 
 function renderHistoryMarkdown(content: string): string {
   return markdownRenderer.render(content || '');
 }
 
-function uiHistoryMessage(role: string, content: string, timestamp: string): UiSessionHistoryMessage {
+function uiHistoryMessage(
+  role: string,
+  kind: string,
+  content: string,
+  timestamp: string,
+  rawJsonl?: string,
+): UiSessionHistoryMessage {
+  const raw = typeof rawJsonl === 'string' && rawJsonl.length > 0
+    ? rawJsonl
+    : JSON.stringify({ role, kind, content, timestamp });
   return {
     role,
+    kind,
     content,
     renderedContent: renderHistoryMarkdown(content),
     timestamp,
+    rawJsonl: raw,
   };
 }
 
 function uiDesktopHistoryMessages(threadId: string): UiSessionHistoryMessage[] {
   const session = getDesktopSessionByThreadId(threadId);
   if (!session) return [];
-  const entries = buildUiHistoryEntriesFromDesktopRecords(
-    readDesktopSessionMirrorRecordStreamByFilePath(session.filePath),
-  );
-  return entries.map((entry) => uiHistoryMessage(entry.role, entry.content, entry.timestamp));
+  const entries = readDesktopSessionJsonlHistoryStreamByFilePath(session.filePath);
+  return entries.map((entry) => uiHistoryMessage(entry.role, entry.kind, entry.content, entry.timestamp, entry.rawJsonl));
 }
 
 function getBridgeSessionTitle(session: BridgeSession): string {
@@ -488,7 +498,7 @@ function getUiSessionHistory(store: JsonFileStore, targetKey: string): {
     return {
       session: bridgeSessionToSummary(session),
       source: 'bridge',
-      messages: messages.map((message) => uiHistoryMessage(message.role, message.content, message.timestamp || '')),
+      messages: messages.map((message) => uiHistoryMessage(message.role, 'bridge:message', message.content, message.timestamp || '')),
     };
   }
 
@@ -3201,7 +3211,7 @@ function renderHtml(): string {
       function renderHistoryMessageContent(message, index) {
         const mode = state.sessionHistoryMessageModes[String(index)] || 'markdown';
         if (mode === 'raw') {
-          return '<div class="chat-history-content raw">' + escapeHtml(message.content || '') + '</div>';
+          return '<div class="chat-history-content raw">' + escapeHtml(message.rawJsonl || message.content || '') + '</div>';
         }
         return '<div class="chat-history-content markdown">' + (message.renderedContent || escapeHtml(message.content || '')) + '</div>';
       }
@@ -3245,8 +3255,9 @@ function renderHtml(): string {
             +     '<span class="chat-history-role">' + escapeHtml(chatRoleLabel(message.role)) + '</span>'
             +     '<span class="chat-history-message-meta">'
             +       '<span>' + escapeHtml(messageTimeLabel(message.timestamp || '')) + '</span>'
-            +       iconButton('toggle-history-message-mode', state.sessionHistoryMessageModes[String(index)] === 'raw' ? 'markdown' : 'raw', state.sessionHistoryMessageModes[String(index)] === 'raw' ? '显示 Markdown' : '显示原文', 'data-message-index="' + escapeHtml(String(index)) + '"', 'chat-history-icon')
-            +       iconButton('copy-history-message', 'copy', '复制原文', 'data-message-index="' + escapeHtml(String(index)) + '"', 'chat-history-icon')
+            +       (message.kind ? '<span class="small">' + escapeHtml(message.kind) + '</span>' : '')
+            +       iconButton('toggle-history-message-mode', state.sessionHistoryMessageModes[String(index)] === 'raw' ? 'markdown' : 'raw', state.sessionHistoryMessageModes[String(index)] === 'raw' ? '显示解析' : '显示 JSONL', 'data-message-index="' + escapeHtml(String(index)) + '"', 'chat-history-icon')
+            +       iconButton('copy-history-message', 'copy', '复制 JSONL', 'data-message-index="' + escapeHtml(String(index)) + '"', 'chat-history-icon')
             +     '</span>'
             +   '</div>'
             +   renderHistoryMessageContent(message, index)
@@ -4221,7 +4232,7 @@ function renderHtml(): string {
         }
         if (target.dataset.action !== 'copy-history-message') return;
         try {
-          await copyText(message.content || '', '消息原文已复制。');
+          await copyText(message.rawJsonl || message.content || '', '消息 JSONL 已复制。');
         } catch (error) {
           showMessage('sessionHistoryMessage', 'error', error.message);
         }
