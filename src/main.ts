@@ -23,6 +23,21 @@ import { releaseBridgeInstanceLock, tryAcquireBridgeInstanceLock } from './bridg
 const RUNTIME_DIR = path.join(CTI_HOME, 'runtime');
 const STATUS_FILE = path.join(RUNTIME_DIR, 'status.json');
 const PID_FILE = path.join(RUNTIME_DIR, 'bridge.pid');
+const PROXY_ENV_KEYS = [
+  'NODE_OPTIONS',
+  'HTTPS_PROXY',
+  'HTTP_PROXY',
+  'ALL_PROXY',
+  'NO_PROXY',
+  'WSS_PROXY',
+  'WS_PROXY',
+  'https_proxy',
+  'http_proxy',
+  'all_proxy',
+  'no_proxy',
+  'wss_proxy',
+  'ws_proxy',
+];
 
 async function resolveProvider(): Promise<LLMProvider> {
   const { CodexProvider } = await import('./codex-provider.js');
@@ -58,6 +73,26 @@ function getAdapterStatuses(): ReturnType<typeof bridgeManager.getStatus>['adapt
   return bridgeManager.getStatus().adapters;
 }
 
+function maskEnvValue(key: string, value: string): string {
+  if (!value) return '<empty>';
+  if (!key.toLowerCase().includes('proxy')) return value;
+  try {
+    const parsed = new URL(value);
+    if (parsed.username) parsed.username = '***';
+    if (parsed.password) parsed.password = '***';
+    return parsed.toString();
+  } catch {
+    return '<set>';
+  }
+}
+
+function formatProxyEnvSnapshot(env: NodeJS.ProcessEnv = process.env): string {
+  const parts = PROXY_ENV_KEYS
+    .filter((key) => env[key] !== undefined)
+    .map((key) => `${key}=${maskEnvValue(key, env[key] || '')}`);
+  return parts.length > 0 ? parts.join(', ') : '<none>';
+}
+
 async function main(): Promise<void> {
   const lockState = tryAcquireBridgeInstanceLock();
   if (!lockState.acquired) {
@@ -84,6 +119,7 @@ async function main(): Promise<void> {
 
   const runId = crypto.randomUUID();
   console.log(`[codex-to-im] Starting bridge (run_id: ${runId})`);
+  console.log(`[codex-to-im] Proxy env snapshot: ${formatProxyEnvSnapshot()}`);
 
   const settings = configToSettings(config);
   const store = new JsonFileStore(settings, { dynamicSettings: true });

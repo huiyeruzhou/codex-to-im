@@ -19,6 +19,7 @@ import crypto from 'crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import * as lark from '@larksuiteoapi/node-sdk';
+import { HttpsProxyAgent } from 'https-proxy-agent';
 import type {
   ChannelType,
   InboundMessage,
@@ -104,6 +105,205 @@ const CARD_FULL_REFRESH_INTERVAL_MS = 5 * 60_000;
 const INITIAL_STREAMING_STATUS = '处理中';
 const EMPTY_STREAMING_TASKS = '';
 const EMPTY_STREAMING_TOOLS = '';
+
+type EnvLike = Record<string, string | undefined>;
+type FeishuProxyTarget = {
+  url: string;
+  label: 'REST' | 'WS';
+};
+type FeishuWsClientOptions = {
+  appId: string;
+  appSecret: string;
+  domain: string | lark.Domain;
+  httpInstance?: lark.HttpInstance;
+  agent?: unknown;
+};
+
+function firstEnvValue(env: EnvLike, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = env[key]?.trim();
+    if (value) return value;
+  }
+  return undefined;
+}
+
+function noProxyTokenMatchesHost(token: string, host: string, port?: string): boolean {
+  const normalizedToken = token.trim().toLowerCase().replace(/^\*\./, '').replace(/^\./, '');
+  if (!normalizedToken) return false;
+  if (normalizedToken === '*') return true;
+
+  const [tokenHost, tokenPort] = normalizedToken.split(':');
+  if (tokenPort && tokenPort !== port) return false;
+
+  const normalizedHost = host.toLowerCase();
+  return normalizedHost === tokenHost || normalizedHost.endsWith(`.${tokenHost}`);
+}
+
+function shouldBypassProxy(targetUrl: string, env: EnvLike = process.env): boolean {
+  const raw = firstEnvValue(env, ['NO_PROXY', 'no_proxy']);
+  if (!raw) return false;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(targetUrl);
+  } catch {
+    return false;
+  }
+
+  const tokens = raw.split(',').map((token) => token.trim()).filter(Boolean);
+  return tokens.some((token) => noProxyTokenMatchesHost(token, parsed.hostname, parsed.port));
+}
+
+function feishuApiBaseUrl(site: 'feishu' | 'lark'): string {
+  return site === 'lark'
+    ? 'https://open.larksuite.com'
+    : 'https://open.feishu.cn';
+}
+
+function feishuWsBaseUrl(site: 'feishu' | 'lark'): string {
+  return site === 'lark'
+    ? 'wss://pbbot-ws.larksuite.com'
+    : 'wss://pbbot-ws.feishu.cn';
+}
+
+function feishuProxyTargets(site: 'feishu' | 'lark'): FeishuProxyTarget[] {
+  return [
+    { label: 'REST', url: feishuApiBaseUrl(site) },
+    { label: 'WS', url: feishuWsBaseUrl(site) },
+  ];
+}
+
+function getProxyUrlForUrl(targetUrl: string, env: EnvLike = process.env): string | undefined {
+  if (shouldBypassProxy(targetUrl, env)) return undefined;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(targetUrl);
+  } catch {
+    return undefined;
+  }
+
+  const protocol = parsed.protocol.toLowerCase();
+  const keys = protocol === 'ws:'
+    ? ['WS_PROXY', 'ws_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy']
+    : protocol === 'wss:'
+      ? ['WSS_PROXY', 'wss_proxy', 'HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy', 'HTTP_PROXY', 'http_proxy']
+      : protocol === 'http:'
+        ? ['HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy']
+        : ['HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy', 'HTTP_PROXY', 'http_proxy'];
+
+  const proxyUrl = firstEnvValue(env, keys);
+  if (!proxyUrl) return undefined;
+
+  try {
+    new URL(proxyUrl);
+    return proxyUrl;
+  } catch {
+    console.warn('[feishu-adapter] Ignoring invalid proxy URL');
+    return undefined;
+  }
+}
+
+function getWsProxyUrl(site: 'feishu' | 'lark', env: EnvLike = process.env): string | undefined {
+  return getProxyUrlForUrl(feishuWsBaseUrl(site), env);
+}
+
+function maskProxyUrl(proxyUrl: string): string {
+  try {
+    const parsed = new URL(proxyUrl);
+    if (parsed.username) parsed.username = '***';
+    if (parsed.password) parsed.password = '***';
+    return parsed.toString();
+  } catch {
+    return '<invalid-proxy-url>';
+  }
+}
+
+function createProxyAgent(proxyUrl: string): HttpsProxyAgent<string> {
+  return new HttpsProxyAgent(proxyUrl);
+}
+
+function withHttpProxyOptions<D>(
+  options: lark.HttpRequestOptions<D>,
+  site: 'feishu' | 'lark',
+  env: EnvLike,
+): lark.HttpRequestOptions<D> {
+  const targetUrl = options.url?.startsWith('http')
+    ? options.url
+    : `${feishuApiBaseUrl(site)}${options.url?.startsWith('/') ? '' : '/'}${options.url || ''}`;
+  const proxyUrl = getProxyUrlForUrl(targetUrl, env);
+
+  if (!proxyUrl) return options;
+
+  const agent = createProxyAgent(proxyUrl);
+  return {
+    ...options,
+    // Axios otherwise applies its own env proxy resolution on top of the agent.
+    proxy: false,
+    httpAgent: agent,
+    httpsAgent: agent,
+  } as lark.HttpRequestOptions<D>;
+}
+
+function buildHttpInstanceWithEnvProxy(
+  site: 'feishu' | 'lark',
+  env: EnvLike = process.env,
+  baseHttpInstance: lark.HttpInstance = lark.defaultHttpInstance,
+): lark.HttpInstance {
+  const withProxy = <D>(options: lark.HttpRequestOptions<D>): lark.HttpRequestOptions<D> =>
+    withHttpProxyOptions(options, site, env);
+
+  return {
+    request: (options: lark.HttpRequestOptions<unknown>) =>
+      baseHttpInstance.request(withProxy(options)),
+    get: (url: string, options: lark.HttpRequestOptions<unknown> = {}) =>
+      baseHttpInstance.get(url, withProxy({ ...options, url, method: options.method || 'GET' })),
+    delete: (url: string, options: lark.HttpRequestOptions<unknown> = {}) =>
+      baseHttpInstance.delete(url, withProxy({ ...options, url, method: options.method || 'DELETE' })),
+    head: (url: string, options: lark.HttpRequestOptions<unknown> = {}) =>
+      baseHttpInstance.head(url, withProxy({ ...options, url, method: options.method || 'HEAD' })),
+    options: (url: string, options: lark.HttpRequestOptions<unknown> = {}) =>
+      baseHttpInstance.options(url, withProxy({ ...options, url, method: options.method || 'OPTIONS' })),
+    post: (url: string, data?: unknown, options: lark.HttpRequestOptions<unknown> = {}) =>
+      baseHttpInstance.post(url, data, withProxy({ ...options, url, data, method: options.method || 'POST' })),
+    put: (url: string, data?: unknown, options: lark.HttpRequestOptions<unknown> = {}) =>
+      baseHttpInstance.put(url, data, withProxy({ ...options, url, data, method: options.method || 'PUT' })),
+    patch: (url: string, data?: unknown, options: lark.HttpRequestOptions<unknown> = {}) =>
+      baseHttpInstance.patch(url, data, withProxy({ ...options, url, data, method: options.method || 'PATCH' })),
+  } as lark.HttpInstance;
+}
+
+function buildWsClientOptions(
+  appId: string,
+  appSecret: string,
+  domain: string | lark.Domain,
+  site: 'feishu' | 'lark',
+  env: EnvLike = process.env,
+  httpInstance?: lark.HttpInstance,
+): FeishuWsClientOptions {
+  const options: FeishuWsClientOptions = {
+    appId,
+    appSecret,
+    domain,
+    httpInstance,
+  };
+
+  const proxyUrl = getWsProxyUrl(site, env);
+  if (proxyUrl) {
+    options.agent = new HttpsProxyAgent(proxyUrl);
+  }
+
+  return options;
+}
+
+function describeEnabledProxies(site: 'feishu' | 'lark', env: EnvLike = process.env): string[] {
+  const descriptions: string[] = [];
+  for (const target of feishuProxyTargets(site)) {
+    const proxyUrl = getProxyUrlForUrl(target.url, env);
+    if (proxyUrl) descriptions.push(`${target.label}=${maskProxyUrl(proxyUrl)}`);
+  }
+  return descriptions;
+}
 
 function buildStreamingCardBody(
   content: string,
@@ -325,12 +525,18 @@ export class FeishuAdapter extends BaseChannelAdapter {
     const domain = site === 'lark'
       ? lark.Domain.Lark
       : lark.Domain.Feishu;
+    const httpInstance = buildHttpInstanceWithEnvProxy(site);
+    const enabledProxies = describeEnabledProxies(site);
+    if (enabledProxies.length > 0) {
+      console.log('[feishu-adapter] Env proxy enabled:', enabledProxies.join(', '));
+    }
 
     // Create REST client
     this.restClient = new lark.Client({
       appId,
       appSecret,
       domain,
+      httpInstance,
     });
 
     // Resolve bot identity for @mention detection
@@ -348,12 +554,10 @@ export class FeishuAdapter extends BaseChannelAdapter {
       }) as any,
     });
 
-    // Create and start WSClient
-    this.wsClient = new lark.WSClient({
-      appId,
-      appSecret,
-      domain,
-    });
+    // Create and start WSClient. `httpInstance` covers endpoint discovery,
+    // while `agent` covers the final WSS socket.
+    const wsClientOptions = buildWsClientOptions(appId, appSecret, domain, site, process.env, httpInstance);
+    this.wsClient = new lark.WSClient(wsClientOptions as ConstructorParameters<typeof lark.WSClient>[0]);
 
     // Monkey-patch WSClient.handleEventData to support card action events (type: "card").
     // The SDK's WSClient only processes type="event" messages. Card action callbacks
@@ -2125,3 +2329,13 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
 // Self-register so bridge-manager can create FeishuAdapter via the registry.
 registerAdapterFactory('feishu', (instance) => new FeishuAdapter(instance));
+
+export const _testOnly = {
+  buildWsClientOptions,
+  buildHttpInstanceWithEnvProxy,
+  getProxyUrlForUrl,
+  getWsProxyUrl,
+  maskProxyUrl,
+  shouldBypassProxy,
+  withHttpProxyOptions,
+};

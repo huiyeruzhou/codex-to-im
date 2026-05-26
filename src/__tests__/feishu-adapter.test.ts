@@ -2,7 +2,7 @@ import './test-setup.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { FeishuAdapter } from '../lib/bridge/adapters/feishu-adapter.js';
+import { FeishuAdapter, _testOnly } from '../lib/bridge/adapters/feishu-adapter.js';
 
 function createDeferred<T = void>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -15,6 +15,115 @@ function createDeferred<T = void>() {
 }
 
 describe('feishu-adapter structured streaming regions', () => {
+  it('passes an HTTPS proxy agent to the Feishu WS client options', () => {
+    const httpInstance = {} as any;
+    const options = _testOnly.buildWsClientOptions(
+      'app-id',
+      'app-secret',
+      'https://open.feishu.cn',
+      'feishu',
+      { HTTPS_PROXY: 'http://proxy.example.test:8118' },
+      httpInstance,
+    );
+
+    assert.equal(options.appId, 'app-id');
+    assert.equal(options.appSecret, 'app-secret');
+    assert.equal(options.httpInstance, httpInstance);
+    assert.ok(options.agent, 'expected WS proxy agent');
+    assert.equal(typeof (options.agent as { addRequest?: unknown }).addRequest, 'function');
+  });
+
+  it('respects NO_PROXY per Feishu proxy target', () => {
+    const env = {
+      HTTPS_PROXY: 'http://proxy.example.test:8118',
+      NO_PROXY: 'open.feishu.cn',
+    };
+
+    assert.equal(_testOnly.getProxyUrlForUrl('https://open.feishu.cn/open-apis/bot/v3/info', env), undefined);
+    assert.equal(
+      _testOnly.getProxyUrlForUrl('wss://pbbot-ws.feishu.cn/ws', env),
+      'http://proxy.example.test:8118',
+    );
+  });
+
+  it('respects wildcard NO_PROXY when resolving the Feishu WS proxy', () => {
+    const proxyUrl = _testOnly.getWsProxyUrl('feishu', {
+      HTTPS_PROXY: 'http://proxy.example.test:8118',
+      NO_PROXY: '.feishu.cn',
+    });
+
+    assert.equal(proxyUrl, undefined);
+  });
+
+  it('prefers WSS_PROXY for Feishu websocket targets', () => {
+    const proxyUrl = _testOnly.getWsProxyUrl('feishu', {
+      HTTPS_PROXY: 'http://https-proxy.example.test:8118',
+      WSS_PROXY: 'http://wss-proxy.example.test:8118',
+    });
+
+    assert.equal(proxyUrl, 'http://wss-proxy.example.test:8118');
+  });
+
+  it('adds proxy agents to Feishu SDK HTTP requests', async () => {
+    const requests: Array<Record<string, any>> = [];
+    const baseHttpInstance = {
+      request: async (options: Record<string, any>) => {
+        requests.push(options);
+        return { ok: true };
+      },
+    } as any;
+    const httpInstance = _testOnly.buildHttpInstanceWithEnvProxy(
+      'feishu',
+      { HTTPS_PROXY: 'http://proxy.example.test:8118' },
+      baseHttpInstance,
+    );
+
+    await httpInstance.request({
+      method: 'post',
+      url: 'https://open.feishu.cn/callback/ws/endpoint',
+      data: {},
+    });
+
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].proxy, false);
+    assert.equal(typeof requests[0].httpsAgent?.addRequest, 'function');
+  });
+
+  it('does not add HTTP proxy agents when NO_PROXY matches the request target', async () => {
+    const requests: Array<Record<string, any>> = [];
+    const baseHttpInstance = {
+      request: async (options: Record<string, any>) => {
+        requests.push(options);
+        return { ok: true };
+      },
+    } as any;
+    const httpInstance = _testOnly.buildHttpInstanceWithEnvProxy(
+      'feishu',
+      {
+        HTTPS_PROXY: 'http://proxy.example.test:8118',
+        NO_PROXY: '.feishu.cn',
+      },
+      baseHttpInstance,
+    );
+
+    await httpInstance.request({
+      method: 'post',
+      url: 'https://open.feishu.cn/callback/ws/endpoint',
+      data: {},
+    });
+
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].proxy, undefined);
+    assert.equal(requests[0].httpsAgent, undefined);
+  });
+
+  it('masks proxy credentials in logs', () => {
+    assert.equal(
+      _testOnly.maskProxyUrl('http://user:secret@proxy.example.test:8118/path?token=abc'),
+      'http://***:***@proxy.example.test:8118/path?token=abc',
+    );
+  });
+
   it('does not add typing reactions while starting or ending a stream', async () => {
     const reactionCreateCalls: Array<Record<string, any>> = [];
     const reactionDeleteCalls: Array<Record<string, any>> = [];
