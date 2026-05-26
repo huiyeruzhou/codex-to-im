@@ -33,7 +33,7 @@ import type { BaseChannelAdapter } from './channel-adapter.js';
 import type { BridgeSession } from './host.js';
 import type { ChannelBinding, InboundMessage, OutboundAttachment } from './types.js';
 import { recordBindingChange, type BindingChangeAction } from './binding-audit.js';
-import { isDangerousInput, sanitizeInput, validateMode, validateSessionId } from './security/validators.js';
+import { isDangerousInput, parseMode, sanitizeInput, validateSessionId } from './security/validators.js';
 import { parseSandboxMode } from '../../runtime-options.js';
 import {
   ensureWorkingDirectoryExists,
@@ -59,7 +59,8 @@ import { readDesktopSessionMessages } from '../../desktop-sessions.js';
 import { getExplicitDesktopThreadId } from './turns/turn-classifier.js';
 import { buildFencedCodeBlock } from './markdown/fence.js';
 
-const MODE_OPTIONS_TEXT = '可选：`code`（直接执行，默认） `plan`（先分析再行动） `ask`（轻对话 / 草稿）';
+const MODE_OPTIONS_TEXT = '可选：`normal`（普通执行，默认） `yolo`（跳过审批和沙箱）。兼容：`code` 等同于 `normal`。';
+const CODEX_PROVIDER_OPTIONS_TEXT = '可选：`sdk`（默认 SDK 路径） `tmux`（Codex TUI/tmux 路径）';
 const REASONING_OPTIONS_TEXT = '可选：`1=minimal` `2=low` `3=medium` `4=high` `5=xhigh`';
 const SANDBOX_OPTIONS_TEXT = '可选：`read-only` `workspace-write` `danger-full-access` `default`（回到全局默认）';
 const NETWORK_OPTIONS_TEXT = '可选：`on`/`true` 开启网络，`off`/`false` 关闭网络，`default` 回到全局默认。';
@@ -86,6 +87,20 @@ function parseNetworkAccessArg(raw: string): boolean | 'default' | null {
 
 function formatNetworkAccess(enabled: boolean): string {
   return enabled ? 'enabled' : 'disabled';
+}
+
+function parseCodexProviderArg(raw: string): 'sdk' | 'tmux' | null {
+  const token = raw.trim().toLowerCase();
+  if (token === 'sdk' || token === 'tmux') return token;
+  return null;
+}
+
+function formatSessionMode(binding: ChannelBinding | null | undefined, session?: BridgeSession | null): string {
+  return parseMode(binding?.mode || session?.preferred_mode || '') || 'normal';
+}
+
+function formatSessionCodexProvider(session?: BridgeSession | null): string {
+  return session?.codex_provider || 'default';
 }
 
 function buildActiveTaskSwitchBlockedResponse(
@@ -237,7 +252,8 @@ export async function handleBridgeCommand(
         [
           ['标题', getSessionDisplayName(session, binding.workingDirectory)],
           ['目录', formatCommandPath(binding.workingDirectory)],
-          ['模式', binding.mode],
+          ['模式', formatSessionMode(binding, session)],
+          ['Provider', formatSessionCodexProvider(session)],
         ],
         [
           parsedArgs.args.trim() ? '接下来直接发送文本即可继续。' : '已在当前工作目录下新建一个线程。接下来直接发送文本即可继续。',
@@ -273,7 +289,7 @@ export async function handleBridgeCommand(
           break;
         }
         router.updateBinding(binding.id, {
-          mode: 'ask',
+          mode: 'normal',
           workingDirectory: draftSession.working_directory,
           model: draftSession.model || binding.model,
         });
@@ -294,7 +310,7 @@ export async function handleBridgeCommand(
             ['标题', getSessionDisplayName(draftSession, draftSession.working_directory)],
             ['目录', formatCommandPath(draftSession.working_directory)],
             ['过期时间', formatCommandDateTime(draftSession.expires_at)],
-            ['模式', 'ask'],
+            ['模式', 'normal'],
           ],
           ['这是隐藏的草稿线程，不会出现在常规会话列表中。'],
           responseParseMode === 'Markdown',
@@ -491,35 +507,85 @@ export async function handleBridgeCommand(
 
     case '/mode': {
       const binding = currentBinding || router.resolve(msg.address);
+      const session = store.getSession(binding.codepilotSessionId);
+      const mode = formatSessionMode(binding, session);
       if (!args) {
         response = buildCommandFields(
           '当前模式',
-          [['模式', binding.mode]],
-          [MODE_OPTIONS_TEXT, '发送 `/m code`、`/m plan` 或 `/m ask` 切换。完整命令也兼容：`/mode code`。'],
+          [
+            ['模式', mode],
+            ['Provider', formatSessionCodexProvider(session)],
+          ],
+          [MODE_OPTIONS_TEXT, '发送 `/m normal` 或 `/m yolo` 切换。完整命令也兼容：`/mode normal`。'],
           responseParseMode === 'Markdown',
         );
         break;
       }
-      if (!validateMode(args)) {
+      const requestedMode = parseMode(args);
+      if (!requestedMode) {
         response = buildCommandFields(
           '模式用法',
-          [['命令', '`/mode plan|code|ask`']],
+          [['命令', '`/mode normal|yolo`']],
           [MODE_OPTIONS_TEXT],
           responseParseMode === 'Markdown',
         );
         break;
       }
-      const session = store.getSession(binding.codepilotSessionId);
       if (session) {
         store.updateSession(session.id, {
-          preferred_mode: args,
+          preferred_mode: requestedMode,
         });
       }
-      router.updateBinding(binding.id, { mode: args });
+      router.updateBinding(binding.id, { mode: requestedMode });
       response = buildCommandFields(
         '已切换模式',
-        [['模式', args]],
+        [
+          ['模式', requestedMode],
+          ['Provider', formatSessionCodexProvider(session)],
+        ],
         [MODE_OPTIONS_TEXT],
+        responseParseMode === 'Markdown',
+      );
+      break;
+    }
+
+    case '/provider': {
+      const binding = currentBinding || router.resolve(msg.address);
+      const session = store.getSession(binding.codepilotSessionId);
+      if (!session) {
+        response = '当前会话不存在。';
+        break;
+      }
+      if (!args) {
+        response = buildCommandFields(
+          '当前 Codex Provider',
+          [
+            ['模式', formatSessionMode(binding, session)],
+            ['Provider', formatSessionCodexProvider(session)],
+          ],
+          [CODEX_PROVIDER_OPTIONS_TEXT, '发送 `/provider sdk` 或 `/provider tmux` 切换；修改从下一轮 Codex 请求开始生效。'],
+          responseParseMode === 'Markdown',
+        );
+        break;
+      }
+      const requestedProvider = parseCodexProviderArg(args);
+      if (!requestedProvider) {
+        response = buildCommandFields(
+          'Codex Provider 用法',
+          [['命令', '`/provider sdk|tmux`']],
+          [CODEX_PROVIDER_OPTIONS_TEXT],
+          responseParseMode === 'Markdown',
+        );
+        break;
+      }
+      store.updateSession(session.id, { codex_provider: requestedProvider });
+      response = buildCommandFields(
+        '已切换 Codex Provider',
+        [
+          ['模式', formatSessionMode(binding, session)],
+          ['Provider', requestedProvider],
+        ],
+        ['修改从下一轮 Codex 请求开始生效；正在运行的任务请先 `/stop` 后重发。'],
         responseParseMode === 'Markdown',
       );
       break;
@@ -757,7 +823,8 @@ export async function handleBridgeCommand(
         [
           ['标题', threadTitle || getSessionDisplayName(session, binding.workingDirectory)],
           ['目录', formatCommandPath(binding.workingDirectory)],
-          ['模式', binding.mode],
+          ['模式', formatSessionMode(binding, session)],
+          ['Provider', formatSessionCodexProvider(session)],
           ['当前模型', formatDisplayedModel(currentModel)],
           ['类型', sessionKind],
           ['运行状态', formatRuntimeStatus(session)],
@@ -1115,7 +1182,8 @@ export async function handleBridgeCommand(
         '- `/his json` 导出最近原始记录为 JSON 文件并发送',
         '',
         '**设置**',
-        '- `/m` 查看模式；可用 `code | plan | ask`',
+        '- `/m` 查看模式；可用 `normal | yolo`（`code` 会映射为 `normal`）',
+        '- `/provider` 查看或切换 Codex Provider；可用 `sdk | tmux`',
         '- `/r` 查看思考级别；可用 `1 | 2 | 3 | 4 | 5`',
         '- `/sb` 查看或切换 Codex 沙箱；可用 `read-only | workspace-write | danger-full-access | default`',
         '- `/net` 查看或切换 Codex 网络；可用 `on | off | default`',

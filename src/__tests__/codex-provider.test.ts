@@ -963,6 +963,40 @@ describe('CodexProvider image input', () => {
     assert.equal(capturedStartOptions?.approvalPolicy, 'on-request');
   });
 
+  it('maps yolo mode to danger-full-access and never approval policy for SDK threads', async () => {
+    const { CodexProvider } = await import('../codex-provider.js');
+    const { PendingPermissions } = await import('../permission-gateway.js');
+    const provider = new CodexProvider(new PendingPermissions());
+
+    let capturedStartOptions: Record<string, unknown> | undefined;
+    const mockThread = {
+      runStreamed: () => ({
+        events: (async function* () {
+          yield { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1, cached_input_tokens: 0 } };
+        })(),
+      }),
+    };
+    (provider as any).sdk = { Codex: class { constructor() {} } };
+    (provider as any).codex = {
+      startThread: (opts: Record<string, unknown>) => {
+        capturedStartOptions = opts;
+        return mockThread;
+      },
+    };
+
+    const stream = provider.streamChat({
+      prompt: 'hello',
+      sessionId: 'yolo-sdk-session',
+      sandboxMode: 'workspace-write',
+      permissionMode: 'never',
+      codexMode: 'yolo',
+    });
+    await collectStream(stream);
+
+    assert.equal(capturedStartOptions?.sandboxMode, 'danger-full-access');
+    assert.equal(capturedStartOptions?.approvalPolicy, 'never');
+  });
+
   it('logs a redacted Codex exec preview before starting a turn', async () => {
     const { CodexProvider } = await import('../codex-provider.js');
     const { PendingPermissions } = await import('../permission-gateway.js');

@@ -129,22 +129,33 @@ function toApprovalPolicy(permissionMode?: string): string {
   }
 }
 
+function isYoloMode(params: StreamChatParams): boolean {
+  return params.codexMode === 'yolo' || params.permissionMode === 'never';
+}
+
 function shouldSkipGitRepoCheck(params: StreamChatParams): boolean {
   return params.skipGitRepoCheck === true || process.env.CTI_CODEX_SKIP_GIT_REPO_CHECK === 'true';
 }
 
 export function buildCodexTuiArgs(params: StreamChatParams, imagePaths: string[]): string[] {
   const args: string[] = [];
-  const sandboxMode = normalizeSandboxMode(params.sandboxMode) as CodexSandboxMode;
+  const yoloMode = isYoloMode(params);
+  const sandboxMode = yoloMode ? 'danger-full-access' : normalizeSandboxMode(params.sandboxMode) as CodexSandboxMode;
   const modelReasoningEffort = parseReasoningEffort(params.modelReasoningEffort) as CodexReasoningEffort | undefined;
 
   if (params.forceModel && params.model) args.push('--model', params.model);
-  if (sandboxMode) args.push('--sandbox', sandboxMode);
+  if (yoloMode) {
+    args.push('--dangerously-bypass-approvals-and-sandbox');
+  } else if (sandboxMode) {
+    args.push('--sandbox', sandboxMode);
+  }
   if (params.workingDirectory) args.push('--cd', params.workingDirectory);
   if (shouldSkipGitRepoCheck(params)) {
     args.push('--config', 'skip_git_repo_check=true');
   }
-  args.push('--ask-for-approval', toApprovalPolicy(params.permissionMode));
+  if (!yoloMode) {
+    args.push('--ask-for-approval', toApprovalPolicy(params.permissionMode));
+  }
   if (modelReasoningEffort) {
     args.push('--config', `model_reasoning_effort="${modelReasoningEffort}"`);
   }

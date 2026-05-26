@@ -272,6 +272,8 @@ interface UiSessionSummary {
   threadId: string;
   title: string;
   cwd: string;
+  mode: string;
+  codexProvider: string;
   originator: string;
   source: string;
   lastEventAt: string;
@@ -355,6 +357,14 @@ function findBridgeSessionByDesktopThread(store: JsonFileStore, threadId: string
   ));
 }
 
+function uiSessionMode(session: BridgeSession | null | undefined): string {
+  return session?.preferred_mode === 'yolo' ? 'yolo' : 'normal';
+}
+
+function uiCodexProvider(session: BridgeSession | null | undefined): string {
+  return session?.codex_provider || 'default';
+}
+
 function applyUiSessionMeta(summary: UiSessionSummary, meta: Record<string, UiSessionMeta>): UiSessionSummary {
   const name = meta[summary.targetKey]?.name?.trim();
   return name ? { ...summary, title: name } : summary;
@@ -376,6 +386,8 @@ function bridgeSummary(session: BridgeSession, meta: Record<string, UiSessionMet
     threadId: getStoredCodexThreadId(session),
     title: getBridgeSessionTitle(session),
     cwd: session.working_directory || '',
+    mode: uiSessionMode(session),
+    codexProvider: uiCodexProvider(session),
     originator: 'Bridge / IM',
     source: 'bridge',
     lastEventAt: session.updated_at || session.created_at || '',
@@ -419,6 +431,8 @@ function buildUiSessionsPayload(store: JsonFileStore, limit?: number): UiSession
       threadId: session.threadId,
       title: linked ? getBridgeSessionTitle(linked) : session.title,
       cwd: session.cwd,
+      mode: linked ? uiSessionMode(linked) : '-',
+      codexProvider: linked ? uiCodexProvider(linked) : '-',
       originator: session.originator || 'Codex Desktop',
       source: session.source || 'desktop',
       lastEventAt: session.lastEventAt,
@@ -466,6 +480,8 @@ function desktopSessionToSummary(threadId: string, store?: JsonFileStore): UiSes
     threadId: session.threadId,
     title: linked ? getBridgeSessionTitle(linked) : session.title,
     cwd: session.cwd,
+    mode: linked ? uiSessionMode(linked) : '-',
+    codexProvider: linked ? uiCodexProvider(linked) : '-',
     originator: session.originator || 'Codex Desktop',
     source: session.source || 'desktop',
     lastEventAt: session.lastEventAt,
@@ -554,8 +570,11 @@ function sanitizeSessionConfig(payload: Record<string, unknown>): Partial<Bridge
   if (typeof payload.model === 'string') {
     updates.model = payload.model.trim();
   }
-  if (payload.preferredMode === 'code' || payload.preferredMode === 'plan' || payload.preferredMode === 'ask') {
-    updates.preferred_mode = payload.preferredMode;
+  if (payload.preferredMode === 'yolo' || payload.preferredMode === 'normal' || payload.preferredMode === 'code') {
+    updates.preferred_mode = payload.preferredMode === 'yolo' ? 'yolo' : 'normal';
+  }
+  if (payload.codexProvider === 'sdk' || payload.codexProvider === 'tmux' || payload.codexProvider === '') {
+    updates.codex_provider = payload.codexProvider ? payload.codexProvider : undefined;
   }
   if (typeof payload.systemPrompt === 'string') {
     updates.system_prompt = payload.systemPrompt.trim() || undefined;
@@ -592,7 +611,8 @@ function sessionConfigPayload(session: BridgeSession) {
     title: getBridgeSessionTitle(session),
     workingDirectory: session.working_directory || '',
     model: session.model || '',
-    preferredMode: session.preferred_mode || 'code',
+    preferredMode: session.preferred_mode === 'yolo' ? 'yolo' : 'normal',
+    codexProvider: session.codex_provider || '',
     systemPrompt: session.system_prompt || '',
     reasoningEffort: session.reasoning_effort || '',
     codexSandboxMode: session.codex_sandbox_mode || '',
@@ -796,7 +816,7 @@ function mergeConfig(payload: Record<string, unknown>): Config {
         : availableCodexModelSlugs.has(rawDefaultModel)
           ? rawDefaultModel
           : current.defaultModel,
-    defaultMode: payload.defaultMode === 'plan' || payload.defaultMode === 'ask' ? payload.defaultMode : 'code',
+    defaultMode: payload.defaultMode === 'yolo' ? 'yolo' : 'normal',
     historyMessageLimit: asPositiveInt(payload.historyMessageLimit) || current.historyMessageLimit || 8,
     streamStatusIdleStartSeconds: asPositiveInt(payload.streamStatusIdleStartSeconds)
       || current.streamStatusIdleStartSeconds
@@ -1422,9 +1442,8 @@ function renderHtml(): string {
                 <label>
                   默认模式
                   <select id="defaultMode">
-                    <option value="code">code</option>
-                    <option value="plan">plan</option>
-                    <option value="ask">ask</option>
+                    <option value="normal">normal</option>
+                    <option value="yolo">yolo</option>
                   </select>
                 </label>
                 <label>
@@ -1547,7 +1566,8 @@ function renderHtml(): string {
                 <h3 class="command-section-title">设置与切换</h3>
                 <div class="command-list">
                   <div class="command-list-head"><div>命令</div><div>原始命令</div><div>说明</div></div>
-                  <div class="command-item"><div class="command-col-command"><code>/m</code></div><div class="command-col-original"><code>/mode</code></div><div class="command-col-desc">查看当前模式；可选 <code>code</code>、<code>plan</code>、<code>ask</code>。</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>/m</code></div><div class="command-col-original"><code>/mode</code></div><div class="command-col-desc">查看当前模式；可选 <code>normal</code>、<code>yolo</code>，<code>code</code> 会映射为 <code>normal</code>。</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>/provider</code></div><div class="command-col-original"><code>/provider</code></div><div class="command-col-desc">查看或切换当前 IM 会话使用的 Codex Provider；可选 <code>sdk</code>、<code>tmux</code>。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/r</code></div><div class="command-col-original"><code>/reasoning</code></div><div class="command-col-desc">查看当前思考级别；可选 <code>1=minimal</code>、<code>2=low</code>、<code>3=medium</code>、<code>4=high</code>、<code>5=xhigh</code>。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/sb</code></div><div class="command-col-original"><code>/sandbox</code></div><div class="command-col-desc">查看或切换当前 IM 会话的 Codex 沙箱；可选 <code>read-only</code>、<code>workspace-write</code>、<code>danger-full-access</code>、<code>default</code>。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/net</code></div><div class="command-col-original"><code>/network</code></div><div class="command-col-desc">查看或切换当前 IM 会话的网络访问；可选 <code>on</code>、<code>off</code>、<code>default</code>。</div></div>
@@ -1685,7 +1705,8 @@ function renderHtml(): string {
           </div>
           <div class="field-row triple">
             <label>模型<select id="sessionConfigModel"></select></label>
-            <label>默认模式<select id="sessionConfigMode"><option value="code">code</option><option value="plan">plan</option><option value="ask">ask</option></select></label>
+            <label>默认模式<select id="sessionConfigMode"><option value="normal">normal</option><option value="yolo">yolo</option></select></label>
+            <label>Codex Provider<select id="sessionConfigProvider"><option value="">default</option><option value="sdk">sdk</option><option value="tmux">tmux</option></select></label>
             <label>思考级别<select id="sessionConfigReasoning"><option value="">跟随全局</option><option value="medium">medium</option><option value="minimal">minimal</option><option value="low">low</option><option value="high">high</option><option value="xhigh">xhigh</option></select></label>
           </div>
           <div class="field-row">
@@ -1872,6 +1893,12 @@ function renderHtml(): string {
         return '<button type="button" class="source-toggle" data-action="toggle-source-display" data-target-key="' + escapeHtml(targetKey) + '" title="点击切换来源显示">' + content + '</button>';
       }
 
+      function renderModeProviderValue(mode, provider) {
+        return ''
+          + '<div class="session-value">Mode: <code>' + escapeHtml(mode || 'normal') + '</code></div>'
+          + '<div class="session-value">Provider: <code>' + escapeHtml(provider || 'default') + '</code></div>';
+      }
+
       function renderSessionTitle(session, marksHtml) {
         const targetKey = sessionTargetKey(session);
         return ''
@@ -1983,15 +2010,16 @@ function renderHtml(): string {
             +   '<div class="binding-detail">接入方式：该通道收到下一条新聊天后，会直接进入当前指定会话。</div>'
             +   '<div class="binding-detail">当前会话：<code>' + escapeHtml(binding.currentSessionId ? binding.currentSessionId.slice(0, 8) + '...' : 'not-shared') + '</code> · ' + escapeHtml(binding.currentSessionName || binding.currentTargetLabel || '未指定') + '</div>'
             +   '<div class="binding-detail">当前目标：' + escapeHtml(binding.currentTargetLabel || '未指定') + '</div>'
-            +   '<div class="binding-detail">当前 thread：<code>' + escapeHtml(binding.currentThreadId || 'not-shared') + '</code></div>'
-            + '</article>';
+          +   '<div class="binding-detail">当前 thread：<code>' + escapeHtml(binding.currentThreadId || 'not-shared') + '</code></div>'
+          +   '<div class="binding-detail">Mode / Provider：<code>' + escapeHtml(binding.mode || 'normal') + '</code> · <code>' + escapeHtml(binding.codexProvider || 'default') + '</code></div>'
+          + '</article>';
         }
         return ''
           + '<article class="binding-item" data-binding-id="' + escapeHtml(binding.id) + '">'
           +   '<div class="binding-head">'
           +     '<div class="binding-title">' + escapeHtml(binding.chatDisplayName || binding.chatId) + '</div>'
           +     '<div class="actions">'
-          +       '<div class="small">' + escapeHtml(binding.mode) + '</div>'
+          +       '<div class="small">' + escapeHtml((binding.mode || 'normal') + ' · ' + (binding.codexProvider || 'default')) + '</div>'
           +       '<button type="button" data-action="unbind-binding" data-binding-id="' + escapeHtml(binding.id) + '">解绑当前聊天</button>'
           +     '</div>'
           +   '</div>'
@@ -1999,6 +2027,7 @@ function renderHtml(): string {
           +   '<div class="binding-detail">当前会话：<code>' + escapeHtml(binding.currentSessionId.slice(0, 8)) + '...</code> · ' + escapeHtml(binding.currentSessionName) + '</div>'
           +   '<div class="binding-detail">当前目标：' + escapeHtml(binding.currentTargetLabel || '未绑定') + '</div>'
           +   '<div class="binding-detail">当前 thread：<code>' + escapeHtml(binding.currentThreadId || 'not-shared') + '</code></div>'
+          +   '<div class="binding-detail">Mode / Provider：<code>' + escapeHtml(binding.mode || 'normal') + '</code> · <code>' + escapeHtml(binding.codexProvider || 'default') + '</code></div>'
           +   '<div class="binding-detail">运行状态：' + escapeHtml(bindingRuntimeText(binding)) + '</div>'
           +   '<div class="binding-detail">共享镜像：' + escapeHtml(bindingMirrorText(binding)) + '</div>'
           +   '<div class="binding-detail">目录：' + escapeHtml(binding.workingDirectory || '~') + '</div>'
@@ -2583,6 +2612,10 @@ function renderHtml(): string {
           +       '<div class="session-value">' + renderSourceToggle(session) + '</div>'
           +     '</div>'
           +     '<div class="session-cell">'
+          +       '<div class="session-label">状态</div>'
+          +       renderModeProviderValue(session.mode, session.codexProvider)
+          +     '</div>'
+          +     '<div class="session-cell">'
           +       '<div class="session-label">目录</div>'
           +       '<div class="session-path">' + escapeHtml(session.cwd || '(no cwd)') + '</div>'
           +     '</div>'
@@ -2635,6 +2668,10 @@ function renderHtml(): string {
           +       '<div class="session-value session-date">' + escapeHtml(formatTime(session.lastEventAt || '')) + '</div>'
           +     '</div>'
           +     '<div class="session-cell">'
+          +       '<div class="session-label">状态</div>'
+          +       renderModeProviderValue(session.mode, session.codexProvider)
+          +     '</div>'
+          +     '<div class="session-cell">'
           +       '<div class="session-label">来源</div>'
           +       '<div class="session-value">' + renderSourceToggle(session) + '</div>'
           +       '<div class="session-actions">'
@@ -2657,6 +2694,7 @@ function renderHtml(): string {
           + '<tr class="session-table-row" data-session-target-key="' + escapeHtml(targetKey) + '">'
           +   '<td><div class="binding-table-title session-table-title">' + renderSessionTitle(session, markHtml) + '</div><div class="binding-table-thread">' + identityLabel + ': <code>' + escapeHtml(identityValue) + '</code></div></td>'
           +   '<td><div class="binding-table-path">' + escapeHtml(session.cwd || '(no cwd)') + '</div></td>'
+          +   '<td>' + renderModeProviderValue(session.mode, session.codexProvider) + '</td>'
           +   '<td><div class="binding-table-source">' + renderSourceToggle(session) + '</div></td>'
           +   '<td><div class="binding-table-thread session-date">' + escapeHtml(formatTime(session.lastEventAt || '')) + '</div></td>'
           +   '<td><div class="session-actions compact-actions">' + actionHtml + '</div></td>'
@@ -2719,7 +2757,7 @@ function renderHtml(): string {
         list.innerHTML = ''
           + '<div class="binding-table-wrap session-table-wrap">'
           +   '<table class="binding-table session-table">'
-          +     '<thead><tr><th>会话</th><th>目录</th><th>来源</th><th>最近活动</th><th>操作</th></tr></thead>'
+          +     '<thead><tr><th>会话</th><th>目录</th><th>状态</th><th>来源</th><th>最近活动</th><th>操作</th></tr></thead>'
           +     '<tbody>'
           +       sessions.map((session) => renderDesktopSessionListItem(session)).join('')
           +     '</tbody>'
@@ -3040,7 +3078,7 @@ function renderHtml(): string {
       function fillForm(config) {
         state.config = config;
         document.getElementById('runtime').value = config.runtime || 'codex';
-        document.getElementById('defaultMode').value = config.defaultMode || 'code';
+        document.getElementById('defaultMode').value = config.defaultMode === 'yolo' ? 'yolo' : 'normal';
         document.getElementById('historyMessageLimit').value = String(config.historyMessageLimit || 8);
         document.getElementById('streamStatusIdleStartSeconds').value = String(config.streamStatusIdleStartSeconds || 180);
         document.getElementById('streamStatusCheckIntervalSeconds').value = String(config.streamStatusCheckIntervalSeconds || 10);
@@ -3499,7 +3537,8 @@ function renderHtml(): string {
         document.getElementById('sessionConfigName').value = config.name || config.title || '';
         document.getElementById('sessionConfigCwd').value = config.workingDirectory || '';
         renderModelOptionsForSelect(document.getElementById('sessionConfigModel'), config.model || '', '跟随全局 / Codex 默认模型');
-        document.getElementById('sessionConfigMode').value = config.preferredMode || 'code';
+        document.getElementById('sessionConfigMode').value = config.preferredMode === 'yolo' ? 'yolo' : 'normal';
+        document.getElementById('sessionConfigProvider').value = config.codexProvider || '';
         document.getElementById('sessionConfigReasoning').value = config.reasoningEffort || '';
         document.getElementById('sessionConfigSandbox').value = config.codexSandboxMode || '';
         document.getElementById('sessionConfigNetwork').checked = config.codexNetworkAccess === undefined
@@ -3515,6 +3554,7 @@ function renderHtml(): string {
           workingDirectory: document.getElementById('sessionConfigCwd').value,
           model: document.getElementById('sessionConfigModel').value,
           preferredMode: document.getElementById('sessionConfigMode').value,
+          codexProvider: document.getElementById('sessionConfigProvider').value,
           reasoningEffort: document.getElementById('sessionConfigReasoning').value,
           codexSandboxMode: document.getElementById('sessionConfigSandbox').value,
           codexNetworkAccess: document.getElementById('sessionConfigNetwork').checked,

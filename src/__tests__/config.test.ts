@@ -52,7 +52,7 @@ describe('configToSettings', () => {
     runtime: 'codex',
     channels: [],
     enabledChannels: [],
-    defaultMode: 'code',
+    defaultMode: 'normal',
   };
 
   it('always sets remote_bridge_enabled to true', () => {
@@ -121,7 +121,7 @@ describe('configToSettings', () => {
     const m = configToSettings(base);
     assert.equal(m.has('bridge_default_model'), false);
     assert.equal(m.has('default_model'), false);
-    assert.equal(m.get('bridge_default_mode'), 'code');
+    assert.equal(m.get('bridge_default_mode'), 'normal');
     assert.equal(m.get('bridge_history_message_limit'), '8');
     assert.equal(m.get('bridge_stream_status_idle_start_seconds'), '180');
     assert.equal(m.get('bridge_stream_status_check_interval_seconds'), '10');
@@ -171,8 +171,8 @@ describe('configToSettings', () => {
   });
 
   it('maps non-default mode', () => {
-    const m = configToSettings({ ...base, defaultMode: 'plan' });
-    assert.equal(m.get('bridge_default_mode'), 'plan');
+    const m = configToSettings({ ...base, defaultMode: 'yolo' });
+    assert.equal(m.get('bridge_default_mode'), 'yolo');
   });
 
   it('omits optional fields when not set', () => {
@@ -245,7 +245,7 @@ describe('loadConfig/saveConfig round-trip', () => {
       runtime: 'codex',
       channels: [],
       enabledChannels: [],
-      defaultMode: 'code',
+      defaultMode: 'normal',
     });
     assert.equal(m.get('bridge_feishu_enabled'), 'false');
     assert.equal(m.get('bridge_weixin_enabled'), 'false');
@@ -306,7 +306,7 @@ describe('loadConfig/saveConfig round-trip', () => {
         schemaVersion: 2,
         runtime: {
           provider: 'codex',
-          defaultMode: 'code',
+          defaultMode: 'normal',
         },
         channels: [
           {
@@ -344,7 +344,7 @@ describe('loadConfig/saveConfig round-trip', () => {
         schemaVersion: 2,
         runtime: {
           provider: 'codex',
-          defaultMode: 'code',
+          defaultMode: 'normal',
           historyMessageLimit: 8,
           streamStatusIdleStartSeconds: 180,
           streamStatusCheckIntervalSeconds: 10,
@@ -383,7 +383,7 @@ describe('loadConfig/saveConfig round-trip', () => {
     const loaded = loadConfig();
     saveConfig({
       ...loaded,
-      defaultMode: 'plan',
+      defaultMode: 'yolo',
       historyMessageLimit: 12,
       streamStatusIdleStartSeconds: 240,
       streamStatusCheckIntervalSeconds: 15,
@@ -412,7 +412,7 @@ describe('loadConfig/saveConfig round-trip', () => {
         },
       ],
     );
-    assert.equal(reloaded.defaultMode, 'plan');
+    assert.equal(reloaded.defaultMode, 'yolo');
     assert.equal(reloaded.historyMessageLimit, 12);
     assert.equal(reloaded.streamStatusIdleStartSeconds, 240);
     assert.equal(reloaded.streamStatusCheckIntervalSeconds, 15);

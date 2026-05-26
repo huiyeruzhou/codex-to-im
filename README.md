@@ -184,7 +184,8 @@ codex-to-im uninstall
 - `/t 0`：切换到当前聊天的临时线程。
 - `/new`：在当前正式会话目录下新建线程。
 - `/new <路径或项目名>`：按指定目录新建线程。
-- `/mode <ask|code|plan>`：切换运行模式。
+- `/mode <normal|yolo>`：切换运行模式（`code` 会映射为 `normal`，其它旧模式不再支持）。
+- `/provider <sdk|tmux>`：切换当前 IM 会话使用的 Codex Provider。
 - `/reasoning <1-5>`：切换思考级别。
 - `/model`：查看当前模型和可选模型。
 - `/model <模型名>`：切换当前 IM 会话模型。

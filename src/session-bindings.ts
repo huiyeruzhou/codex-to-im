@@ -35,6 +35,7 @@ export interface BindingSummary {
   chatUserId?: string;
   chatDisplayName?: string;
   mode: ChannelBinding['mode'];
+  codexProvider: BridgeSession['codex_provider'] | 'default';
   model: string;
   workingDirectory: string;
   currentTargetKey: string;
@@ -186,9 +187,13 @@ function getSessionName(session: BridgeSession): string {
 }
 
 function getSessionMode(store: BridgeStore, session: BridgeSession): ChannelBinding['mode'] {
-  return session.preferred_mode
-    || (store.getSetting('bridge_default_mode') as ChannelBinding['mode'])
-    || 'code';
+  return (session.preferred_mode || store.getSetting('bridge_default_mode')) === 'yolo'
+    ? 'yolo'
+    : 'normal';
+}
+
+function getSessionCodexProvider(session: BridgeSession | null | undefined): BridgeSession['codex_provider'] | 'default' {
+  return session?.codex_provider || 'default';
 }
 
 function getBindingResumeThreadId(session: BridgeSession): string {
@@ -428,7 +433,8 @@ export function listBindingSummaries(store: BridgeStore): BindingSummary[] {
       chatId: binding.chatId,
       chatUserId: binding.chatUserId,
       chatDisplayName: binding.chatDisplayName,
-      mode: binding.mode,
+      mode: (binding.mode === 'yolo' ? 'yolo' : 'normal') as ChannelBinding['mode'],
+      codexProvider: getSessionCodexProvider(session),
       model: binding.model,
       workingDirectory: binding.workingDirectory,
       currentTargetKey,

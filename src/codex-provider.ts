@@ -57,6 +57,10 @@ function toApprovalPolicy(permissionMode?: string): string {
   }
 }
 
+function isYoloMode(params: StreamChatParams): boolean {
+  return params.codexMode === 'yolo' || params.permissionMode === 'never';
+}
+
 /** Allow Codex to run outside a trusted Git repository when explicitly enabled. */
 function shouldSkipGitRepoCheck(params: StreamChatParams): boolean {
   return params.skipGitRepoCheck === true || process.env.CTI_CODEX_SKIP_GIT_REPO_CHECK === 'true';
@@ -236,6 +240,7 @@ function logCodexExecStart(params: {
   imageCount: number;
   attachmentCount: number;
   permissionMode?: string;
+  codexMode?: string;
   threadOptions: Record<string, unknown>;
 }): void {
   console.log('[codex-provider] Codex exec start:', {
@@ -254,6 +259,7 @@ function logCodexExecStart(params: {
       images: params.imageCount,
     },
     permission_mode: params.permissionMode || null,
+    codex_mode: params.codexMode || null,
     options: {
       model: params.threadOptions.model || null,
       working_directory: params.threadOptions.workingDirectory || null,
@@ -329,8 +335,11 @@ export class CodexProvider implements LLMProvider {
             const inMemoryThreadId = self.threadIds.get(params.sessionId);
             const savedThreadId = inMemoryThreadId || params.sdkSessionId || undefined;
 
-            const approvalPolicy = toApprovalPolicy(params.permissionMode);
-            const sandboxMode = normalizeSandboxMode(params.sandboxMode) as CodexSandboxMode;
+            const yoloMode = isYoloMode(params);
+            const approvalPolicy = yoloMode ? 'never' : toApprovalPolicy(params.permissionMode);
+            const sandboxMode = yoloMode
+              ? 'danger-full-access'
+              : normalizeSandboxMode(params.sandboxMode) as CodexSandboxMode;
             const modelReasoningEffort = parseReasoningEffort(params.modelReasoningEffort) as CodexReasoningEffort | undefined;
 
             const threadOptions: Record<string, unknown> = {
@@ -397,6 +406,7 @@ export class CodexProvider implements LLMProvider {
                   imageCount: imageFiles.length,
                   attachmentCount: params.files?.length || 0,
                   permissionMode: params.permissionMode,
+                  codexMode: params.codexMode,
                   threadOptions,
                 });
                 thread = codex.resumeThread(savedThreadId, threadOptions);
@@ -408,6 +418,7 @@ export class CodexProvider implements LLMProvider {
                   imageCount: imageFiles.length,
                   attachmentCount: params.files?.length || 0,
                   permissionMode: params.permissionMode,
+                  codexMode: params.codexMode,
                   threadOptions,
                 });
                 thread = codex.startThread(threadOptions);

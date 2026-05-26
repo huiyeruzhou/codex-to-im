@@ -212,6 +212,11 @@ function normalizeRuntimeProvider(_value: unknown): RuntimeProvider {
   return 'codex';
 }
 
+function normalizeDefaultMode(value: unknown): string {
+  if (value === 'yolo') return 'yolo';
+  return 'normal';
+}
+
 function normalizeChannelInstances(value: unknown): ChannelInstance[] {
   if (!Array.isArray(value)) return [];
 
@@ -310,7 +315,7 @@ function migrateLegacyEnvToV2(env: Map<string, string>): ConfigV2File {
       provider: 'codex',
       defaultWorkspaceRoot: expandHomePath(env.get("CTI_DEFAULT_WORKSPACE_ROOT")) || undefined,
       defaultModel: env.get("CTI_DEFAULT_MODEL") || undefined,
-      defaultMode: env.get("CTI_DEFAULT_MODE") || "code",
+      defaultMode: normalizeDefaultMode(env.get("CTI_DEFAULT_MODE")),
       historyMessageLimit: parsePositiveInt(env.get("CTI_HISTORY_MESSAGE_LIMIT")) ?? 8,
       streamStatusIdleStartSeconds: parsePositiveInt(env.get("CTI_STREAM_STATUS_IDLE_START_SECONDS"))
         ?? DEFAULT_STREAM_STATUS_IDLE_START_SECONDS,
@@ -350,7 +355,7 @@ function expandConfig(v2: ConfigV2File): Config {
     )),
     defaultWorkspaceRoot: v2.runtime.defaultWorkspaceRoot,
     defaultModel: v2.runtime.defaultModel,
-    defaultMode: v2.runtime.defaultMode || 'code',
+    defaultMode: normalizeDefaultMode(v2.runtime.defaultMode),
     historyMessageLimit: v2.runtime.historyMessageLimit ?? 8,
     streamStatusIdleStartSeconds: v2.runtime.streamStatusIdleStartSeconds ?? DEFAULT_STREAM_STATUS_IDLE_START_SECONDS,
     streamStatusCheckIntervalSeconds: v2.runtime.streamStatusCheckIntervalSeconds ?? DEFAULT_STREAM_STATUS_CHECK_INTERVAL_SECONDS,
@@ -376,7 +381,7 @@ function buildV2FileFromExpandedConfig(config: Config, current?: ConfigV2File | 
       provider: config.runtime,
       defaultWorkspaceRoot: config.defaultWorkspaceRoot,
       defaultModel: config.defaultModel,
-      defaultMode: config.defaultMode,
+      defaultMode: normalizeDefaultMode(config.defaultMode),
       historyMessageLimit: config.historyMessageLimit,
       streamStatusIdleStartSeconds: config.streamStatusIdleStartSeconds,
       streamStatusCheckIntervalSeconds: config.streamStatusCheckIntervalSeconds,
@@ -411,7 +416,7 @@ export function loadConfig(): Config {
     runtime: {
       provider: 'codex',
       defaultWorkspaceRoot: DEFAULT_WORKSPACE_ROOT,
-      defaultMode: 'code',
+      defaultMode: 'normal',
       historyMessageLimit: 8,
       streamStatusIdleStartSeconds: DEFAULT_STREAM_STATUS_IDLE_START_SECONDS,
       streamStatusCheckIntervalSeconds: DEFAULT_STREAM_STATUS_CHECK_INTERVAL_SECONDS,
@@ -518,7 +523,7 @@ export function configToSettings(config: Config): Map<string, string> {
     schemaVersion: 2,
     runtime: {
       provider: config.runtime,
-      defaultMode: config.defaultMode,
+      defaultMode: normalizeDefaultMode(config.defaultMode),
     },
     channels,
   };
@@ -534,7 +539,7 @@ export function configToSettings(config: Config): Map<string, string> {
     m.set("bridge_default_model", config.defaultModel);
     m.set("default_model", config.defaultModel);
   }
-  m.set("bridge_default_mode", config.defaultMode);
+  m.set("bridge_default_mode", normalizeDefaultMode(config.defaultMode));
   m.set(
     "bridge_history_message_limit",
     String(config.historyMessageLimit && config.historyMessageLimit > 0 ? config.historyMessageLimit : 8),

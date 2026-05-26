@@ -39,13 +39,9 @@ const PROXY_ENV_KEYS = [
   'ws_proxy',
 ];
 
-async function resolveProvider(): Promise<LLMProvider> {
-  const { CodexTmuxProvider, shouldUseCodexTmuxTui } = await import('./codex-tmux-provider.js');
-  if (shouldUseCodexTmuxTui()) {
-    return new CodexTmuxProvider();
-  }
-  const { CodexProvider } = await import('./codex-provider.js');
-  return new CodexProvider();
+async function resolveProvider(pendingPerms: PendingPermissions): Promise<LLMProvider> {
+  const { CodexRoutingProvider } = await import('./codex-routing-provider.js');
+  return new CodexRoutingProvider(pendingPerms);
 }
 
 interface StatusInfo {
@@ -128,7 +124,7 @@ async function main(): Promise<void> {
   const settings = configToSettings(config);
   const store = new JsonFileStore(settings, { dynamicSettings: true });
   const pendingPerms = new PendingPermissions();
-  const llm = await resolveProvider();
+  const llm = await resolveProvider(pendingPerms);
   console.log(`[codex-to-im] Runtime: ${config.runtime}`);
 
   const gateway = {

@@ -12,7 +12,7 @@ import * as path from 'path';
 const MAX_INPUT_LENGTH = 32_000;
 const MAX_PATH_LENGTH = 1024;
 const SESSION_ID_PATTERN = /^[0-9a-f-]{32,64}$/i;
-const VALID_MODES = ['plan', 'code', 'ask'] as const;
+const VALID_MODES = ['normal', 'yolo'] as const;
 
 /**
  * Patterns that indicate shell injection or dangerous input.
@@ -120,9 +120,21 @@ export function sanitizeInput(
   return { text: sanitized, truncated };
 }
 
+export type BridgeCommandMode = typeof VALID_MODES[number];
+
+/**
+ * Parse /mode parameter. `code` is kept as the only legacy alias.
+ */
+export function parseMode(mode: string): BridgeCommandMode | null {
+  const normalized = mode.trim().toLowerCase();
+  if (normalized === 'code' || normalized === 'normal') return 'normal';
+  if (normalized === 'yolo') return 'yolo';
+  return null;
+}
+
 /**
  * Validate /mode parameter.
  */
-export function validateMode(mode: string): mode is 'plan' | 'code' | 'ask' {
-  return VALID_MODES.includes(mode as typeof VALID_MODES[number]);
+export function validateMode(mode: string): boolean {
+  return parseMode(mode) !== null;
 }

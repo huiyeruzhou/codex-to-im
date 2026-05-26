@@ -183,7 +183,8 @@ You can also specify a directory explicitly:
 - `/t 0`: switch to the temporary thread for the current chat.
 - `/new`: create a new thread under the current formal session directory.
 - `/new <path or project name>`: create a new thread under the specified directory.
-- `/mode <ask|code|plan>`: change the runtime mode.
+- `/mode <normal|yolo>`: change the runtime mode (`code` maps to `normal`; other legacy modes are no longer supported).
+- `/provider <sdk|tmux>`: change the Codex provider used by the current IM session.
 - `/reasoning <1-5>`: change the reasoning effort.
 - `/model`: inspect the current model and available models.
 - `/model <model name>`: change the model for the current IM session.

@@ -2204,8 +2204,8 @@ describe('channel-router defaults', () => {
     });
     const session = store.getSession(binding.codepilotSessionId);
 
-    assert.equal(binding.mode, 'ask');
-    assert.equal(session?.preferred_mode, 'ask');
+    assert.equal(binding.mode, 'normal');
+    assert.equal(session?.preferred_mode, 'normal');
     assert.equal(session?.hidden, true);
     assert.equal(session?.session_type, 'draft');
     assert.match(session?.name || '', /^Draft:feishu:chat-default-mode$/);

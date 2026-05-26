@@ -248,7 +248,8 @@ Web 工作台现在只展示自动启动状态；真正的启用和关闭请使�
 - `/t` / `/threads` 最近 10 条桌面会话，`/t all` / `/threads all` 最多查看 200 条，`/t n 100` / `/threads n 100` 查看最近 100 条（同样最多 200 条），`/t 1` / `/thread 1` 接管
 - `/n` / `/new` 在当前正式会话目录下新建线程；这类线程当前只保证在 IM 中可继续，不会自动出现在 Codex Desktop 会话列表中
 - `/n proj1` / `/new proj1` 新建项目会话
-- `/m` / `/mode` 查看或切换模式，可选 `code` / `plan` / `ask`
+- `/m` / `/mode` 查看或切换模式，可选 `normal` / `yolo`（`code` 会映射为 `normal`）
+- `/provider` 查看或切换 Codex Provider，可选 `sdk` / `tmux`
 - `/r` / `/reasoning` 查看或切换思考级别，也支持 `1|2|3|4|5`
 - `/his` / `/history` 历史摘要，`/his raw` / `/history raw` 原始记录
 - `/t 0` / `/thread 0` 临时草稿线程

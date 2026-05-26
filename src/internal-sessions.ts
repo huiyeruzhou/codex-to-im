@@ -68,7 +68,7 @@ export function getOrCreateDraftSession(
 
   if (existing) {
     store.updateSession(existing.id, {
-      preferred_mode: 'ask',
+      preferred_mode: 'normal',
       expires_at: new Date(Date.now() + DRAFT_TTL_MS).toISOString(),
     });
     return store.getSession(existing.id) || existing;
@@ -80,7 +80,7 @@ export function getOrCreateDraftSession(
     store.getSetting('bridge_default_model') || '',
     undefined,
     scratchDir,
-    'ask',
+    'normal',
     {
       hidden: true,
       sessionType: 'draft',

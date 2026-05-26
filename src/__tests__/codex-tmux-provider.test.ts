@@ -147,6 +147,21 @@ describe('codex-tmux-provider', () => {
     }
   });
 
+  it('builds TUI args for yolo mode with the dangerous bypass flag', () => {
+    const args = buildCodexTuiArgs({
+      prompt: 'hello',
+      sessionId: 'bridge-session',
+      sandboxMode: 'workspace-write',
+      workingDirectory: '/tmp/work',
+      permissionMode: 'never',
+      codexMode: 'yolo',
+    }, []);
+
+    assert.ok(args.includes('--dangerously-bypass-approvals-and-sandbox'));
+    assert.equal(args.includes('--ask-for-approval'), false);
+    assert.equal(args.includes('--sandbox'), false);
+  });
+
   it('injects prompt into a real tmux pane with Option+Enter newlines and Enter submit', async (t: TestContext) => {
     if (!(await tmuxAvailable())) {
       t.skip('tmux is not available');

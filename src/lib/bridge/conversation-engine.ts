@@ -90,6 +90,15 @@ function resolveReasoningEffort(
   );
 }
 
+function normalizeRuntimeMode(mode: unknown): 'normal' | 'yolo' {
+  return mode === 'yolo' ? 'yolo' : 'normal';
+}
+
+function normalizeCodexProvider(provider: unknown): 'sdk' | 'tmux' | undefined {
+  if (provider === 'sdk' || provider === 'tmux') return provider;
+  return undefined;
+}
+
 interface PersistedAttachmentMeta {
   id: string;
   name: string;
@@ -260,7 +269,10 @@ export async function processMessage(
     // Resolve session early — needed for workingDirectory and provider resolution
     const session = store.getSession(sessionId);
     const workDir = binding.workingDirectory || session?.working_directory || '';
-    const sandboxMode = normalizeSandboxMode(session?.codex_sandbox_mode || store.getSetting('bridge_codex_sandbox_mode'));
+    const codexMode = normalizeRuntimeMode(binding.mode || session?.preferred_mode);
+    const sandboxMode = codexMode === 'yolo'
+      ? 'danger-full-access'
+      : normalizeSandboxMode(session?.codex_sandbox_mode || store.getSetting('bridge_codex_sandbox_mode'));
     const networkAccessEnabled = typeof session?.codex_network_access === 'boolean'
       ? session.codex_network_access
       : (store.getSetting('bridge_codex_network_access') || '').toLowerCase() === 'true';
@@ -318,13 +330,7 @@ export async function processMessage(
     // Effective model
     const effectiveModel = binding.model || session?.model || store.getSetting('default_model') || undefined;
 
-    // Permission mode from binding mode
-    let permissionMode: string;
-    switch (binding.mode) {
-      case 'plan': permissionMode = 'plan'; break;
-      case 'ask': permissionMode = 'default'; break;
-      default: permissionMode = 'acceptEdits'; break;
-    }
+    const permissionMode = codexMode === 'yolo' ? 'never' : 'acceptEdits';
 
     // Load conversation history for context
     const { messages: recentMsgs } = store.getMessages(sessionId, { limit: 50 });
@@ -356,6 +362,8 @@ export async function processMessage(
       workingDirectory: workDir || undefined,
       abortController,
       permissionMode,
+      codexMode,
+      codexProvider: normalizeCodexProvider(session?.codex_provider),
       provider: resolvedProvider,
       conversationHistory: historyMsgs,
       files: llmFiles,

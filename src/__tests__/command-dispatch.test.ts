@@ -57,7 +57,7 @@ describe('command-dispatch', () => {
     fs.rmSync(DATA_DIR, { recursive: true, force: true });
   });
 
-  it('switches /thread 0 into the hidden draft session and forces ask mode', async () => {
+  it('switches /thread 0 into the hidden draft session and keeps normal mode', async () => {
     const store = initTestContext();
     const sent: string[] = [];
     const adapter: any = {
@@ -85,7 +85,7 @@ describe('command-dispatch', () => {
     );
     const binding = store.getChannelBinding(address.channelType, address.chatId);
     assert.ok(binding);
-    assert.equal(binding?.mode, 'ask');
+    assert.equal(binding?.mode, 'normal');
     const session = binding ? store.getSession(binding.codepilotSessionId) : null;
     assert.equal(session?.session_type, 'draft');
     assert.match(sent[0] || '', /已切换到临时草稿线程/);
@@ -241,6 +241,108 @@ describe('command-dispatch', () => {
     assert.equal(session?.codex_network_access, true);
     assert.match(sent[0] || '', /已更新 Codex 沙箱/);
     assert.match(sent[1] || '', /已更新 Codex 网络/);
+  });
+
+  it('maps /m code to normal and rejects removed legacy modes', async () => {
+    const store = initTestContext();
+    const sent: string[] = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      send: async (message: { text: string }) => {
+        sent.push(message.text);
+        return { ok: true, messageId: `reply-mode-${sent.length}` };
+      },
+    };
+    const address = { channelType: 'feishu', chatId: 'chat-mode' } as const;
+    const binding = router.createBinding(address, 'D:\\workspace\\mode');
+
+    const deps = {
+      getActiveTask: () => undefined,
+      diagnoseSessionHealth: async () => null,
+      diagnoseAllActiveSessions: async () => [],
+    };
+
+    await handleBridgeCommand(adapter, {
+      address,
+      text: '/m code',
+      messageId: 'incoming-mode-code',
+    } as any, '/m code', deps);
+    await handleBridgeCommand(adapter, {
+      address,
+      text: '/m ask',
+      messageId: 'incoming-mode-ask',
+    } as any, '/m ask', deps);
+
+    const updated = store.getChannelBinding(address.channelType, address.chatId);
+    assert.equal(updated?.mode, 'normal');
+    assert.equal(store.getSession(binding.codepilotSessionId)?.preferred_mode, 'normal');
+    assert.match(sent[0] || '', /已切换模式/);
+    assert.match(sent[0] || '', /normal/);
+    assert.match(sent[1] || '', /模式用法/);
+    assert.match(sent[1] || '', /normal\|yolo/);
+  });
+
+  it('updates the session Codex provider with /provider', async () => {
+    const store = initTestContext();
+    const sent: string[] = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      send: async (message: { text: string }) => {
+        sent.push(message.text);
+        return { ok: true, messageId: `reply-provider-${sent.length}` };
+      },
+    };
+    const address = { channelType: 'feishu', chatId: 'chat-provider' } as const;
+    const binding = router.createBinding(address, 'D:\\workspace\\provider');
+
+    await handleBridgeCommand(adapter, {
+      address,
+      text: '/provider tmux',
+      messageId: 'incoming-provider',
+    } as any, '/provider tmux', {
+      getActiveTask: () => undefined,
+      diagnoseSessionHealth: async () => null,
+      diagnoseAllActiveSessions: async () => [],
+    });
+
+    assert.equal(store.getSession(binding.codepilotSessionId)?.codex_provider, 'tmux');
+    assert.match(sent[0] || '', /已切换 Codex Provider/);
+    assert.match(sent[0] || '', /tmux/);
+  });
+
+  it('renders /status with current mode and provider', async () => {
+    const store = initTestContext();
+    const sent: string[] = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      send: async (message: { text: string }) => {
+        sent.push(message.text);
+        return { ok: true, messageId: `reply-status-mode-provider-${sent.length}` };
+      },
+    };
+    const address = { channelType: 'feishu', chatId: 'chat-status-mode-provider' } as const;
+    const binding = router.createBinding(address, 'D:\\workspace\\status-mode-provider');
+    store.updateSession(binding.codepilotSessionId, {
+      preferred_mode: 'yolo',
+      codex_provider: 'tmux',
+    });
+    router.updateBinding(binding.id, { mode: 'yolo' });
+
+    await handleBridgeCommand(adapter, {
+      address,
+      text: '/status',
+      messageId: 'incoming-status-mode-provider',
+    } as any, '/status', {
+      getActiveTask: () => undefined,
+      diagnoseSessionHealth: async () => null,
+      diagnoseAllActiveSessions: async () => [],
+    });
+
+    const response = sent[0] || '';
+    assert.match(response, /模式/);
+    assert.match(response, /yolo/);
+    assert.match(response, /Provider/);
+    assert.match(response, /tmux/);
   });
 
   it('renders /check health diagnostics for the current session', async () => {
@@ -518,7 +620,7 @@ describe('command-dispatch', () => {
 
     const forcedBinding = store.getChannelBinding(address.channelType, address.chatId);
     assert.notEqual(forcedBinding?.codepilotSessionId, initialBinding.codepilotSessionId);
-    assert.equal(forcedBinding?.mode, 'ask');
+    assert.equal(forcedBinding?.mode, 'normal');
     assert.match(sent.at(-1) || '', /已切换到临时草稿线程/);
     assert.ok(readAuditSummaries().some((summary) => (
       summary.includes('Binding change: action=switch_draft')

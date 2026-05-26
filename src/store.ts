@@ -20,7 +20,7 @@ import type {
   UpsertChannelBindingInput,
   UpsertChannelDefaultTargetInput,
 } from './lib/bridge/host.js';
-import type { ChannelBinding, ChannelDefaultTarget, ChannelType } from './lib/bridge/types.js';
+import type { ChannelBinding, ChannelBindingMode, ChannelDefaultTarget, ChannelType } from './lib/bridge/types.js';
 import { CTI_HOME, configToSettings, findChannelInstance, loadConfig } from './config.js';
 
 const DATA_DIR = path.join(CTI_HOME, 'data');
@@ -60,6 +60,12 @@ function now(): string {
   return new Date().toISOString();
 }
 
+function normalizeStoredMode(mode: unknown): ChannelBindingMode {
+  if (mode === 'yolo') return 'yolo';
+  if (mode === 'normal' || mode === 'code') return 'normal';
+  return 'normal';
+}
+
 function defaultAliasForProvider(provider: string | undefined): string | undefined {
   if (provider === 'feishu') return '飞书';
   if (provider === 'weixin') return '微信';
@@ -86,6 +92,7 @@ function upgradeLegacyBinding(binding: ChannelBinding): ChannelBinding {
   if (!resolvedInstance && !legacyProvider) {
     return {
       ...binding,
+      mode: normalizeStoredMode(binding.mode),
       active: binding.active !== false,
     };
   }
@@ -99,6 +106,7 @@ function upgradeLegacyBinding(binding: ChannelBinding): ChannelBinding {
     channelType,
     channelProvider,
     channelAlias,
+    mode: normalizeStoredMode(binding.mode),
     active: binding.active !== false,
   };
 }
@@ -107,7 +115,8 @@ function didBindingChange(before: ChannelBinding, after: ChannelBinding): boolea
   return before.channelType !== after.channelType
     || before.channelProvider !== after.channelProvider
     || before.channelAlias !== after.channelAlias
-    || (before.active !== false) !== after.active;
+    || (before.active !== false) !== after.active
+    || before.mode !== after.mode;
 }
 
 function normalizeChannelDefaultTarget(target: ChannelDefaultTarget): ChannelDefaultTarget {
@@ -373,7 +382,7 @@ export class JsonFileStore implements BridgeStore {
         chatDisplayName: data.chatDisplayName ?? existing.chatDisplayName,
         workingDirectory: data.workingDirectory,
         model: data.model,
-        mode: (data.mode as ChannelBinding['mode']) ?? existing.mode,
+        mode: data.mode === undefined ? existing.mode : normalizeStoredMode(data.mode),
         updatedAt: now(),
       };
       this.bindings.set(key, updated);
@@ -392,7 +401,7 @@ export class JsonFileStore implements BridgeStore {
         sdkSessionId: data.sdkSessionId ?? '',
         workingDirectory: data.workingDirectory,
         model: data.model,
-        mode: (data.mode as 'code' | 'plan' | 'ask') || (this.getSetting('bridge_default_mode') as 'code' | 'plan' | 'ask') || 'code',
+        mode: normalizeStoredMode(data.mode || this.getSetting('bridge_default_mode') || 'normal'),
         active: true,
         createdAt: now(),
         updatedAt: now(),
@@ -524,7 +533,7 @@ export class JsonFileStore implements BridgeStore {
       name,
       working_directory: cwd || process.cwd(),
       model,
-      preferred_mode: mode as BridgeSession['preferred_mode'],
+      preferred_mode: normalizeStoredMode(mode || this.getSetting('bridge_default_mode') || 'normal') as BridgeSession['preferred_mode'],
       system_prompt: systemPrompt,
       reasoning_effort: options?.reasoningEffort,
       session_type: options?.sessionType || 'normal',

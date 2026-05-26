@@ -97,6 +97,7 @@ export interface BridgeSession {
   /** Explicit owner of the current persisted thread identity. */
   thread_origin?: 'bridge' | 'desktop';
   reasoning_effort?: CodexReasoningEffort;
+  codex_provider?: 'sdk' | 'tmux';
   codex_sandbox_mode?: CodexSandboxMode;
   codex_network_access?: boolean;
   session_type?: 'normal' | 'draft';
@@ -305,6 +306,8 @@ export interface StreamChatParams {
   workingDirectory?: string;
   abortController?: AbortController;
   permissionMode?: string;
+  codexMode?: 'normal' | 'yolo';
+  codexProvider?: 'sdk' | 'tmux';
   provider?: BridgeApiProvider;
   conversationHistory?: Array<{ role: 'user' | 'assistant'; content: string }>;
   files?: FileAttachment[];

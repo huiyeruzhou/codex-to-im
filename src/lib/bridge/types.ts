@@ -98,6 +98,8 @@ export interface SendResult {
 
 // ── Bindings ───────────────────────────────────────────────────
 
+export type ChannelBindingMode = 'normal' | 'yolo' | 'code' | 'plan' | 'ask';
+
 /** Links an IM chat to a CodePilot session */
 export interface ChannelBinding {
   id: string;
@@ -116,7 +118,7 @@ export interface ChannelBinding {
   /** Model override for this binding */
   model: string;
   /** Chat mode */
-  mode: 'code' | 'plan' | 'ask';
+  mode: ChannelBindingMode;
   /** Whether this binding is currently active */
   active: boolean;
   createdAt: string;

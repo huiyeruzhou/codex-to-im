@@ -98,18 +98,18 @@ describe('JsonFileStore', () => {
       codepilotSessionId: 'sess-2',
       workingDirectory: '/tmp/new',
       model: 'model-2',
-      mode: 'ask',
+      mode: 'yolo',
     });
     assert.equal(b2.id, b1.id);
     assert.equal(b2.codepilotSessionId, 'sess-2');
-    assert.equal(b2.mode, 'ask');
+    assert.equal(b2.mode, 'yolo');
     assert.equal(b2.chatUserId, 'user-1');
     assert.equal(b2.chatDisplayName, 'Alice Cooper');
   });
 
   it('upsertChannelBinding uses default mode from settings', () => {
     const settings = makeSettings();
-    settings.set('bridge_default_mode', 'plan');
+    settings.set('bridge_default_mode', 'yolo');
     const store = new JsonFileStore(settings);
     const b = store.upsertChannelBinding({
       channelType: 'feishu-default',
@@ -118,7 +118,7 @@ describe('JsonFileStore', () => {
       workingDirectory: '/tmp',
       model: 'model-1',
     });
-    assert.equal(b.mode, 'plan');
+    assert.equal(b.mode, 'yolo');
   });
 
   it('getChannelBinding returns null for missing', () => {
@@ -555,7 +555,7 @@ describe('JsonFileStore', () => {
 
   it('createSession stores hidden metadata and reasoning effort', () => {
     const store = new JsonFileStore(makeSettings());
-    const session = store.createSession('draft', 'model', undefined, '/tmp', 'ask', {
+    const session = store.createSession('draft', 'model', undefined, '/tmp', 'normal', {
       hidden: true,
       sessionType: 'draft',
       parentSessionId: 'parent-1',
@@ -568,7 +568,7 @@ describe('JsonFileStore', () => {
     assert.equal(fetched?.parent_session_id, 'parent-1');
     assert.equal(fetched?.reasoning_effort, 'low');
     assert.equal(fetched?.expires_at, '2099-01-01T00:00:00.000Z');
-    assert.equal(fetched?.preferred_mode, 'ask');
+    assert.equal(fetched?.preferred_mode, 'normal');
   });
 
   it('updateSession merges session metadata', () => {
