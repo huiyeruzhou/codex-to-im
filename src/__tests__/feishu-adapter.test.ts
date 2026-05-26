@@ -928,4 +928,53 @@ describe('feishu-adapter structured streaming regions', () => {
 
     blocked.resolve({});
   });
+
+  it('extracts the original Feishu resource filename from message content', () => {
+    const info = _testOnly.extractFeishuResourceInfo(JSON.stringify({
+      file_key: 'file_v3_abc',
+      file_name: '需求说明 2026.pdf',
+    }));
+
+    assert.deepEqual(info, {
+      fileKey: 'file_v3_abc',
+      name: '需求说明 2026.pdf',
+    });
+  });
+
+  it('preserves the original filename for downloaded Feishu file messages', async () => {
+    const adapter = new FeishuAdapter({
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      alias: '飞书',
+      config: {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+      },
+    });
+
+    (adapter as any).restClient = {
+      im: {
+        messageResource: {
+          get: async () => ({
+            getReadableStream: async function* () {
+              yield Buffer.from('hello');
+            },
+          }),
+        },
+      },
+    };
+
+    const attachment = await (adapter as any).downloadResource(
+      'message-1',
+      'file_v3_abc',
+      'file',
+      '需求说明 2026.pdf',
+    );
+
+    assert.ok(attachment);
+    assert.equal(attachment.name, '需求说明 2026.pdf');
+    assert.equal(attachment.type, 'application/octet-stream');
+    assert.equal(attachment.data, Buffer.from('hello').toString('base64'));
+  });
 });

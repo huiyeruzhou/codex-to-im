@@ -119,6 +119,41 @@ type FeishuWsClientOptions = {
   agent?: unknown;
 };
 
+type FeishuResourceInfo = {
+  fileKey: string | null;
+  name?: string;
+};
+
+function sanitizeInboundResourceName(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+
+  const basename = trimmed.replace(/\\/g, '/').split('/').filter(Boolean).pop() || trimmed;
+  const cleaned = basename.replace(/[\u0000-\u001f\u007f]/g, '').trim();
+  return cleaned || undefined;
+}
+
+function extractFeishuResourceInfo(content: string): FeishuResourceInfo {
+  try {
+    const parsed = JSON.parse(content);
+    return {
+      fileKey: parsed.image_key || parsed.file_key || parsed.imageKey || parsed.fileKey || null,
+      name: sanitizeInboundResourceName(
+        parsed.file_name
+        || parsed.fileName
+        || parsed.filename
+        || parsed.name
+        || parsed.file?.name
+        || parsed.file?.file_name
+        || parsed.file?.fileName,
+      ),
+    };
+  } catch {
+    return { fileKey: null };
+  }
+}
+
 function firstEnvValue(env: EnvLike, keys: string[]): string | undefined {
   for (const key of keys) {
     const value = env[key]?.trim();
@@ -1938,10 +1973,10 @@ export class FeishuAdapter extends BaseChannelAdapter {
     } else if (messageType === 'image') {
       // [P1] Download image with failure fallback
       console.log('[feishu-adapter] Image message received, content:', msg.content);
-      const fileKey = this.extractFileKey(msg.content);
+      const { fileKey, name } = extractFeishuResourceInfo(msg.content);
       console.log('[feishu-adapter] Extracted fileKey:', fileKey);
       if (fileKey) {
-        const attachment = await this.downloadResource(msg.message_id, fileKey, 'image');
+        const attachment = await this.downloadResource(msg.message_id, fileKey, 'image', name);
         if (attachment) {
           attachments.push(attachment);
         } else {
@@ -1961,12 +1996,12 @@ export class FeishuAdapter extends BaseChannelAdapter {
       }
     } else if (messageType === 'file' || messageType === 'audio' || messageType === 'video' || messageType === 'media') {
       // [P2] Support file/audio/video/media downloads
-      const fileKey = this.extractFileKey(msg.content);
+      const { fileKey, name } = extractFeishuResourceInfo(msg.content);
       if (fileKey) {
         const resourceType = messageType === 'audio' || messageType === 'video' || messageType === 'media'
           ? messageType
           : 'file';
-        const attachment = await this.downloadResource(msg.message_id, fileKey, resourceType);
+        const attachment = await this.downloadResource(msg.message_id, fileKey, resourceType, name);
         if (attachment) {
           attachments.push(attachment);
         } else {
@@ -2079,19 +2114,6 @@ export class FeishuAdapter extends BaseChannelAdapter {
       return parsed.text || '';
     } catch {
       return content;
-    }
-  }
-
-  /**
-   * Extract file key from message content JSON.
-   * Handles multiple key names: image_key, file_key, imageKey, fileKey.
-   */
-  private extractFileKey(content: string): string | null {
-    try {
-      const parsed = JSON.parse(content);
-      return parsed.image_key || parsed.file_key || parsed.imageKey || parsed.fileKey || null;
-    } catch {
-      return null;
     }
   }
 
@@ -2218,6 +2240,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     messageId: string,
     fileKey: string,
     resourceType: string,
+    originalName?: string,
   ): Promise<FileAttachment | null> {
     if (!this.restClient) return null;
 
@@ -2295,7 +2318,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
       return {
         id,
-        name: `${fileKey}.${ext}`,
+        name: originalName || `${fileKey}.${ext}`,
         type: mimeType,
         size: buffer.length,
         data: base64,
@@ -2333,6 +2356,7 @@ registerAdapterFactory('feishu', (instance) => new FeishuAdapter(instance));
 export const _testOnly = {
   buildWsClientOptions,
   buildHttpInstanceWithEnvProxy,
+  extractFeishuResourceInfo,
   getProxyUrlForUrl,
   getWsProxyUrl,
   maskProxyUrl,
