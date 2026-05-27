@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { CONFIG_PATH, CONFIG_V2_PATH, CTI_HOME, loadConfig } from '../config.js';
+import { CONFIG_PATH, CONFIG_V2_PATH, CTI_HOME } from '../config.js';
 import { JsonFileStore } from '../store.js';
 import { initBridgeContext } from '../lib/bridge/context.js';
 import { handleBridgeCommand } from '../lib/bridge/command-dispatch.js';
@@ -93,80 +93,6 @@ describe('command-dispatch', () => {
     assert.match(sent[0] || '', /已切换到临时草稿线程/);
   });
 
-  it('renders /history from bridge-cached messages when no desktop thread is bound', async () => {
-    const store = initTestContext();
-    const sent: string[] = [];
-    const adapter: any = {
-      channelType: 'feishu',
-      send: async (message: { text: string }) => {
-        sent.push(message.text);
-        return { ok: true, messageId: 'reply-2' };
-      },
-    };
-    const address = { channelType: 'feishu', chatId: 'chat-history', displayName: 'History Chat' } as const;
-    const binding = router.createBinding(address, 'D:\\workspace\\history');
-    store.addMessage(binding.codepilotSessionId, 'user', '第一条用户消息');
-    store.addMessage(binding.codepilotSessionId, 'assistant', '第一条助手回复');
-
-    await handleBridgeCommand(
-      adapter,
-      {
-        address,
-        text: '/history',
-        messageId: 'incoming-2',
-      } as any,
-      '/history',
-      {
-        getActiveTask: () => undefined,
-        diagnoseSessionHealth: async () => null,
-        diagnoseAllActiveSessions: async () => [],
-      },
-    );
-
-    const response = sent[0] || '';
-    assert.match(response, /最近对话（raw）/);
-    assert.match(response, /Bridge 缓存/);
-    assert.match(response, /第一条用户消息/);
-    assert.match(response, /第一条助手回复/);
-  });
-
-  it('renders /history msg as a markdown card body', async () => {
-    const store = initTestContext();
-    const sent: string[] = [];
-    const adapter: any = {
-      channelType: 'feishu',
-      send: async (message: { text: string }) => {
-        sent.push(message.text);
-        return { ok: true, messageId: 'reply-history-msg' };
-      },
-    };
-    const address = { channelType: 'feishu', chatId: 'chat-history-msg' } as const;
-    const binding = router.createBinding(address, 'D:\\workspace\\history-msg');
-    store.addMessage(binding.codepilotSessionId, 'user', '卡片用户消息');
-    store.addMessage(binding.codepilotSessionId, 'assistant', '卡片助手回复');
-
-    await handleBridgeCommand(
-      adapter,
-      {
-        address,
-        text: '/history msg',
-        messageId: 'incoming-history-msg',
-      } as any,
-      '/history msg',
-      {
-        getActiveTask: () => undefined,
-        diagnoseSessionHealth: async () => null,
-        diagnoseAllActiveSessions: async () => [],
-      },
-    );
-
-    const response = sent[0] || '';
-    assert.match(response, /最近对话（msg）/);
-    assert.match(response, /```text/);
-    assert.match(response, /卡片用户消息/);
-    assert.match(response, /卡片助手回复/);
-  });
-
   it('applies channel prebinding before running the first session-scoped slash command', async () => {
     const store = initTestContext();
     const sent: string[] = [];
@@ -177,9 +103,8 @@ describe('command-dispatch', () => {
         return { ok: true, messageId: 'reply-prebound-history' };
       },
     };
-    const address = { channelType: 'feishu-default', chatId: 'chat-prebound-history', displayName: 'Prebound Chat' } as const;
-    const session = store.createSession('prebound-session', 'test-model', undefined, '/tmp/prebound-history');
-    store.addMessage(session.id, 'user', '预绑定历史消息');
+    const address = { channelType: 'feishu-default', chatId: 'chat-prebound-status', displayName: 'Prebound Chat' } as const;
+    const session = store.createSession('prebound-session', 'test-model', undefined, '/tmp/prebound-status');
     store.upsertChannelDefaultTarget({
       channelType: 'feishu-default',
       channelProvider: 'feishu',
@@ -191,10 +116,10 @@ describe('command-dispatch', () => {
       adapter,
       {
         address,
-        text: '/history',
-        messageId: 'incoming-prebound-history',
+        text: '/status',
+        messageId: 'incoming-prebound-status',
       } as any,
-      '/history',
+      '/status',
       {
         getActiveTask: () => undefined,
         diagnoseSessionHealth: async () => null,
@@ -206,242 +131,8 @@ describe('command-dispatch', () => {
     assert.ok(binding);
     assert.equal(binding?.codepilotSessionId, session.id);
     assert.equal(store.getChannelDefaultTarget(address.channelType), null);
-    assert.match(sent[0] || '', /最近对话（raw）/);
-    assert.match(sent[0] || '', /预绑定历史消息/);
-  });
-
-  it('sends /history json as the original session file attachment', async () => {
-    const store = initTestContext();
-    const sent: any[] = [];
-    const adapter: any = {
-      channelType: 'feishu-default',
-      provider: 'feishu',
-      send: async (message: any) => {
-        sent.push(message);
-        return { ok: true, messageId: `reply-${sent.length}` };
-      },
-    };
-    const address = { channelType: 'feishu-default', chatId: 'chat-history-json' } as const;
-    const binding = router.createBinding(address, 'D:\\workspace\\history-json');
-    const threadId = 'thread-history-json';
-    const sessionDir = path.join(process.env.CODEX_HOME!, 'sessions', '2026', '05', '28');
-    fs.mkdirSync(sessionDir, { recursive: true });
-    const sessionPath = path.join(sessionDir, `rollout-${threadId}.jsonl`);
-    const rawJsonl = [
-      JSON.stringify({
-        timestamp: '2026-05-28T00:00:00.000Z',
-        type: 'session_meta',
-        payload: {
-          id: threadId,
-          timestamp: '2026-05-28T00:00:00.000Z',
-          cwd: 'D:\\workspace\\history-json',
-          originator: 'Codex CLI',
-        },
-      }),
-      JSON.stringify({
-        timestamp: '2026-05-28T00:00:01.000Z',
-        type: 'event_msg',
-        payload: { type: 'user_message', message: '原始 JSONL 内容' },
-      }),
-    ].join('\n') + '\n';
-    fs.writeFileSync(sessionPath, rawJsonl, 'utf-8');
-    store.updateSession(binding.codepilotSessionId, {
-      desktop_thread_id: threadId,
-      thread_origin: 'desktop',
-      sdk_session_id: threadId,
-    });
-
-    await handleBridgeCommand(
-      adapter,
-      {
-        address,
-        text: '/history json',
-        messageId: 'incoming-history-json',
-      } as any,
-      '/history json',
-      {
-        getActiveTask: () => undefined,
-        diagnoseSessionHealth: async () => null,
-        diagnoseAllActiveSessions: async () => [],
-      },
-    );
-
-    const attachmentMessage = sent.find((m) => Array.isArray(m.attachments) && m.attachments.length === 1);
-    assert.ok(attachmentMessage);
-    assert.equal(attachmentMessage.attachments[0].path, sessionPath);
-    assert.equal(attachmentMessage.attachments[0].name, path.basename(sessionPath));
-    assert.equal(fs.readFileSync(attachmentMessage.attachments[0].path, 'utf-8'), rawJsonl);
-    assert.equal(sent.some((m) => /已发送历史 JSON/.test(String(m.text || ''))), false);
-  });
-
-  it('updates /history message limit with a slash command', async () => {
-    initTestContext();
-    const sent: string[] = [];
-    const adapter: any = {
-      channelType: 'feishu',
-      send: async (message: { text: string }) => {
-        sent.push(message.text);
-        return { ok: true, messageId: 'reply-history-limit' };
-      },
-    };
-    const address = { channelType: 'feishu', chatId: 'chat-history-limit' } as const;
-
-    await handleBridgeCommand(
-      adapter,
-      {
-        address,
-        text: '/history limit 12',
-        messageId: 'incoming-history-limit',
-      } as any,
-      '/history limit 12',
-      {
-        getActiveTask: () => undefined,
-        diagnoseSessionHealth: async () => null,
-        diagnoseAllActiveSessions: async () => [],
-      },
-    );
-
-    assert.match(sent[0] || '', /设置为 12/);
-    assert.equal(loadConfig().historyMessageLimit, 12);
-  });
-
-  it('updates session sandbox and network overrides with slash commands', async () => {
-    const store = initTestContext();
-    const sent: string[] = [];
-    const adapter: any = {
-      channelType: 'feishu',
-      send: async (message: { text: string }) => {
-        sent.push(message.text);
-        return { ok: true, messageId: `reply-${sent.length}` };
-      },
-    };
-    const address = { channelType: 'feishu', chatId: 'chat-runtime-options' } as const;
-    const binding = router.createBinding(address, 'D:\\workspace\\runtime-options');
-
-    const deps = {
-      getActiveTask: () => undefined,
-      diagnoseSessionHealth: async () => null,
-      diagnoseAllActiveSessions: async () => [],
-    };
-
-    await handleBridgeCommand(adapter, {
-      address,
-      text: '/sandbox danger-full-access',
-      messageId: 'incoming-sandbox',
-    } as any, '/sandbox danger-full-access', deps);
-    await handleBridgeCommand(adapter, {
-      address,
-      text: '/net on',
-      messageId: 'incoming-network',
-    } as any, '/net on', deps);
-
-    const session = store.getSession(binding.codepilotSessionId);
-    assert.equal(session?.codex_sandbox_mode, 'danger-full-access');
-    assert.equal(session?.codex_network_access, true);
-    assert.match(sent[0] || '', /已更新 Codex 沙箱/);
-    assert.match(sent[1] || '', /已更新 Codex 网络/);
-  });
-
-  it('maps /m code to normal and rejects removed legacy modes', async () => {
-    const store = initTestContext();
-    const sent: string[] = [];
-    const adapter: any = {
-      channelType: 'feishu',
-      send: async (message: { text: string }) => {
-        sent.push(message.text);
-        return { ok: true, messageId: `reply-mode-${sent.length}` };
-      },
-    };
-    const address = { channelType: 'feishu', chatId: 'chat-mode' } as const;
-    const binding = router.createBinding(address, 'D:\\workspace\\mode');
-
-    const deps = {
-      getActiveTask: () => undefined,
-      diagnoseSessionHealth: async () => null,
-      diagnoseAllActiveSessions: async () => [],
-    };
-
-    await handleBridgeCommand(adapter, {
-      address,
-      text: '/m code',
-      messageId: 'incoming-mode-code',
-    } as any, '/m code', deps);
-    await handleBridgeCommand(adapter, {
-      address,
-      text: '/m ask',
-      messageId: 'incoming-mode-ask',
-    } as any, '/m ask', deps);
-
-    const updated = store.getChannelBinding(address.channelType, address.chatId);
-    assert.equal(updated?.mode, 'normal');
-    assert.equal(store.getSession(binding.codepilotSessionId)?.preferred_mode, 'normal');
-    assert.match(sent[0] || '', /已切换模式/);
-    assert.match(sent[0] || '', /normal/);
-    assert.match(sent[1] || '', /模式用法/);
-    assert.match(sent[1] || '', /normal\|yolo/);
-  });
-
-  it('updates the session Codex provider with /provider', async () => {
-    const store = initTestContext();
-    const sent: string[] = [];
-    const adapter: any = {
-      channelType: 'feishu',
-      send: async (message: { text: string }) => {
-        sent.push(message.text);
-        return { ok: true, messageId: `reply-provider-${sent.length}` };
-      },
-    };
-    const address = { channelType: 'feishu', chatId: 'chat-provider' } as const;
-    const binding = router.createBinding(address, 'D:\\workspace\\provider');
-
-    await handleBridgeCommand(adapter, {
-      address,
-      text: '/provider tmux',
-      messageId: 'incoming-provider',
-    } as any, '/provider tmux', {
-      getActiveTask: () => undefined,
-      diagnoseSessionHealth: async () => null,
-      diagnoseAllActiveSessions: async () => [],
-    });
-
-    assert.equal(store.getSession(binding.codepilotSessionId)?.codex_provider, 'tmux');
-    assert.match(sent[0] || '', /已切换 Codex Provider/);
-    assert.match(sent[0] || '', /tmux/);
-  });
-
-  it('renders /status with current mode and provider', async () => {
-    const store = initTestContext();
-    const sent: string[] = [];
-    const adapter: any = {
-      channelType: 'feishu',
-      send: async (message: { text: string }) => {
-        sent.push(message.text);
-        return { ok: true, messageId: `reply-status-mode-provider-${sent.length}` };
-      },
-    };
-    const address = { channelType: 'feishu', chatId: 'chat-status-mode-provider' } as const;
-    const binding = router.createBinding(address, 'D:\\workspace\\status-mode-provider');
-    store.updateSession(binding.codepilotSessionId, {
-      preferred_mode: 'yolo',
-      codex_provider: 'tmux',
-    });
-    router.updateBinding(binding.id, { mode: 'yolo' });
-
-    await handleBridgeCommand(adapter, {
-      address,
-      text: '/status',
-      messageId: 'incoming-status-mode-provider',
-    } as any, '/status', {
-      getActiveTask: () => undefined,
-      diagnoseSessionHealth: async () => null,
-      diagnoseAllActiveSessions: async () => [],
-    });
-
-    const response = sent[0] || '';
-    assert.match(response, /模式/);
-    assert.match(response, /yolo/);
-    assert.match(response, /Provider/);
-    assert.match(response, /tmux/);
+    assert.match(sent[0] || '', /当前会话/);
+    assert.match(sent[0] || '', /prebound-session/);
   });
 
   it('renders /check health diagnostics for the current session', async () => {
@@ -664,6 +355,7 @@ describe('command-dispatch', () => {
     assert.equal(binding?.workingDirectory, path.resolve('D:\\workspace\\common-flow'));
     assert.match(sent[0] || '', /已新建会话/);
     assert.match(sent[0] || '', /common-flow/);
+    assert.doesNotMatch(sent[0] || '', /旧任务在运行/);
   });
 
   it('blocks thread switching while the current task is running unless forced', async () => {

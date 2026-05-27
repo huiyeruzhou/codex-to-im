@@ -1719,7 +1719,8 @@ function extractSessionJsonlPrimaryText(
       return reason ? `任务中止\n\n${reason}` : '任务中止';
     }
     if (payloadType === 'task_complete') {
-      return '任务完成';
+      const finalMessage = extractNormalizedStructuredText(evt.payload?.last_agent_message);
+      return finalMessage || '任务完成';
     }
     if (payloadType === 'context_compacted') {
       return CONTEXT_COMPACTED_NOTICE;
@@ -1890,16 +1891,51 @@ export function readDesktopSessionJsonlHistoryStreamByFilePath(filePath: string)
   return parseDesktopSessionJsonlHistoryText(content);
 }
 
-export function readDesktopSessionMessages(threadId: string, limit = 8): BridgeMessage[] {
-  const messages = readDesktopSessionEventStream(threadId).map((event) => ({
-    role: event.role === 'commentary' ? 'assistant' : event.role,
-    content: event.role === 'commentary'
-      ? `[commentary]\n${event.content}`
-      : event.content,
-  }));
+export function desktopJsonlHistoryEntriesToBridgeMessages(
+  entries: DesktopSessionJsonlHistoryEntry[],
+  limit = 8,
+): BridgeMessage[] {
+  const messages: BridgeMessage[] = [];
+
+  for (const entry of entries) {
+    const content = entry.content.trim();
+    if (!content || content === '(无可展示内容)') continue;
+
+    let message: BridgeMessage | null = null;
+    if (entry.role === 'user') {
+      message = { role: 'user', content };
+    } else if (entry.role === 'assistant') {
+      message = { role: 'assistant', content };
+    } else if (entry.role === 'commentary') {
+      message = { role: 'assistant', content: `[commentary]\n${content}` };
+    } else if (entry.kind === 'event_msg:task_complete') {
+      message = { role: 'assistant', content };
+    }
+
+    if (!message) continue;
+
+    const previous = messages[messages.length - 1];
+    if (previous?.role === message.role && previous.content === message.content) {
+      continue;
+    }
+
+    messages.push(message);
+  }
 
   const safeLimit = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 8;
   return messages.slice(-safeLimit);
+}
+
+export function readDesktopSessionMessagesByFilePath(filePath: string, limit = 8): BridgeMessage[] {
+  return desktopJsonlHistoryEntriesToBridgeMessages(
+    readDesktopSessionJsonlHistoryStreamByFilePath(filePath),
+    limit,
+  );
+}
+
+export function readDesktopSessionMessages(threadId: string, limit = 8): BridgeMessage[] {
+  const session = getDesktopSessionByThreadId(threadId);
+  return session ? readDesktopSessionMessagesByFilePath(session.filePath, limit) : [];
 }
 
 export function readDesktopSessionEventStreamByFilePath(filePath: string): DesktopSessionEvent[] {

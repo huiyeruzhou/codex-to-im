@@ -4,42 +4,22 @@ import assert from 'node:assert/strict';
 import { formatLogArg, maskSecrets } from '../logger.js';
 
 describe('maskSecrets', () => {
-  it('masks token=value patterns', () => {
-    const input = 'token=secret123456789';
-    const result = maskSecrets(input);
-    assert.notEqual(result, input);
-    // Should not contain the full token
-    assert.ok(!result.includes('secret123456789'));
-  });
+  it('masks supported secret patterns', () => {
+    const cases = [
+      ['token=secret123456789', 'secret123456789'],
+      ['secret=my-secret-value', 'my-secret-value'],
+      ['password=hunter2abc', 'hunter2abc'],
+      ['api_key=sk-abcdef123456', 'sk-abcdef123456'],
+      ['Using bot token bot1234567890:ABCdefGHIjklMNOpqrSTUvwxYZ12345678a', 'bot1234567890:ABCdefGHIjklMNOpqrSTUvwxYZ12345678a'],
+      ['Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.test.signature', 'Bearer eyJhbGciOiJIUzI1NiJ9.test.signature'],
+      ['token="my-secret-token"', 'my-secret-token'],
+    ];
 
-  it('masks secret=value patterns', () => {
-    const input = 'secret=my-secret-value';
-    const result = maskSecrets(input);
-    assert.ok(!result.includes('my-secret-value'));
-  });
-
-  it('masks password=value patterns', () => {
-    const input = 'password=hunter2abc';
-    const result = maskSecrets(input);
-    assert.ok(!result.includes('hunter2abc'));
-  });
-
-  it('masks api_key=value patterns', () => {
-    const input = 'api_key=sk-abcdef123456';
-    const result = maskSecrets(input);
-    assert.ok(!result.includes('sk-abcdef123456'));
-  });
-
-  it('masks bot token format', () => {
-    const input = 'Using bot token bot1234567890:ABCdefGHIjklMNOpqrSTUvwxYZ12345678a';
-    const result = maskSecrets(input);
-    assert.ok(!result.includes('bot1234567890:ABCdefGHIjklMNOpqrSTUvwxYZ12345678a'));
-  });
-
-  it('masks Bearer tokens', () => {
-    const input = 'Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.test.signature';
-    const result = maskSecrets(input);
-    assert.ok(!result.includes('Bearer eyJhbGciOiJIUzI1NiJ9.test.signature'));
+    for (const [input, leaked] of cases) {
+      const result = maskSecrets(input);
+      assert.notEqual(result, input);
+      assert.ok(!result.includes(leaked), `${leaked} should be masked`);
+    }
   });
 
   it('leaves normal text unchanged', () => {
@@ -50,14 +30,7 @@ describe('maskSecrets', () => {
   it('preserves last 4 chars of masked values', () => {
     const input = 'token=abcdefghijklmnop';
     const result = maskSecrets(input);
-    // The last 4 chars of the matched portion should be visible
     assert.ok(result.includes('mnop'));
-  });
-
-  it('handles quoted values', () => {
-    const input = 'token="my-secret-token"';
-    const result = maskSecrets(input);
-    assert.ok(!result.includes('my-secret-token'));
   });
 });
 

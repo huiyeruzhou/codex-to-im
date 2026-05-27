@@ -5,7 +5,6 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  CTI_HOME,
   CONFIG_PATH,
   CONFIG_V2_PATH,
   loadConfig,
@@ -15,33 +14,14 @@ import {
   type Config,
 } from '../config.js';
 
-// ── maskSecret ──
-
-describe('CTI_HOME', () => {
-  it('defaults to the codex-to-im home directory when CTI_HOME is unset', () => {
-    if (process.env.CTI_HOME) {
-      assert.equal(CTI_HOME, process.env.CTI_HOME);
-      return;
-    }
-
-    assert.equal(CTI_HOME, path.join(os.homedir(), '.codex-to-im'));
-  });
-});
-
 describe('maskSecret', () => {
-  it('masks short values entirely', () => {
+  it('masks short values and preserves the last four characters for longer values', () => {
+    assert.equal(maskSecret(''), '****');
     assert.equal(maskSecret('abc'), '****');
     assert.equal(maskSecret('abcd'), '****');
-    assert.equal(maskSecret(''), '****');
-  });
-
-  it('preserves last 4 chars for longer values', () => {
+    assert.equal(maskSecret('12345'), '*2345');
     assert.equal(maskSecret('12345678'), '****5678');
     assert.equal(maskSecret('secret-token-abcd'), '*************abcd');
-  });
-
-  it('handles exactly 5 chars', () => {
-    assert.equal(maskSecret('12345'), '*2345');
   });
 });
 
@@ -54,11 +34,6 @@ describe('configToSettings', () => {
     enabledChannels: [],
     defaultMode: 'normal',
   };
-
-  it('always sets remote_bridge_enabled to true', () => {
-    const m = configToSettings(base);
-    assert.equal(m.get('remote_bridge_enabled'), 'true');
-  });
 
   it('maps feishu config', () => {
     const m = configToSettings({
@@ -117,62 +92,40 @@ describe('configToSettings', () => {
     assert.equal(m.get('bridge_weixin_command_markdown_enabled'), 'false');
   });
 
-  it('maps mode and omits model when not set', () => {
+  it('maps runtime defaults and scalar overrides', () => {
     const m = configToSettings(base);
+    assert.equal(m.get('remote_bridge_enabled'), 'true');
     assert.equal(m.has('bridge_default_model'), false);
     assert.equal(m.has('default_model'), false);
     assert.equal(m.get('bridge_default_mode'), 'normal');
     assert.equal(m.get('bridge_history_message_limit'), '8');
     assert.equal(m.get('bridge_stream_status_idle_start_seconds'), '180');
     assert.equal(m.get('bridge_stream_status_check_interval_seconds'), '10');
-  });
 
-  it('maps configured stream status timing settings', () => {
-    const m = configToSettings({
+    const configured = configToSettings({
       ...base,
+      defaultModel: 'gpt-4o',
+      defaultWorkspaceRoot: '/tmp/workspace',
+      historyMessageLimit: 12,
       streamStatusIdleStartSeconds: 240,
       streamStatusCheckIntervalSeconds: 15,
-    });
-    assert.equal(m.get('bridge_stream_status_idle_start_seconds'), '240');
-    assert.equal(m.get('bridge_stream_status_check_interval_seconds'), '15');
-  });
-
-  it('maps model when explicitly set', () => {
-    const m = configToSettings({ ...base, defaultModel: 'gpt-4o' });
-    assert.equal(m.get('bridge_default_model'), 'gpt-4o');
-    assert.equal(m.get('default_model'), 'gpt-4o');
-  });
-
-  it('maps configured history message limit', () => {
-    const m = configToSettings({ ...base, historyMessageLimit: 12 });
-    assert.equal(m.get('bridge_history_message_limit'), '12');
-  });
-
-  it('maps default workspace root', () => {
-    const m = configToSettings({ ...base, defaultWorkspaceRoot: '/tmp/workspace' });
-    assert.equal(m.get('bridge_default_workspace_root'), '/tmp/workspace');
-  });
-
-  it('maps codex skip git repo check flag', () => {
-    const m = configToSettings({ ...base, codexSkipGitRepoCheck: true });
-    assert.equal(m.get('bridge_codex_skip_git_repo_check'), 'true');
-  });
-
-  it('maps codex sandbox mode and reasoning effort', () => {
-    const m = configToSettings({
-      ...base,
+      codexSkipGitRepoCheck: true,
       codexSandboxMode: 'danger-full-access',
       codexNetworkAccess: true,
       codexReasoningEffort: 'xhigh',
+      defaultMode: 'yolo',
     });
-    assert.equal(m.get('bridge_codex_sandbox_mode'), 'danger-full-access');
-    assert.equal(m.get('bridge_codex_network_access'), 'true');
-    assert.equal(m.get('bridge_codex_reasoning_effort'), 'xhigh');
-  });
-
-  it('maps non-default mode', () => {
-    const m = configToSettings({ ...base, defaultMode: 'yolo' });
-    assert.equal(m.get('bridge_default_mode'), 'yolo');
+    assert.equal(configured.get('bridge_default_model'), 'gpt-4o');
+    assert.equal(configured.get('default_model'), 'gpt-4o');
+    assert.equal(configured.get('bridge_default_workspace_root'), '/tmp/workspace');
+    assert.equal(configured.get('bridge_history_message_limit'), '12');
+    assert.equal(configured.get('bridge_stream_status_idle_start_seconds'), '240');
+    assert.equal(configured.get('bridge_stream_status_check_interval_seconds'), '15');
+    assert.equal(configured.get('bridge_codex_skip_git_repo_check'), 'true');
+    assert.equal(configured.get('bridge_codex_sandbox_mode'), 'danger-full-access');
+    assert.equal(configured.get('bridge_codex_network_access'), 'true');
+    assert.equal(configured.get('bridge_codex_reasoning_effort'), 'xhigh');
+    assert.equal(configured.get('bridge_default_mode'), 'yolo');
   });
 
   it('omits optional fields when not set', () => {

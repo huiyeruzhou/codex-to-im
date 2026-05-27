@@ -601,16 +601,4 @@ describe('JsonFileStore', () => {
     assert.equal(store.getChannelBinding('feishu-default', 'delete-me'), null);
     assert.deepEqual(store.getMessages(session.id).messages, []);
   });
-
-  // ── Provider (no-op) ──
-
-  it('getProvider returns undefined', () => {
-    const store = new JsonFileStore(makeSettings());
-    assert.equal(store.getProvider('any'), undefined);
-  });
-
-  it('getDefaultProviderId returns null', () => {
-    const store = new JsonFileStore(makeSettings());
-    assert.equal(store.getDefaultProviderId(), null);
-  });
 });

@@ -183,6 +183,12 @@ function asPositiveInt(value: unknown): number | undefined {
   return undefined;
 }
 
+function clampHistoryMessageLimit(value: unknown, fallback: number): number {
+  const parsed = asPositiveInt(value);
+  const base = parsed ?? fallback;
+  return Math.min(Math.max(base, 1), 20);
+}
+
 function parsePositiveInt(value: string | null, fallback: number): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
@@ -817,7 +823,7 @@ function mergeConfig(payload: Record<string, unknown>): Config {
           ? rawDefaultModel
           : current.defaultModel,
     defaultMode: payload.defaultMode === 'yolo' ? 'yolo' : 'normal',
-    historyMessageLimit: asPositiveInt(payload.historyMessageLimit) || current.historyMessageLimit || 8,
+    historyMessageLimit: clampHistoryMessageLimit(payload.historyMessageLimit, current.historyMessageLimit || 8),
     streamStatusIdleStartSeconds: asPositiveInt(payload.streamStatusIdleStartSeconds)
       || current.streamStatusIdleStartSeconds
       || 180,
@@ -826,6 +832,7 @@ function mergeConfig(payload: Record<string, unknown>): Config {
       || 10,
     codexSkipGitRepoCheck: payload.codexSkipGitRepoCheck === true,
     codexSandboxMode: payload.codexSandboxMode === 'read-only'
+      || payload.codexSandboxMode === 'workspace-write'
       || payload.codexSandboxMode === 'danger-full-access'
       ? payload.codexSandboxMode
       : 'workspace-write',
@@ -1549,16 +1556,19 @@ function renderHtml(): string {
                 <div class="command-list">
                   <div class="command-list-head"><div>命令</div><div>原始命令</div><div>说明</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/</code></div><div class="command-col-original"><code>/status</code></div><div class="command-col-desc">查看当前会话。</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>/check</code></div><div class="command-col-original"><code>/health</code></div><div class="command-col-desc">查看当前会话健康状态。</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>/check all</code></div><div class="command-col-original"><code>/health all</code></div><div class="command-col-desc">查看所有运行中会话的健康状态。</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>//...</code></div><div class="command-col-original">—</div><div class="command-col-desc">向模型发送以 <code>/</code> 开头的文本，避免被当成桥接命令。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/h</code></div><div class="command-col-original"><code>/help</code></div><div class="command-col-desc">查看帮助。</div></div>
           <div class="command-item"><div class="command-col-command"><code>/t</code></div><div class="command-col-original"><code>/threads</code></div><div class="command-col-desc">列出最近 10 条桌面会话。</div></div>
           <div class="command-item"><div class="command-col-command"><code>/t all</code></div><div class="command-col-original"><code>/threads all</code></div><div class="command-col-desc">最多列出 200 条桌面会话。</div></div>
           <div class="command-item"><div class="command-col-command"><code>/t n 100</code></div><div class="command-col-original"><code>/threads n 100</code></div><div class="command-col-desc">列出最近 100 条桌面会话，最多 200 条。</div></div>
-              <div class="command-item"><div class="command-col-command"><code>/t &lt;序号&gt;</code></div><div class="command-col-original"><code>/thread &lt;序号&gt;</code></div><div class="command-col-desc">按序号接管桌面会话。</div></div>
+              <div class="command-item"><div class="command-col-command"><code>/t &lt;序号|thread id&gt;</code></div><div class="command-col-original"><code>/thread &lt;序号|thread id&gt;</code></div><div class="command-col-desc">按序号、thread id 或可唯一匹配的前缀接管桌面会话。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/n [绝对路径 | 项目名]</code></div><div class="command-col-original"><code>/new [绝对路径 | 项目名]</code></div><div class="command-col-desc">不带参数时在当前正式会话目录下新建线程；相对项目名会在“默认工作空间”下创建目录；当前若是临时草稿线程则会报错。通过 IM 创建的新线程当前只保证在 IM 中可继续，不会自动出现在 Codex Desktop 会话列表中。</div></div>
-                  <div class="command-item"><div class="command-col-command"><code>直接发送文本</code></div><div class="command-col-original">—</div><div class="command-col-desc">继续当前已绑定会话；未绑定时会自动进入临时草稿线程。</div></div>
-                  <div class="command-item"><div class="command-col-command"><code>/his</code></div><div class="command-col-original"><code>/history</code></div><div class="command-col-desc">查看最近 N 条原始消息。</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>直接发送文本</code></div><div class="command-col-original">—</div><div class="command-col-desc">继续当前已绑定会话；未绑定时会自动进入临时草稿线程，等同先使用 <code>/t 0</code>。</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>/his</code></div><div class="command-col-original"><code>/history</code></div><div class="command-col-desc">查看最近 N 条消息的解析纯文本视图；优先读取 Codex session JSONL，找不到再退回 Bridge 缓存。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/his msg</code></div><div class="command-col-original"><code>/history msg</code></div><div class="command-col-desc">把最近 N 条消息渲染成卡片发送。</div></div>
-                  <div class="command-item"><div class="command-col-command"><code>/his raw</code></div><div class="command-col-original"><code>/history raw</code></div><div class="command-col-desc">查看最近 N 条原始消息（兼容别名）。</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>/his raw</code></div><div class="command-col-original"><code>/history raw</code></div><div class="command-col-desc">查看解析后的纯文本视图（兼容别名），不是原始 JSONL。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/his json</code></div><div class="command-col-original"><code>/history json</code></div><div class="command-col-desc">直接发送原始 Codex session JSONL 文件，不做二次包装。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/his limit 12</code></div><div class="command-col-original"><code>/history limit 12</code></div><div class="command-col-desc">修改 /his msg 返回条数限制（1-20）。</div></div>
                 </div>
@@ -1577,7 +1587,16 @@ function renderHtml(): string {
                   <div class="command-item"><div class="command-col-command"><code>/t 0</code></div><div class="command-col-original"><code>/thread 0</code></div><div class="command-col-desc">切换到当前聊天的临时草稿线程。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/t 0 reset</code></div><div class="command-col-original"><code>/thread 0 reset</code></div><div class="command-col-desc">丢弃当前草稿上下文并重建一条新的草稿线程。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/unbind</code></div><div class="command-col-original"><code>/unbind</code></div><div class="command-col-desc">解绑当前聊天，释放当前会话；之后再直接发文本会自动进入新的临时草稿线程。</div></div>
-                  <div class="command-item"><div class="command-col-command">—</div><div class="command-col-original"><code>/stop</code></div><div class="command-col-desc">停止当前任务。</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>/stop</code></div><div class="command-col-original"><code>/stop</code></div><div class="command-col-desc">停止当前任务。</div></div>
+                </div>
+              </section>
+
+              <section class="command-section">
+                <h3 class="command-section-title">文件</h3>
+                <div class="command-list">
+                  <div class="command-list-head"><div>命令</div><div>原始命令</div><div>说明</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>/cat &lt;path&gt; [start] [end]</code></div><div class="command-col-original"><code>/cat &lt;path&gt; [start] [end]</code></div><div class="command-col-desc">打印文件内容；未指定行号时默认读取前 200 行。</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>/file &lt;path&gt;</code></div><div class="command-col-original"><code>/file &lt;path&gt;</code></div><div class="command-col-desc">直接发送本地文件。</div></div>
                 </div>
               </section>
 
@@ -1585,7 +1604,7 @@ function renderHtml(): string {
                 <h3 class="command-section-title">权限</h3>
                 <div class="command-list">
                   <div class="command-list-head"><div>命令</div><div>原始命令</div><div>说明</div></div>
-                  <div class="command-item"><div class="command-col-command">—</div><div class="command-col-original"><code>/perm allow|allow_session|deny &lt;id&gt;</code></div><div class="command-col-desc">文本方式处理一个待批准权限。</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>/perm allow|allow_session|deny &lt;id&gt;</code></div><div class="command-col-original"><code>/perm allow|allow_session|deny &lt;id&gt;</code></div><div class="command-col-desc">文本方式处理一个待批准权限。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>1 / 2 / 3</code></div><div class="command-col-original">—</div><div class="command-col-desc">快速处理单个待批准权限。</div></div>
                 </div>
               </section>

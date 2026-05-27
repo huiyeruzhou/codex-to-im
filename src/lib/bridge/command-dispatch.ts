@@ -55,7 +55,7 @@ import {
   formatBindingChatLabel,
   getFeedbackParseMode,
 } from './bridge-channel-runtime.js';
-import { readDesktopSessionMessages } from '../../desktop-sessions.js';
+import { readDesktopSessionMessagesByFilePath } from '../../desktop-sessions.js';
 import { getCodexThreadId, getExplicitDesktopThreadId } from './turns/turn-classifier.js';
 import { buildFencedCodeBlock } from './markdown/fence.js';
 
@@ -119,7 +119,7 @@ function buildHistoryMessagesCard(
       ['来源', options.source],
       ['返回条数', `${messages.length} / 配置 ${options.limit}`],
     ],
-    ['`/his raw` 查看兼容原始文本；`/his json` 直接发送原始 session JSONL 文件；`/his limit 12` 修改返回条数。'],
+    ['`/his raw` 查看解析后的纯文本视图；`/his json` 直接发送原始 session JSONL 文件；`/his limit 12` 修改返回条数。'],
     options.markdown,
   );
 
@@ -317,6 +317,13 @@ export async function handleBridgeCommand(
         binding,
         parsedArgs.force ? 'forced' : undefined,
       );
+      const notes = [
+        parsedArgs.args.trim() ? '接下来直接发送文本即可继续。' : '已在当前工作目录下新建一个线程。接下来直接发送文本即可继续。',
+        ...(parsedArgs.force
+          ? ['如果当前聊天里已有旧任务在运行，它不会被终止，仍会在后台继续执行并可能稍后回消息。']
+          : []),
+        '这是 IM 侧线程，当前只保证在 IM 中可继续；不会自动出现在 Codex Desktop 会话列表中。',
+      ];
       response = buildCommandFields(
         '已新建会话',
         [
@@ -325,11 +332,7 @@ export async function handleBridgeCommand(
           ['模式', formatSessionMode(binding, session)],
           ['Provider', formatSessionCodexProvider(session)],
         ],
-        [
-          parsedArgs.args.trim() ? '接下来直接发送文本即可继续。' : '已在当前工作目录下新建一个线程。接下来直接发送文本即可继续。',
-          '如果当前聊天里已有旧任务在运行，它不会被终止，仍会在后台继续执行并可能稍后回消息。',
-          '这是 IM 侧线程，当前只保证在 IM 中可继续；不会自动出现在 Codex Desktop 会话列表中。',
-        ],
+        notes,
         responseParseMode === 'Markdown',
       );
       break;
@@ -839,7 +842,7 @@ export async function handleBridgeCommand(
         [
           '后续从 IM 发起的 Codex CLI 请求会使用这个模型。',
           ...(isCliOnlyCodexModel(selectedModel)
-            ? ['这是 CLI only 模型，只能在 IM -> Codex CLI 调用中使用，Codex Desktop 不支持。']
+            ? ['这是仅 IM/CLI 模型，只能在 IM -> Codex CLI 调用中使用，Codex Desktop 不支持。']
             : []),
         ],
         responseParseMode === 'Markdown',
@@ -908,7 +911,7 @@ export async function handleBridgeCommand(
             ? '当前聊天已绑定到一条共享会话，直接发送消息即可继续。'
             : session?.session_type === 'draft'
               ? '当前聊天正在使用临时草稿线程（等同 `/t 0`）。可直接发送消息，或用 `/t` / `/new proj1` / `/new 绝对路径` 切换到正式会话。'
-              : '当前聊天还没有绑定桌面会话。可先发送 `/t`，再用 `/t 1` 接管。',
+              : '当前聊天正在使用 IM 会话。可直接发送消息继续；如需接管桌面会话，可先发送 `/t`，再用 `/t 1` 接管。',
         ],
         responseParseMode === 'Markdown',
       );
@@ -1014,7 +1017,7 @@ export async function handleBridgeCommand(
       }
 
       const desktopMessages = sessionFile
-        ? readDesktopSessionMessages(sessionFile.threadId, limit)
+        ? readDesktopSessionMessagesByFilePath(sessionFile.filePath, limit)
         : [];
       const { messages: storedMessages } = store.getMessages(commandBinding.codepilotSessionId, { limit });
       const messages = desktopMessages.length > 0 ? desktopMessages : storedMessages;
@@ -1036,7 +1039,7 @@ export async function handleBridgeCommand(
       }
 
       const header = buildCommandFields(
-        '最近对话（raw）',
+        '最近对话（解析文本）',
         [
           ['标题', threadTitle || getSessionDisplayName(session, commandBinding.workingDirectory)],
           ['来源', messageSource],
@@ -1044,7 +1047,7 @@ export async function handleBridgeCommand(
         ],
         historyArg === 'raw'
           ? []
-          : ['`/his msg` 查看卡片版消息；`/his json` 直接发送原始 session JSONL 文件；`/his limit 12` 修改返回条数。'],
+          : ['`/his msg` 查看卡片版消息；`/his raw` 查看解析后的纯文本视图；`/his json` 直接发送原始 session JSONL 文件；`/his limit 12` 修改返回条数。'],
         responseParseMode === 'Markdown',
       );
       const body = messages.map((message, index) => {
@@ -1252,6 +1255,7 @@ export async function handleBridgeCommand(
         '**常用**',
         '- `/` 当前会话',
         '- `/check` 健康检查',
+        '- `/check all` 查看所有运行中会话的健康状态',
         '- `//...` 向模型发送以 `/` 开头的文本',
         '- `/h` 帮助',
         `- \`/t\` 最近 ${DEFAULT_DESKTOP_THREAD_LIST_LIMIT} 条桌面会话`,
@@ -1261,7 +1265,7 @@ export async function handleBridgeCommand(
         '- `/n` 在当前工作目录下新建线程（仅保证 IM 可继续，不会自动出现在桌面会话列表）',
         '- `/n proj1` 在默认工作空间下新建项目会话',
         '- 直接发文本：继续当前会话；未绑定时进入临时草稿线程',
-        '- `/his` 最近原始记录',
+        '- `/his` 最近消息纯文本视图（优先 Codex session JSONL，找不到再读 Bridge 缓存）',
         '- `/his msg` 最近消息卡片',
         '- `/his json` 直接发送原始 session JSONL 文件',
         '- `/his limit 12` 修改 `/his msg` 返回条数（1-20）',
@@ -1279,7 +1283,7 @@ export async function handleBridgeCommand(
         '- `/stop` 停止当前任务',
         '',
         '**其它**',
-        '- `/his raw` 最近原始记录（兼容别名）',
+        '- `/his raw` 解析后的纯文本视图（兼容别名）',
         '- `/his json` 直接发送原始 session JSONL 文件（兼容别名：`/his file`）',
         '- `/perm allow|allow_session|deny <id>` 或 `1 / 2 / 3` 处理权限',
         '- `/cat <path> [start] [end]` 打印文件内容（默认前 200 行）',

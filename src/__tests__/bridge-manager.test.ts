@@ -224,16 +224,24 @@ describe('bridge-manager resolveNewWorkingDirectory', () => {
 });
 
 describe('bridge-manager resolveCommandAlias', () => {
-  it('maps root slash to status', () => {
-    assert.equal(_testOnly.resolveCommandAlias('/', ''), '/status');
-  });
+  it('maps command aliases that change routing behavior', () => {
+    const cases: Array<[string, string, string]> = [
+      ['/', '', '/status'],
+      ['/check', '', '/health'],
+      ['//', '', '//'],
+      ['/t', '', '/threads'],
+      ['/t', 'all', '/threads'],
+      ['/t', 'n 10', '/threads'],
+      ['/t', '1', '/thread'],
+      ['/m', '', '/mode'],
+      ['/r', 'high', '/reasoning'],
+      ['/n', 'proj1', '/new'],
+      ['/h', '', '/help'],
+    ];
 
-  it('maps /check to health', () => {
-    assert.equal(_testOnly.resolveCommandAlias('/check', ''), '/health');
-  });
-
-  it('leaves double slash for model prompt escaping', () => {
-    assert.equal(_testOnly.resolveCommandAlias('//', ''), '//');
+    for (const [command, args, expected] of cases) {
+      assert.equal(_testOnly.resolveCommandAlias(command, args), expected);
+    }
   });
 
   it('treats double slash as an escaped model prompt prefix', () => {
@@ -242,13 +250,6 @@ describe('bridge-manager resolveCommandAlias', () => {
     assert.equal(_testOnly.isBridgeCommandText('//status'), false);
     assert.equal(_testOnly.toModelPromptText('//status'), '/status');
     assert.equal(_testOnly.toModelPromptText('//'), '/');
-  });
-
-  it('maps short desktop thread alias based on args', () => {
-    assert.equal(_testOnly.resolveCommandAlias('/t', ''), '/threads');
-    assert.equal(_testOnly.resolveCommandAlias('/t', 'all'), '/threads');
-    assert.equal(_testOnly.resolveCommandAlias('/t', 'n 10'), '/threads');
-    assert.equal(_testOnly.resolveCommandAlias('/t', '1'), '/thread');
   });
 
   it('caps desktop thread list requests at 200 items', () => {
@@ -308,18 +309,6 @@ describe('bridge-manager resolveCommandAlias', () => {
       200,
     );
     assert.match(response, /^桌面会话（当前显示 1 条，最多 200 条）/);
-  });
-
-  it('maps short session and history aliases', () => {
-    assert.equal(_testOnly.resolveCommandAlias('/his', ''), '/history');
-    assert.equal(_testOnly.resolveCommandAlias('/his', 'raw'), '/history');
-  });
-
-  it('maps mode, reasoning, new, and help aliases', () => {
-    assert.equal(_testOnly.resolveCommandAlias('/m', ''), '/mode');
-    assert.equal(_testOnly.resolveCommandAlias('/r', 'high'), '/reasoning');
-    assert.equal(_testOnly.resolveCommandAlias('/n', 'proj1'), '/new');
-    assert.equal(_testOnly.resolveCommandAlias('/h', ''), '/help');
   });
 
   it('maps numeric reasoning aliases to supported effort levels', () => {

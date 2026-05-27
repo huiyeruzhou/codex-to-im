@@ -8,6 +8,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 import {
   listDesktopSessions,
+  readDesktopSessionMessagesByFilePath,
   readDesktopSessionEventDeltaByFilePath,
   readDesktopSessionEventStreamByFilePath,
   readDesktopSessionMirrorRecordDeltaByFilePath,
@@ -446,6 +447,66 @@ describe('listDesktopSessions', () => {
 });
 
 describe('readDesktopSessionEventStreamByFilePath', () => {
+  it('builds display messages from the shared JSONL history parser', () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-desktop-messages-'));
+    const filePath = path.join(tempRoot, 'rollout.jsonl');
+    fs.writeFileSync(
+      filePath,
+      [
+        JSON.stringify({
+          timestamp: '2026-05-28T00:00:00.000Z',
+          type: 'session_meta',
+          payload: {
+            id: 'thread-1',
+            cwd: '/tmp/project',
+            originator: 'Codex CLI',
+          },
+        }),
+        JSON.stringify({
+          timestamp: '2026-05-28T00:00:01.000Z',
+          type: 'event_msg',
+          payload: { type: 'user_message', message: '用户消息' },
+        }),
+        JSON.stringify({
+          timestamp: '2026-05-28T00:00:02.000Z',
+          type: 'event_msg',
+          payload: { type: 'agent_message', message: '助手回复' },
+        }),
+        JSON.stringify({
+          timestamp: '2026-05-28T00:00:02.001Z',
+          type: 'response_item',
+          payload: {
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: '助手回复' }],
+          },
+        }),
+        JSON.stringify({
+          timestamp: '2026-05-28T00:00:03.000Z',
+          type: 'event_msg',
+          payload: { type: 'agent_reasoning', text: '内部推理摘要' },
+        }),
+        JSON.stringify({
+          timestamp: '2026-05-28T00:00:04.000Z',
+          type: 'event_msg',
+          payload: { type: 'task_complete', last_agent_message: '最终答案' },
+        }),
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const messages = readDesktopSessionMessagesByFilePath(filePath, 10);
+
+    assert.deepEqual(messages, [
+      { role: 'user', content: '用户消息' },
+      { role: 'assistant', content: '助手回复' },
+      { role: 'assistant', content: '[commentary]\n内部推理摘要' },
+      { role: 'assistant', content: '最终答案' },
+    ]);
+
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  });
+
   it('falls back to task_complete.last_agent_message for final answers', () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-desktop-events-'));
     const filePath = path.join(tempRoot, 'rollout.jsonl');
