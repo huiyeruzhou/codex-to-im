@@ -62,7 +62,7 @@
 - `/new` 普通成功路径不再提示旧任务仍在运行；只有 `--force` 切换时保留旧任务后台继续的提醒。
 - `/model` CLI-only 模型提示改为“仅 IM/CLI”，与 Web 的“仅 IM”说法收敛。
 - Web `/api/config` 保存 `historyMessageLimit` 时后端 clamp 到 1-20，并显式接受 `workspace-write` sandbox。
-- `config.env` 比 `config.v2.json` 更新且内容不是当前 v2 自动快照时，`loadConfig()` 会把 env 中显式出现的全局/默认通道配置 overlay 到 `config.v2.json`，让用户手改 env 后仍能同步到全局配置。
+- `config.env` 比 `config.v2.json` 更新且内容不是当前 v2 自动快照时，`loadConfig()` 会把 env 中显式出现的全局配置 overlay 到 `config.v2.json`；通道配置只更新匹配到同一通道的实例，匹配不到则新增 env 导入通道并提示，任何实际同步写入 v2 的情况都会提示。
 
 ## 时间线
 
@@ -83,3 +83,4 @@
 - 2026-05-28 06:52 CST：继续处理命令/前端配置审计项。更新 `command-dispatch.ts` 和 `ui-server.ts` 的命令文案、`/status` 普通 IM 会话提示、`/new --force` 条件提示、`historyMessageLimit` clamp 与 `workspace-write` 保存逻辑；补充/调整 bridge command E2E 和 `/new` 断言。执行 `npm run typecheck` 通过，定向 18 个测试通过，全量 `npm test` 398 个测试全部通过。
 - 2026-05-28 07:04 CST：按要求先提交并推送当前基线：`1d2e798 test: streamline bridge command coverage`，已推送到 `origin/master`。后续开始实现“用户修改 `config.env` 后同步更新全局 `config.v2.json`”的新功能。
 - 2026-05-28 07:14 CST：实现 env -> v2 同步：当 `config.env` mtime 新于 `config.v2.json` 且不是当前 v2 自动生成快照时，按 env 中显式键覆盖 runtime 和默认 provider 通道配置，并保留 v2 多通道实例；`saveConfig()` 改为先写 env 快照再写 v2，避免自身快照被误判为用户修改。补充配置测试覆盖 env overlay 与自动快照 no-op；执行 `npm run typecheck`、定向 `config.test.ts`、全量 `npm test`，400 个测试全部通过。
+- 2026-05-28 07:24 CST：根据反馈修正 env 通道同步策略：不再用 provider 的首个通道直接覆盖；飞书按 `CTI_FEISHU_APP_ID` 匹配已有通道，微信按 `CTI_WEIXIN_BASE_URL` 匹配，未匹配时新增 `<provider>-env` 通道并 `console.warn` 提示；只要 env 变更实际写入 `config.v2.json`，也会输出总同步提示。此修正暂不 push。

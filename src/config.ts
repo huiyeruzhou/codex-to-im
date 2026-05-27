@@ -344,21 +344,28 @@ function migrateLegacyEnvToV2(env: Map<string, string>): ConfigV2File {
   };
 }
 
-function providerChannelIndex(channels: ChannelInstance[], provider: ChannelProvider): number {
-  const preferredId = buildDefaultChannelId(provider);
-  const preferredIndex = channels.findIndex((channel) => channel.id === preferredId);
-  if (preferredIndex !== -1) return preferredIndex;
-  return channels.findIndex((channel) => channel.provider === provider);
+function buildUniqueChannelId(channels: ChannelInstance[], baseId: string): string {
+  const existing = new Set(channels.map((channel) => channel.id));
+  let id = normalizeChannelId(baseId);
+  let suffix = 2;
+  while (existing.has(id)) {
+    id = normalizeChannelId(`${baseId}-${suffix}`);
+    suffix += 1;
+  }
+  return id;
 }
 
-function getOrCreateProviderChannel(channels: ChannelInstance[], provider: ChannelProvider): ChannelInstance {
-  const existingIndex = providerChannelIndex(channels, provider);
-  if (existingIndex !== -1) return channels[existingIndex];
+function warnEnvCreatedChannel(provider: ChannelProvider, channel: ChannelInstance): void {
+  console.warn(
+    `[codex-to-im] config.env 中的 ${provider} 通道配置没有匹配到现有通道，已新增通道 ${channel.id}。请在 Web 控制台确认是否启用或合并。`,
+  );
+}
 
+function createEnvImportedChannel(channels: ChannelInstance[], provider: ChannelProvider): ChannelInstance {
   const timestamp = nowIso();
   const channel: ChannelInstance = {
-    id: buildDefaultChannelId(provider),
-    alias: defaultAliasForProvider(provider),
+    id: buildUniqueChannelId(channels, `${provider}-env`),
+    alias: `${defaultAliasForProvider(provider)} env导入`,
     provider,
     enabled: false,
     createdAt: timestamp,
@@ -366,11 +373,38 @@ function getOrCreateProviderChannel(channels: ChannelInstance[], provider: Chann
     config: {},
   };
   channels.push(channel);
+  warnEnvCreatedChannel(provider, channel);
   return channel;
 }
 
 function envHasAny(env: Map<string, string>, keys: string[]): boolean {
   return keys.some((key) => env.has(key));
+}
+
+function findFeishuEnvChannel(channels: ChannelInstance[], env: Map<string, string>): ChannelInstance | undefined {
+  const appId = env.get("CTI_FEISHU_APP_ID")?.trim();
+  const feishuChannels = channels.filter((channel) => channel.provider === 'feishu');
+  if (appId) {
+    return feishuChannels.find((channel) => (channel.config as FeishuChannelConfig).appId === appId);
+  }
+  if (feishuChannels.length === 1) return feishuChannels[0];
+  return feishuChannels.find((channel) => (
+    channel.id === buildDefaultChannelId('feishu')
+    && !(channel.config as FeishuChannelConfig).appId
+  ));
+}
+
+function findWeixinEnvChannel(channels: ChannelInstance[], env: Map<string, string>): ChannelInstance | undefined {
+  const baseUrl = env.get("CTI_WEIXIN_BASE_URL")?.trim();
+  const weixinChannels = channels.filter((channel) => channel.provider === 'weixin');
+  if (baseUrl) {
+    return weixinChannels.find((channel) => (channel.config as WeixinChannelConfig).baseUrl === baseUrl);
+  }
+  if (weixinChannels.length === 1) return weixinChannels[0];
+  return weixinChannels.find((channel) => (
+    channel.id === buildDefaultChannelId('weixin')
+    && !(channel.config as WeixinChannelConfig).baseUrl
+  ));
 }
 
 function applyRuntimeEnvOverlay(runtime: RuntimeConfigV2, env: Map<string, string>): RuntimeConfigV2 {
@@ -431,7 +465,10 @@ function applyChannelEnvOverlay(channels: ChannelInstance[], env: Map<string, st
     }
     for (const provider of enabledChannels) {
       if (isSupportedChannelProvider(provider)) {
-        getOrCreateProviderChannel(next, provider).enabled = true;
+        const hasProviderChannel = next.some((channel) => channel.provider === provider);
+        if (!hasProviderChannel) {
+          createEnvImportedChannel(next, provider).enabled = true;
+        }
       }
     }
   }
@@ -446,8 +483,9 @@ function applyChannelEnvOverlay(channels: ChannelInstance[], env: Map<string, st
     "CTI_FEISHU_COMMAND_MARKDOWN_ENABLED",
   ];
   if (envHasAny(env, feishuKeys)) {
-    const channel = getOrCreateProviderChannel(next, 'feishu');
+    const channel = findFeishuEnvChannel(next, env) || createEnvImportedChannel(next, 'feishu');
     const config = { ...(channel.config as FeishuChannelConfig) };
+    if (enabledChannels?.has('feishu')) channel.enabled = true;
     if (env.has("CTI_FEISHU_APP_ID")) config.appId = env.get("CTI_FEISHU_APP_ID") || undefined;
     if (env.has("CTI_FEISHU_APP_SECRET")) config.appSecret = env.get("CTI_FEISHU_APP_SECRET") || undefined;
     if (env.has("CTI_FEISHU_SITE") || env.has("CTI_FEISHU_DOMAIN")) {
@@ -471,8 +509,9 @@ function applyChannelEnvOverlay(channels: ChannelInstance[], env: Map<string, st
     "CTI_WEIXIN_COMMAND_MARKDOWN_ENABLED",
   ];
   if (envHasAny(env, weixinKeys)) {
-    const channel = getOrCreateProviderChannel(next, 'weixin');
+    const channel = findWeixinEnvChannel(next, env) || createEnvImportedChannel(next, 'weixin');
     const config = { ...(channel.config as WeixinChannelConfig) };
+    if (enabledChannels?.has('weixin')) channel.enabled = true;
     if (env.has("CTI_WEIXIN_BASE_URL")) config.baseUrl = env.get("CTI_WEIXIN_BASE_URL") || undefined;
     if (env.has("CTI_WEIXIN_CDN_BASE_URL")) config.cdnBaseUrl = env.get("CTI_WEIXIN_CDN_BASE_URL") || undefined;
     if (env.has("CTI_WEIXIN_MEDIA_ENABLED")) {
@@ -494,6 +533,10 @@ function applyRawConfigEnvOverlay(current: ConfigV2File, env: Map<string, string
     runtime: applyRuntimeEnvOverlay(current.runtime, env),
     channels: applyChannelEnvOverlay(current.channels, env),
   };
+}
+
+function isSameConfigV2(a: ConfigV2File, b: ConfigV2File): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 function getChannelByProvider(
@@ -675,7 +718,10 @@ function syncConfigV2FromRawEnvIfNeeded(current: ConfigV2File): ConfigV2File {
   if (env.size === 0) return current;
 
   const next = applyRawConfigEnvOverlay(current, env);
+  if (isSameConfigV2(next, current)) return current;
+
   writeConfigV2File(next);
+  console.warn('[codex-to-im] 检测到 config.env 已更新，已同步写入 config.v2.json。');
   return next;
 }
 

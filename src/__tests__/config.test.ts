@@ -251,7 +251,7 @@ describe('loadConfig/saveConfig round-trip', () => {
     );
   });
 
-  it('applies a newer config.env overlay to an existing config.v2.json', () => {
+  it('applies a newer config.env overlay and imports unmatched channel config as a new channel', () => {
     fs.mkdirSync(path.dirname(CONFIG_V2_PATH), { recursive: true });
     fs.writeFileSync(
       CONFIG_V2_PATH,
@@ -305,7 +305,17 @@ describe('loadConfig/saveConfig round-trip', () => {
     fs.utimesSync(CONFIG_V2_PATH, past, past);
     fs.utimesSync(CONFIG_PATH, future, future);
 
-    const loaded = loadConfig();
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (message?: unknown) => {
+      warnings.push(String(message));
+    };
+    let loaded: Config;
+    try {
+      loaded = loadConfig();
+    } finally {
+      console.warn = originalWarn;
+    }
     assert.equal(loaded.defaultModel, 'new-model');
     assert.equal(loaded.historyMessageLimit, 15);
     assert.equal(loaded.codexSandboxMode, 'danger-full-access');
@@ -316,14 +326,83 @@ describe('loadConfig/saveConfig round-trip', () => {
         appId: (channel.config as { appId?: string }).appId,
       })),
       [
-        { id: 'feishu-rd', enabled: true, appId: 'env-app' },
+        { id: 'feishu-rd', enabled: true, appId: 'old-app' },
         { id: 'feishu-cs', enabled: false, appId: 'cs-app' },
+        { id: 'feishu-env', enabled: false, appId: 'env-app' },
       ],
     );
+    assert.equal(warnings.length, 2);
+    assert.match(warnings[0], /没有匹配到现有通道/);
+    assert.match(warnings[0], /feishu-env/);
+    assert.match(warnings[1], /config\.env 已更新/);
+    assert.match(warnings[1], /config\.v2\.json/);
 
     const persisted = JSON.parse(fs.readFileSync(CONFIG_V2_PATH, 'utf-8')) as any;
     assert.equal(persisted.runtime.defaultModel, 'new-model');
-    assert.equal(persisted.channels[0].config.appId, 'env-app');
+    assert.equal(persisted.channels[0].config.appId, 'old-app');
+    assert.equal(persisted.channels[2].config.appId, 'env-app');
+  });
+
+  it('updates an existing channel when config.env matches its channel identity', () => {
+    fs.mkdirSync(path.dirname(CONFIG_V2_PATH), { recursive: true });
+    fs.writeFileSync(
+      CONFIG_V2_PATH,
+      JSON.stringify({
+        schemaVersion: 2,
+        runtime: {
+          provider: 'codex',
+          defaultMode: 'normal',
+        },
+        channels: [
+          {
+            id: 'feishu-rd',
+            alias: '研发飞书',
+            provider: 'feishu',
+            enabled: true,
+            createdAt: '2026-03-28T00:00:00.000Z',
+            updatedAt: '2026-03-28T00:00:00.000Z',
+            config: {
+              appId: 'same-app',
+              appSecret: 'old-secret',
+            },
+          },
+        ],
+      }, null, 2),
+    );
+    fs.writeFileSync(
+      CONFIG_PATH,
+      [
+        'CTI_FEISHU_APP_ID=same-app',
+        'CTI_FEISHU_APP_SECRET=new-secret',
+      ].join('\n'),
+    );
+    const past = new Date(Date.now() - 10_000);
+    const future = new Date(Date.now() + 10_000);
+    fs.utimesSync(CONFIG_V2_PATH, past, past);
+    fs.utimesSync(CONFIG_PATH, future, future);
+
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (message?: unknown) => {
+      warnings.push(String(message));
+    };
+    let loaded: Config;
+    try {
+      loaded = loadConfig();
+    } finally {
+      console.warn = originalWarn;
+    }
+    assert.deepEqual(
+      loaded.channels?.map((channel) => ({
+        id: channel.id,
+        appId: (channel.config as { appId?: string }).appId,
+        appSecret: (channel.config as { appSecret?: string }).appSecret,
+      })),
+      [
+        { id: 'feishu-rd', appId: 'same-app', appSecret: 'new-secret' },
+      ],
+    );
+    assert.deepEqual(warnings, ['[codex-to-im] 检测到 config.env 已更新，已同步写入 config.v2.json。']);
   });
 
   it('ignores a newer config.env when it still matches the generated snapshot', () => {
