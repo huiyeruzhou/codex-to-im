@@ -1447,7 +1447,7 @@ function renderHtml(): string {
                   </select>
                 </label>
                 <label>
-                  <span class="field-title">/history 返回条数 <span class="help-tip" tabindex="0" data-tip="控制 IM 中 /history 命令最多返回多少条最近消息。">?</span></span>
+                  <span class="field-title">/his 返回条数 <span class="help-tip" tabindex="0" data-tip="控制 IM 中 /his msg 最多返回多少条最近消息，也可用 /his limit 12 修改。">?</span></span>
                   <input id="historyMessageLimit" type="number" min="1" max="20" value="8" />
                 </label>
                 <label>
@@ -1557,8 +1557,10 @@ function renderHtml(): string {
                   <div class="command-item"><div class="command-col-command"><code>/n [绝对路径 | 项目名]</code></div><div class="command-col-original"><code>/new [绝对路径 | 项目名]</code></div><div class="command-col-desc">不带参数时在当前正式会话目录下新建线程；相对项目名会在“默认工作空间”下创建目录；当前若是临时草稿线程则会报错。通过 IM 创建的新线程当前只保证在 IM 中可继续，不会自动出现在 Codex Desktop 会话列表中。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>直接发送文本</code></div><div class="command-col-original">—</div><div class="command-col-desc">继续当前已绑定会话；未绑定时会自动进入临时草稿线程。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/his</code></div><div class="command-col-original"><code>/history</code></div><div class="command-col-desc">查看最近 N 条原始消息。</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>/his msg</code></div><div class="command-col-original"><code>/history msg</code></div><div class="command-col-desc">把最近 N 条消息渲染成卡片发送。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/his raw</code></div><div class="command-col-original"><code>/history raw</code></div><div class="command-col-desc">查看最近 N 条原始消息（兼容别名）。</div></div>
-                  <div class="command-item"><div class="command-col-command"><code>/his json</code></div><div class="command-col-original"><code>/history json</code></div><div class="command-col-desc">导出最近 N 条原始消息为 JSON 文件并发送。</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>/his json</code></div><div class="command-col-original"><code>/history json</code></div><div class="command-col-desc">直接发送原始 Codex session JSONL 文件，不做二次包装。</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>/his limit 12</code></div><div class="command-col-original"><code>/history limit 12</code></div><div class="command-col-desc">修改 /his msg 返回条数限制（1-20）。</div></div>
                 </div>
               </section>
 
@@ -2332,7 +2334,7 @@ function renderHtml(): string {
         defaultWorkspaceRoot: '/new 相对路径根目录',
         defaultModel: '默认模型',
         defaultMode: '默认模式',
-        historyMessageLimit: '/history 返回条数',
+        historyMessageLimit: '/his 返回条数',
         streamStatusIdleStartSeconds: '长任务提示延迟',
         streamStatusCheckIntervalSeconds: '长任务提示刷新间隔',
         codexSkipGitRepoCheck: '允许在未信任 Git 目录运行 Codex',

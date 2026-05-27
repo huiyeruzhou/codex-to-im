@@ -189,7 +189,10 @@ codex-to-im uninstall
 - `/reasoning <1-5>`：切换思考级别。
 - `/model`：查看当前模型和可选模型。
 - `/model <模型名>`：切换当前 IM 会话模型。
-- `/history`：查看当前线程历史摘要。
+- `/history` 或 `/his`：查看当前线程最近原始消息。
+- `/his msg`：把最近消息渲染成卡片发送。
+- `/his json`：直接发送原始 Codex session JSONL 文件，不做二次包装或后处理。
+- `/his limit <1-20>`：修改 `/his msg` 返回条数限制。
 - `/stop`：停止当前任务。
 - `/unbind`：解除当前聊天与会话的绑定。
 

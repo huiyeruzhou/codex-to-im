@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getOrCreateDraftSession } from '../../internal-sessions.js';
 import { isCliOnlyCodexModel, readConfiguredCodexModel } from '../../codex-models.js';
-import { CTI_HOME } from '../../config.js';
+import { loadConfig, saveConfig } from '../../config.js';
 import {
   buildHealthCommandResponse,
   buildHealthListResponse,
@@ -56,7 +56,7 @@ import {
   getFeedbackParseMode,
 } from './bridge-channel-runtime.js';
 import { readDesktopSessionMessages } from '../../desktop-sessions.js';
-import { getExplicitDesktopThreadId } from './turns/turn-classifier.js';
+import { getCodexThreadId, getExplicitDesktopThreadId } from './turns/turn-classifier.js';
 import { buildFencedCodeBlock } from './markdown/fence.js';
 
 const MODE_OPTIONS_TEXT = '可选：`normal`（普通执行，默认） `yolo`（跳过审批和沙箱）。兼容：`code` 等同于 `normal`。';
@@ -64,6 +64,76 @@ const CODEX_PROVIDER_OPTIONS_TEXT = '可选：`sdk`（默认 SDK 路径） `tmux
 const REASONING_OPTIONS_TEXT = '可选：`1=minimal` `2=low` `3=medium` `4=high` `5=xhigh`';
 const SANDBOX_OPTIONS_TEXT = '可选：`read-only` `workspace-write` `danger-full-access` `default`（回到全局默认）';
 const NETWORK_OPTIONS_TEXT = '可选：`on`/`true` 开启网络，`off`/`false` 关闭网络，`default` 回到全局默认。';
+
+function parseHistoryLimitArg(raw: string): number | null {
+  const token = raw.trim();
+  if (!/^\d+$/.test(token)) return null;
+  const parsed = Number(token);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 20) return null;
+  return parsed;
+}
+
+function resolveHistorySessionFile(
+  session: BridgeSession | null,
+  binding: ChannelBinding,
+): { filePath: string; fileName: string; threadId: string; title: string | null } | null {
+  const candidates = [
+    getExplicitDesktopThreadId(session),
+    getCodexThreadId(session, binding),
+  ].filter((value): value is string => !!value?.trim());
+  const uniqueThreadIds = Array.from(new Set(candidates));
+
+  for (const threadId of uniqueThreadIds) {
+    const desktopSession = getDesktopSessionByThreadIdSafe(threadId, 'history lookup');
+    if (!desktopSession?.filePath) continue;
+    try {
+      const stat = fs.statSync(desktopSession.filePath);
+      if (!stat.isFile()) continue;
+    } catch {
+      continue;
+    }
+    return {
+      filePath: desktopSession.filePath,
+      fileName: path.basename(desktopSession.filePath),
+      threadId,
+      title: desktopSession.title || null,
+    };
+  }
+
+  return null;
+}
+
+function buildHistoryMessagesCard(
+  messages: Array<{ role: string; content: string }>,
+  options: {
+    title: string;
+    source: string;
+    limit: number;
+    markdown: boolean;
+  },
+): string {
+  const header = buildCommandFields(
+    '最近对话（msg）',
+    [
+      ['标题', options.title],
+      ['来源', options.source],
+      ['返回条数', `${messages.length} / 配置 ${options.limit}`],
+    ],
+    ['`/his raw` 查看兼容原始文本；`/his json` 直接发送原始 session JSONL 文件；`/his limit 12` 修改返回条数。'],
+    options.markdown,
+  );
+
+  const body = messages.map((message, index) => {
+    const role = formatHistoryRole(message.role);
+    const content = truncateHistoryContent(formatStoredMessageContent(message.content));
+    if (options.markdown) {
+      return `### ${index + 1}. ${role}\n\n${buildFencedCodeBlock(content, 'text')}`;
+    }
+    return `${index + 1}. ${role}\n${content}`;
+  }).join('\n\n');
+
+  return [header, body].join('\n\n').trim();
+}
 
 function parseForceFlag(args: string): { args: string; force: boolean } {
   const forcePattern = /(^|\s)--force(?=\s|$)/;
@@ -875,28 +945,76 @@ export async function handleBridgeCommand(
     }
 
     case '/history': {
+      const historyParts = args.trim().split(/\s+/).filter(Boolean);
+      const historyArg = (historyParts[0] || '').toLowerCase();
+      if (historyArg === 'limit' || historyArg === 'n') {
+        const nextLimit = parseHistoryLimitArg(historyParts[1] || '');
+        if (!nextLimit || historyParts.length > 2) {
+          response = [
+            '用法：/his limit <1-20>',
+            '示例：/his limit 12',
+            `当前配置：${getHistoryMessageLimit()}`,
+          ].join('\n');
+          break;
+        }
+        try {
+          const currentConfig = loadConfig();
+          saveConfig({ ...currentConfig, historyMessageLimit: nextLimit });
+          response = `已将 /his msg 返回条数限制设置为 ${nextLimit}。`;
+        } catch (error) {
+          response = `修改失败：${error instanceof Error ? error.message : String(error)}`;
+        }
+        break;
+      }
+
       if (!commandBinding) {
         response = '当前聊天还没有绑定会话。先发送消息创建会话，或先用 `/t 1` 接管桌面会话。';
         break;
       }
 
-      const historyArg = args.trim().toLowerCase();
-      if (historyArg && historyArg !== 'raw' && historyArg !== 'json' && historyArg !== 'file') {
+      if (historyArg && historyArg !== 'msg' && historyArg !== 'raw' && historyArg !== 'json' && historyArg !== 'file') {
         response = [
-          '用法：/his [raw|json]',
+          '用法：/his [msg|raw|json|limit <1-20>]',
           '示例：',
+          '- /his msg',
           '- /his',
           '- /his raw',
           '- /his json',
+          '- /his limit 12',
         ].join('\n');
         break;
       }
 
       const limit = getHistoryMessageLimit();
       const session = store.getSession(commandBinding.codepilotSessionId);
-      const desktopThreadId = getExplicitDesktopThreadId(session);
-      const desktopMessages = desktopThreadId
-        ? readDesktopSessionMessages(desktopThreadId, limit)
+      const sessionFile = resolveHistorySessionFile(session, commandBinding);
+
+      if (historyArg === 'json' || historyArg === 'file') {
+        if (!sessionFile) {
+          response = '当前会话没有可直接发送的 Codex session JSONL 文件。只有已落盘到 Codex session 文件的线程才能使用 `/his json`。';
+          break;
+        }
+        const attachment: OutboundAttachment = {
+          kind: 'file',
+          path: sessionFile.filePath,
+          name: sessionFile.fileName,
+        };
+        const result = await deliverResponse(
+          adapter,
+          msg.address,
+          '',
+          commandBinding.codepilotSessionId,
+          msg.messageId,
+          [attachment],
+        );
+        if (!result.ok) {
+          response = `发送失败：${result.error || '未知错误'}`;
+        }
+        break;
+      }
+
+      const desktopMessages = sessionFile
+        ? readDesktopSessionMessages(sessionFile.threadId, limit)
         : [];
       const { messages: storedMessages } = store.getMessages(commandBinding.codepilotSessionId, { limit });
       const messages = desktopMessages.length > 0 ? desktopMessages : storedMessages;
@@ -904,51 +1022,16 @@ export async function handleBridgeCommand(
         response = '当前会话还没有历史消息。';
         break;
       }
-      const threadTitle = getDesktopThreadTitle(desktopThreadId);
-      const messageSource = desktopMessages.length > 0 ? '桌面线程' : 'Bridge 缓存';
+      const threadTitle = sessionFile?.title || getDesktopThreadTitle(getExplicitDesktopThreadId(session));
+      const messageSource = desktopMessages.length > 0 ? 'Codex session JSONL' : 'Bridge 缓存';
 
-      if (historyArg === 'json' || historyArg === 'file') {
-        const exportedAt = new Date().toISOString();
-        const payload = {
-          exportedAt,
-          sessionId: commandBinding.codepilotSessionId,
-          threadTitle: threadTitle || getSessionDisplayName(session, commandBinding.workingDirectory),
+      if (historyArg === 'msg') {
+        response = buildHistoryMessagesCard(messages, {
+          title: threadTitle || getSessionDisplayName(session, commandBinding.workingDirectory),
           source: messageSource,
           limit,
-          messages,
-        };
-
-        const exportDir = path.join(CTI_HOME, 'data', 'exports');
-        fs.mkdirSync(exportDir, { recursive: true });
-        const safeStem = (payload.threadTitle || 'history')
-          .replace(/[^\p{L}\p{N}_-]+/gu, '_')
-          .replace(/^_+|_+$/g, '')
-          .slice(0, 48) || 'history';
-        const safeTime = exportedAt.replace(/[:.]/g, '-');
-        const fileName = `${safeStem}-${safeTime}.json`;
-        const filePath = path.join(exportDir, fileName);
-
-        try {
-          fs.writeFileSync(filePath, JSON.stringify(payload, null, 2), 'utf-8');
-          const attachment: OutboundAttachment = {
-            kind: 'file',
-            path: filePath,
-            name: fileName,
-          };
-          const result = await deliverResponse(
-            adapter,
-            msg.address,
-            '',
-            commandBinding.codepilotSessionId,
-            msg.messageId,
-            [attachment],
-          );
-          response = result.ok ? `已发送历史 JSON：${fileName}` : `发送失败：${result.error || '未知错误'}`;
-        } catch (error) {
-          response = `导出失败：${error instanceof Error ? error.message : String(error)}`;
-        } finally {
-          try { fs.unlinkSync(filePath); } catch { /* best effort */ }
-        }
+          markdown: responseParseMode === 'Markdown',
+        });
         break;
       }
 
@@ -961,7 +1044,7 @@ export async function handleBridgeCommand(
         ],
         historyArg === 'raw'
           ? []
-          : ['`/his` 查看最近原始记录；`/his json` 可导出为 JSON 文件。'],
+          : ['`/his msg` 查看卡片版消息；`/his json` 直接发送原始 session JSONL 文件；`/his limit 12` 修改返回条数。'],
         responseParseMode === 'Markdown',
       );
       const body = messages.map((message, index) => {
@@ -1179,7 +1262,9 @@ export async function handleBridgeCommand(
         '- `/n proj1` 在默认工作空间下新建项目会话',
         '- 直接发文本：继续当前会话；未绑定时进入临时草稿线程',
         '- `/his` 最近原始记录',
-        '- `/his json` 导出最近原始记录为 JSON 文件并发送',
+        '- `/his msg` 最近消息卡片',
+        '- `/his json` 直接发送原始 session JSONL 文件',
+        '- `/his limit 12` 修改 `/his msg` 返回条数（1-20）',
         '',
         '**设置**',
         '- `/m` 查看模式；可用 `normal | yolo`（`code` 会映射为 `normal`）',
@@ -1195,7 +1280,7 @@ export async function handleBridgeCommand(
         '',
         '**其它**',
         '- `/his raw` 最近原始记录（兼容别名）',
-        '- `/his json` 导出最近原始记录 JSON（兼容别名）',
+        '- `/his json` 直接发送原始 session JSONL 文件（兼容别名：`/his file`）',
         '- `/perm allow|allow_session|deny <id>` 或 `1 / 2 / 3` 处理权限',
         '- `/cat <path> [start] [end]` 打印文件内容（默认前 200 行）',
         '- `/file <path>` 直接发送本地文件',

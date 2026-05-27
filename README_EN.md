@@ -188,7 +188,10 @@ You can also specify a directory explicitly:
 - `/reasoning <1-5>`: change the reasoning effort.
 - `/model`: inspect the current model and available models.
 - `/model <model name>`: change the model for the current IM session.
-- `/history`: inspect the current thread history summary.
+- `/history` or `/his`: inspect recent raw messages for the current thread.
+- `/his msg`: render recent messages as a card.
+- `/his json`: send the original Codex session JSONL file directly, without repackaging or post-processing.
+- `/his limit <1-20>`: change the `/his msg` message limit.
 - `/stop`: stop the current task.
 - `/unbind`: remove the binding between the current chat and the session.
 

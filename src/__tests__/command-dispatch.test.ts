@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { CTI_HOME } from '../config.js';
+import { CONFIG_PATH, CONFIG_V2_PATH, CTI_HOME, loadConfig } from '../config.js';
 import { JsonFileStore } from '../store.js';
 import { initBridgeContext } from '../lib/bridge/context.js';
 import { handleBridgeCommand } from '../lib/bridge/command-dispatch.js';
@@ -55,6 +55,8 @@ function readAuditSummaries(): string[] {
 describe('command-dispatch', () => {
   beforeEach(() => {
     fs.rmSync(DATA_DIR, { recursive: true, force: true });
+    fs.rmSync(CONFIG_PATH, { force: true });
+    fs.rmSync(CONFIG_V2_PATH, { force: true });
   });
 
   it('switches /thread 0 into the hidden draft session and keeps normal mode', async () => {
@@ -128,6 +130,43 @@ describe('command-dispatch', () => {
     assert.match(response, /第一条助手回复/);
   });
 
+  it('renders /history msg as a markdown card body', async () => {
+    const store = initTestContext();
+    const sent: string[] = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      send: async (message: { text: string }) => {
+        sent.push(message.text);
+        return { ok: true, messageId: 'reply-history-msg' };
+      },
+    };
+    const address = { channelType: 'feishu', chatId: 'chat-history-msg' } as const;
+    const binding = router.createBinding(address, 'D:\\workspace\\history-msg');
+    store.addMessage(binding.codepilotSessionId, 'user', '卡片用户消息');
+    store.addMessage(binding.codepilotSessionId, 'assistant', '卡片助手回复');
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/history msg',
+        messageId: 'incoming-history-msg',
+      } as any,
+      '/history msg',
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      },
+    );
+
+    const response = sent[0] || '';
+    assert.match(response, /最近对话（msg）/);
+    assert.match(response, /```text/);
+    assert.match(response, /卡片用户消息/);
+    assert.match(response, /卡片助手回复/);
+  });
+
   it('applies channel prebinding before running the first session-scoped slash command', async () => {
     const store = initTestContext();
     const sent: string[] = [];
@@ -171,7 +210,7 @@ describe('command-dispatch', () => {
     assert.match(sent[0] || '', /预绑定历史消息/);
   });
 
-  it('exports /history json as an attachment', async () => {
+  it('sends /history json as the original session file attachment', async () => {
     const store = initTestContext();
     const sent: any[] = [];
     const adapter: any = {
@@ -184,8 +223,33 @@ describe('command-dispatch', () => {
     };
     const address = { channelType: 'feishu-default', chatId: 'chat-history-json' } as const;
     const binding = router.createBinding(address, 'D:\\workspace\\history-json');
-    store.addMessage(binding.codepilotSessionId, 'user', '第一条用户消息');
-    store.addMessage(binding.codepilotSessionId, 'assistant', '第一条助手回复');
+    const threadId = 'thread-history-json';
+    const sessionDir = path.join(process.env.CODEX_HOME!, 'sessions', '2026', '05', '28');
+    fs.mkdirSync(sessionDir, { recursive: true });
+    const sessionPath = path.join(sessionDir, `rollout-${threadId}.jsonl`);
+    const rawJsonl = [
+      JSON.stringify({
+        timestamp: '2026-05-28T00:00:00.000Z',
+        type: 'session_meta',
+        payload: {
+          id: threadId,
+          timestamp: '2026-05-28T00:00:00.000Z',
+          cwd: 'D:\\workspace\\history-json',
+          originator: 'Codex CLI',
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-05-28T00:00:01.000Z',
+        type: 'event_msg',
+        payload: { type: 'user_message', message: '原始 JSONL 内容' },
+      }),
+    ].join('\n') + '\n';
+    fs.writeFileSync(sessionPath, rawJsonl, 'utf-8');
+    store.updateSession(binding.codepilotSessionId, {
+      desktop_thread_id: threadId,
+      thread_origin: 'desktop',
+      sdk_session_id: threadId,
+    });
 
     await handleBridgeCommand(
       adapter,
@@ -202,8 +266,43 @@ describe('command-dispatch', () => {
       },
     );
 
-    assert.ok(sent.some((m) => Array.isArray(m.attachments) && m.attachments.length === 1));
-    assert.match(String(sent.at(-1)?.text || ''), /已发送历史 JSON：/);
+    const attachmentMessage = sent.find((m) => Array.isArray(m.attachments) && m.attachments.length === 1);
+    assert.ok(attachmentMessage);
+    assert.equal(attachmentMessage.attachments[0].path, sessionPath);
+    assert.equal(attachmentMessage.attachments[0].name, path.basename(sessionPath));
+    assert.equal(fs.readFileSync(attachmentMessage.attachments[0].path, 'utf-8'), rawJsonl);
+    assert.equal(sent.some((m) => /已发送历史 JSON/.test(String(m.text || ''))), false);
+  });
+
+  it('updates /history message limit with a slash command', async () => {
+    initTestContext();
+    const sent: string[] = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      send: async (message: { text: string }) => {
+        sent.push(message.text);
+        return { ok: true, messageId: 'reply-history-limit' };
+      },
+    };
+    const address = { channelType: 'feishu', chatId: 'chat-history-limit' } as const;
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/history limit 12',
+        messageId: 'incoming-history-limit',
+      } as any,
+      '/history limit 12',
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      },
+    );
+
+    assert.match(sent[0] || '', /设置为 12/);
+    assert.equal(loadConfig().historyMessageLimit, 12);
   });
 
   it('updates session sandbox and network overrides with slash commands', async () => {
