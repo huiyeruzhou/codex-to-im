@@ -251,6 +251,130 @@ describe('loadConfig/saveConfig round-trip', () => {
     );
   });
 
+  it('applies a newer config.env overlay to an existing config.v2.json', () => {
+    fs.mkdirSync(path.dirname(CONFIG_V2_PATH), { recursive: true });
+    fs.writeFileSync(
+      CONFIG_V2_PATH,
+      JSON.stringify({
+        schemaVersion: 2,
+        runtime: {
+          provider: 'codex',
+          defaultModel: 'old-model',
+          defaultMode: 'normal',
+          historyMessageLimit: 8,
+          codexSandboxMode: 'workspace-write',
+        },
+        channels: [
+          {
+            id: 'feishu-rd',
+            alias: '研发飞书',
+            provider: 'feishu',
+            enabled: true,
+            createdAt: '2026-03-28T00:00:00.000Z',
+            updatedAt: '2026-03-28T00:00:00.000Z',
+            config: {
+              appId: 'old-app',
+              appSecret: 'old-secret',
+            },
+          },
+          {
+            id: 'feishu-cs',
+            alias: '客服飞书',
+            provider: 'feishu',
+            enabled: false,
+            createdAt: '2026-03-28T00:00:00.000Z',
+            updatedAt: '2026-03-28T00:00:00.000Z',
+            config: {
+              appId: 'cs-app',
+            },
+          },
+        ],
+      }, null, 2),
+    );
+    fs.writeFileSync(
+      CONFIG_PATH,
+      [
+        'CTI_DEFAULT_MODEL=new-model',
+        'CTI_HISTORY_MESSAGE_LIMIT=15',
+        'CTI_CODEX_SANDBOX_MODE=danger-full-access',
+        'CTI_FEISHU_APP_ID=env-app',
+      ].join('\n'),
+    );
+    const past = new Date(Date.now() - 10_000);
+    const future = new Date(Date.now() + 10_000);
+    fs.utimesSync(CONFIG_V2_PATH, past, past);
+    fs.utimesSync(CONFIG_PATH, future, future);
+
+    const loaded = loadConfig();
+    assert.equal(loaded.defaultModel, 'new-model');
+    assert.equal(loaded.historyMessageLimit, 15);
+    assert.equal(loaded.codexSandboxMode, 'danger-full-access');
+    assert.deepEqual(
+      loaded.channels?.map((channel) => ({
+        id: channel.id,
+        enabled: channel.enabled,
+        appId: (channel.config as { appId?: string }).appId,
+      })),
+      [
+        { id: 'feishu-rd', enabled: true, appId: 'env-app' },
+        { id: 'feishu-cs', enabled: false, appId: 'cs-app' },
+      ],
+    );
+
+    const persisted = JSON.parse(fs.readFileSync(CONFIG_V2_PATH, 'utf-8')) as any;
+    assert.equal(persisted.runtime.defaultModel, 'new-model');
+    assert.equal(persisted.channels[0].config.appId, 'env-app');
+  });
+
+  it('ignores a newer config.env when it still matches the generated snapshot', () => {
+    const config: Config = {
+      runtime: 'codex',
+      defaultMode: 'normal',
+      historyMessageLimit: 8,
+      enabledChannels: ['feishu'],
+      channels: [
+        {
+          id: 'feishu-rd',
+          alias: '研发飞书',
+          provider: 'feishu',
+          enabled: true,
+          createdAt: '2026-03-28T00:00:00.000Z',
+          updatedAt: '2026-03-28T00:00:00.000Z',
+          config: {
+            appId: 'rd-app',
+          },
+        },
+        {
+          id: 'feishu-cs',
+          alias: '客服飞书',
+          provider: 'feishu',
+          enabled: false,
+          createdAt: '2026-03-28T00:00:00.000Z',
+          updatedAt: '2026-03-28T00:00:00.000Z',
+          config: {
+            appId: 'cs-app',
+          },
+        },
+      ],
+    };
+    saveConfig(config);
+    const future = new Date(Date.now() + 10_000);
+    fs.utimesSync(CONFIG_PATH, future, future);
+
+    const loaded = loadConfig();
+    assert.deepEqual(
+      loaded.channels?.map((channel) => ({
+        id: channel.id,
+        enabled: channel.enabled,
+        appId: (channel.config as { appId?: string }).appId,
+      })),
+      [
+        { id: 'feishu-rd', enabled: true, appId: 'rd-app' },
+        { id: 'feishu-cs', enabled: false, appId: 'cs-app' },
+      ],
+    );
+  });
+
   it('filters unsupported providers from config.v2.json on load', () => {
     fs.mkdirSync(path.dirname(CONFIG_V2_PATH), { recursive: true });
     fs.writeFileSync(

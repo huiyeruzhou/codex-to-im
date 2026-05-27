@@ -200,6 +200,14 @@ function writeConfigV2File(config: ConfigV2File): void {
   fs.renameSync(tmpPath, CONFIG_V2_PATH);
 }
 
+function getFileMtimeMs(filePath: string): number | null {
+  try {
+    return fs.statSync(filePath).mtimeMs;
+  } catch {
+    return null;
+  }
+}
+
 function defaultAliasForProvider(provider: ChannelProvider): string {
   return provider === 'feishu' ? '飞书' : '微信';
 }
@@ -336,6 +344,158 @@ function migrateLegacyEnvToV2(env: Map<string, string>): ConfigV2File {
   };
 }
 
+function providerChannelIndex(channels: ChannelInstance[], provider: ChannelProvider): number {
+  const preferredId = buildDefaultChannelId(provider);
+  const preferredIndex = channels.findIndex((channel) => channel.id === preferredId);
+  if (preferredIndex !== -1) return preferredIndex;
+  return channels.findIndex((channel) => channel.provider === provider);
+}
+
+function getOrCreateProviderChannel(channels: ChannelInstance[], provider: ChannelProvider): ChannelInstance {
+  const existingIndex = providerChannelIndex(channels, provider);
+  if (existingIndex !== -1) return channels[existingIndex];
+
+  const timestamp = nowIso();
+  const channel: ChannelInstance = {
+    id: buildDefaultChannelId(provider),
+    alias: defaultAliasForProvider(provider),
+    provider,
+    enabled: false,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    config: {},
+  };
+  channels.push(channel);
+  return channel;
+}
+
+function envHasAny(env: Map<string, string>, keys: string[]): boolean {
+  return keys.some((key) => env.has(key));
+}
+
+function applyRuntimeEnvOverlay(runtime: RuntimeConfigV2, env: Map<string, string>): RuntimeConfigV2 {
+  const next: RuntimeConfigV2 = { ...runtime, provider: 'codex' };
+
+  if (env.has("CTI_DEFAULT_WORKSPACE_ROOT")) {
+    next.defaultWorkspaceRoot = expandHomePath(env.get("CTI_DEFAULT_WORKSPACE_ROOT")) || undefined;
+  }
+  if (env.has("CTI_DEFAULT_MODEL")) {
+    next.defaultModel = env.get("CTI_DEFAULT_MODEL") || undefined;
+  }
+  if (env.has("CTI_DEFAULT_MODE")) {
+    next.defaultMode = normalizeDefaultMode(env.get("CTI_DEFAULT_MODE"));
+  }
+  if (env.has("CTI_HISTORY_MESSAGE_LIMIT")) {
+    next.historyMessageLimit = parsePositiveInt(env.get("CTI_HISTORY_MESSAGE_LIMIT")) ?? next.historyMessageLimit;
+  }
+  if (env.has("CTI_STREAM_STATUS_IDLE_START_SECONDS")) {
+    next.streamStatusIdleStartSeconds = parsePositiveInt(env.get("CTI_STREAM_STATUS_IDLE_START_SECONDS"))
+      ?? next.streamStatusIdleStartSeconds;
+  }
+  if (env.has("CTI_STREAM_STATUS_CHECK_INTERVAL_SECONDS")) {
+    next.streamStatusCheckIntervalSeconds = parsePositiveInt(env.get("CTI_STREAM_STATUS_CHECK_INTERVAL_SECONDS"))
+      ?? next.streamStatusCheckIntervalSeconds;
+  }
+  if (env.has("CTI_CODEX_SKIP_GIT_REPO_CHECK")) {
+    next.codexSkipGitRepoCheck = env.get("CTI_CODEX_SKIP_GIT_REPO_CHECK") === "true";
+  }
+  if (env.has("CTI_CODEX_SANDBOX_MODE")) {
+    next.codexSandboxMode = parseSandboxMode(env.get("CTI_CODEX_SANDBOX_MODE")) ?? next.codexSandboxMode;
+  }
+  if (env.has("CTI_CODEX_NETWORK_ACCESS")) {
+    next.codexNetworkAccess = env.get("CTI_CODEX_NETWORK_ACCESS") === "true";
+  }
+  if (env.has("CTI_CODEX_REASONING_EFFORT")) {
+    next.codexReasoningEffort = parseReasoningEffort(env.get("CTI_CODEX_REASONING_EFFORT"))
+      ?? next.codexReasoningEffort;
+  }
+  if (env.has("CTI_UI_ALLOW_LAN")) {
+    next.uiAllowLan = env.get("CTI_UI_ALLOW_LAN") === "true";
+  }
+  if (env.has("CTI_UI_ACCESS_TOKEN")) {
+    next.uiAccessToken = env.get("CTI_UI_ACCESS_TOKEN") || undefined;
+  }
+
+  return next;
+}
+
+function applyChannelEnvOverlay(channels: ChannelInstance[], env: Map<string, string>): ChannelInstance[] {
+  const next = normalizeChannelInstances(channels);
+  const enabledChannels = env.has("CTI_ENABLED_CHANNELS")
+    ? new Set(splitCsv(env.get("CTI_ENABLED_CHANNELS")) ?? [])
+    : null;
+
+  if (enabledChannels) {
+    for (const channel of next) {
+      channel.enabled = enabledChannels.has(channel.provider);
+    }
+    for (const provider of enabledChannels) {
+      if (isSupportedChannelProvider(provider)) {
+        getOrCreateProviderChannel(next, provider).enabled = true;
+      }
+    }
+  }
+
+  const feishuKeys = [
+    "CTI_FEISHU_APP_ID",
+    "CTI_FEISHU_APP_SECRET",
+    "CTI_FEISHU_SITE",
+    "CTI_FEISHU_DOMAIN",
+    "CTI_FEISHU_ALLOWED_USERS",
+    "CTI_FEISHU_STREAMING_ENABLED",
+    "CTI_FEISHU_COMMAND_MARKDOWN_ENABLED",
+  ];
+  if (envHasAny(env, feishuKeys)) {
+    const channel = getOrCreateProviderChannel(next, 'feishu');
+    const config = { ...(channel.config as FeishuChannelConfig) };
+    if (env.has("CTI_FEISHU_APP_ID")) config.appId = env.get("CTI_FEISHU_APP_ID") || undefined;
+    if (env.has("CTI_FEISHU_APP_SECRET")) config.appSecret = env.get("CTI_FEISHU_APP_SECRET") || undefined;
+    if (env.has("CTI_FEISHU_SITE") || env.has("CTI_FEISHU_DOMAIN")) {
+      config.site = normalizeFeishuSite(env.get("CTI_FEISHU_SITE") || env.get("CTI_FEISHU_DOMAIN"));
+    }
+    if (env.has("CTI_FEISHU_ALLOWED_USERS")) config.allowedUsers = splitCsv(env.get("CTI_FEISHU_ALLOWED_USERS"));
+    if (env.has("CTI_FEISHU_STREAMING_ENABLED")) {
+      config.streamingEnabled = env.get("CTI_FEISHU_STREAMING_ENABLED") === "true";
+    }
+    if (env.has("CTI_FEISHU_COMMAND_MARKDOWN_ENABLED")) {
+      config.feedbackMarkdownEnabled = env.get("CTI_FEISHU_COMMAND_MARKDOWN_ENABLED") === "true";
+    }
+    channel.config = config;
+    channel.updatedAt = nowIso();
+  }
+
+  const weixinKeys = [
+    "CTI_WEIXIN_BASE_URL",
+    "CTI_WEIXIN_CDN_BASE_URL",
+    "CTI_WEIXIN_MEDIA_ENABLED",
+    "CTI_WEIXIN_COMMAND_MARKDOWN_ENABLED",
+  ];
+  if (envHasAny(env, weixinKeys)) {
+    const channel = getOrCreateProviderChannel(next, 'weixin');
+    const config = { ...(channel.config as WeixinChannelConfig) };
+    if (env.has("CTI_WEIXIN_BASE_URL")) config.baseUrl = env.get("CTI_WEIXIN_BASE_URL") || undefined;
+    if (env.has("CTI_WEIXIN_CDN_BASE_URL")) config.cdnBaseUrl = env.get("CTI_WEIXIN_CDN_BASE_URL") || undefined;
+    if (env.has("CTI_WEIXIN_MEDIA_ENABLED")) {
+      config.mediaEnabled = env.get("CTI_WEIXIN_MEDIA_ENABLED") === "true";
+    }
+    if (env.has("CTI_WEIXIN_COMMAND_MARKDOWN_ENABLED")) {
+      config.feedbackMarkdownEnabled = env.get("CTI_WEIXIN_COMMAND_MARKDOWN_ENABLED") === "true";
+    }
+    channel.config = config;
+    channel.updatedAt = nowIso();
+  }
+
+  return normalizeChannelInstances(next);
+}
+
+function applyRawConfigEnvOverlay(current: ConfigV2File, env: Map<string, string>): ConfigV2File {
+  return {
+    schemaVersion: 2,
+    runtime: applyRuntimeEnvOverlay(current.runtime, env),
+    channels: applyChannelEnvOverlay(current.channels, env),
+  };
+}
+
 function getChannelByProvider(
   config: ConfigV2File,
   provider: ChannelProvider,
@@ -402,7 +562,7 @@ function buildV2FileFromExpandedConfig(config: Config, current?: ConfigV2File | 
 
 export function loadConfig(): Config {
   const current = readConfigV2File();
-  if (current) return expandConfig(current);
+  if (current) return expandConfig(syncConfigV2FromRawEnvIfNeeded(current));
 
   const legacyEnv = loadRawConfigEnv();
   if (legacyEnv.size > 0) {
@@ -436,40 +596,35 @@ function formatEnvLine(key: string, value: string | undefined): string {
   return `${key}=${value}\n`;
 }
 
-export function saveConfig(config: Config): void {
-  const current = readConfigV2File();
-  const next = buildV2FileFromExpandedConfig(config, current);
-  writeConfigV2File(next);
-
-  // Keep a lightweight env snapshot for operational visibility and shell tooling.
+function buildConfigEnvSnapshot(config: ConfigV2File): string {
   let out = "";
-  out += formatEnvLine("CTI_RUNTIME", next.runtime.provider);
+  out += formatEnvLine("CTI_RUNTIME", config.runtime.provider);
   out += formatEnvLine(
     "CTI_ENABLED_CHANNELS",
-    Array.from(new Set(next.channels.filter((channel) => channel.enabled).map((channel) => channel.provider))).join(","),
+    Array.from(new Set(config.channels.filter((channel) => channel.enabled).map((channel) => channel.provider))).join(","),
   );
-  out += formatEnvLine("CTI_DEFAULT_WORKSPACE_ROOT", next.runtime.defaultWorkspaceRoot);
-  out += formatEnvLine("CTI_DEFAULT_MODEL", next.runtime.defaultModel);
-  out += formatEnvLine("CTI_DEFAULT_MODE", next.runtime.defaultMode);
-  if (next.runtime.historyMessageLimit !== undefined) {
-    out += formatEnvLine("CTI_HISTORY_MESSAGE_LIMIT", String(next.runtime.historyMessageLimit));
+  out += formatEnvLine("CTI_DEFAULT_WORKSPACE_ROOT", config.runtime.defaultWorkspaceRoot);
+  out += formatEnvLine("CTI_DEFAULT_MODEL", config.runtime.defaultModel);
+  out += formatEnvLine("CTI_DEFAULT_MODE", config.runtime.defaultMode);
+  if (config.runtime.historyMessageLimit !== undefined) {
+    out += formatEnvLine("CTI_HISTORY_MESSAGE_LIMIT", String(config.runtime.historyMessageLimit));
   }
-  if (next.runtime.streamStatusIdleStartSeconds !== undefined) {
-    out += formatEnvLine("CTI_STREAM_STATUS_IDLE_START_SECONDS", String(next.runtime.streamStatusIdleStartSeconds));
+  if (config.runtime.streamStatusIdleStartSeconds !== undefined) {
+    out += formatEnvLine("CTI_STREAM_STATUS_IDLE_START_SECONDS", String(config.runtime.streamStatusIdleStartSeconds));
   }
-  if (next.runtime.streamStatusCheckIntervalSeconds !== undefined) {
-    out += formatEnvLine("CTI_STREAM_STATUS_CHECK_INTERVAL_SECONDS", String(next.runtime.streamStatusCheckIntervalSeconds));
+  if (config.runtime.streamStatusCheckIntervalSeconds !== undefined) {
+    out += formatEnvLine("CTI_STREAM_STATUS_CHECK_INTERVAL_SECONDS", String(config.runtime.streamStatusCheckIntervalSeconds));
   }
-  if (next.runtime.codexSkipGitRepoCheck !== undefined) {
-    out += formatEnvLine("CTI_CODEX_SKIP_GIT_REPO_CHECK", String(next.runtime.codexSkipGitRepoCheck));
+  if (config.runtime.codexSkipGitRepoCheck !== undefined) {
+    out += formatEnvLine("CTI_CODEX_SKIP_GIT_REPO_CHECK", String(config.runtime.codexSkipGitRepoCheck));
   }
-  out += formatEnvLine("CTI_CODEX_SANDBOX_MODE", next.runtime.codexSandboxMode);
-  out += formatEnvLine("CTI_CODEX_NETWORK_ACCESS", String(next.runtime.codexNetworkAccess === true));
-  out += formatEnvLine("CTI_CODEX_REASONING_EFFORT", next.runtime.codexReasoningEffort);
-  out += formatEnvLine("CTI_UI_ALLOW_LAN", String(next.runtime.uiAllowLan === true));
-  out += formatEnvLine("CTI_UI_ACCESS_TOKEN", next.runtime.uiAccessToken);
+  out += formatEnvLine("CTI_CODEX_SANDBOX_MODE", config.runtime.codexSandboxMode);
+  out += formatEnvLine("CTI_CODEX_NETWORK_ACCESS", String(config.runtime.codexNetworkAccess === true));
+  out += formatEnvLine("CTI_CODEX_REASONING_EFFORT", config.runtime.codexReasoningEffort);
+  out += formatEnvLine("CTI_UI_ALLOW_LAN", String(config.runtime.uiAllowLan === true));
+  out += formatEnvLine("CTI_UI_ACCESS_TOKEN", config.runtime.uiAccessToken);
 
-  const feishu = getChannelByProvider(next, 'feishu');
+  const feishu = getChannelByProvider(config, 'feishu');
   const feishuConfig = toFeishuConfig(feishu);
   if (feishuConfig) {
     out += formatEnvLine("CTI_FEISHU_APP_ID", feishuConfig.appId);
@@ -484,7 +639,7 @@ export function saveConfig(config: Config): void {
     }
   }
 
-  const weixin = getChannelByProvider(next, 'weixin');
+  const weixin = getChannelByProvider(config, 'weixin');
   const weixinConfig = toWeixinConfig(weixin);
   if (weixinConfig) {
     out += formatEnvLine("CTI_WEIXIN_BASE_URL", weixinConfig.baseUrl);
@@ -497,10 +652,44 @@ export function saveConfig(config: Config): void {
     }
   }
 
+  return out;
+}
+
+function readTextFileIfExists(filePath: string): string | null {
+  try {
+    return fs.readFileSync(filePath, 'utf-8');
+  } catch {
+    return null;
+  }
+}
+
+function syncConfigV2FromRawEnvIfNeeded(current: ConfigV2File): ConfigV2File {
+  const envMtime = getFileMtimeMs(CONFIG_PATH);
+  const v2Mtime = getFileMtimeMs(CONFIG_V2_PATH);
+  if (envMtime === null || v2Mtime === null || envMtime <= v2Mtime) return current;
+
+  const rawEnv = readTextFileIfExists(CONFIG_PATH);
+  if (!rawEnv || rawEnv === buildConfigEnvSnapshot(current)) return current;
+
+  const env = parseEnvFile(rawEnv);
+  if (env.size === 0) return current;
+
+  const next = applyRawConfigEnvOverlay(current, env);
+  writeConfigV2File(next);
+  return next;
+}
+
+export function saveConfig(config: Config): void {
+  const current = readConfigV2File();
+  const next = buildV2FileFromExpandedConfig(config, current);
+
+  // Keep a lightweight env snapshot for operational visibility and shell tooling.
+  const out = buildConfigEnvSnapshot(next);
   ensureConfigDir();
   const tmpPath = CONFIG_PATH + ".tmp";
   fs.writeFileSync(tmpPath, out, { mode: 0o600 });
   fs.renameSync(tmpPath, CONFIG_PATH);
+  writeConfigV2File(next);
 }
 
 export function maskSecret(value: string): string {
