@@ -289,6 +289,7 @@ export interface RunInteractiveMessageDeps {
     sessionId: string,
     sdkSessionId: string | null | undefined,
     hasError: boolean,
+    errorMessage?: string | null,
   ): void;
   processMessageImpl?: typeof engine.processMessage;
   forwardPermissionRequestImpl?: typeof broker.forwardPermissionRequest;
@@ -983,7 +984,12 @@ export async function runInteractiveMessage(
     }
 
     try {
-      deps.persistSdkSessionUpdate(binding.codepilotSessionId, result.sdkSessionId, result.hasError);
+      deps.persistSdkSessionUpdate(
+        binding.codepilotSessionId,
+        result.sdkSessionId,
+        result.hasError,
+        result.errorMessage,
+      );
     } catch {
       // best effort
     }

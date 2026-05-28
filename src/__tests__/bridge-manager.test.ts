@@ -8,7 +8,7 @@ import path from 'node:path';
 import { CTI_HOME } from '../config.js';
 import { JsonFileStore } from '../store.js';
 import { initBridgeContext } from '../lib/bridge/context.js';
-import { _testOnly, start } from '../lib/bridge/bridge-manager.js';
+import { _testOnly, start, stop } from '../lib/bridge/bridge-manager.js';
 import { BaseChannelAdapter, registerAdapterFactory } from '../lib/bridge/channel-adapter.js';
 import { buildCommandCallbackData } from '../lib/bridge/command-callbacks.js';
 import { buildDesktopThreadsCommandCard } from '../lib/bridge/command-formatters.js';
@@ -95,6 +95,48 @@ class ThrowStartAdapter extends BaseChannelAdapter {
   isRunning(): boolean { return false; }
   async consumeOne() { return null; }
   async send() { return { ok: true, messageId: 'dummy' }; }
+  validateConfig(): string | null { return null; }
+  isAuthorized(): boolean { return true; }
+}
+
+class StartupNoticeAdapter extends BaseChannelAdapter {
+  static sentMessages: OutboundMessage[] = [];
+
+  readonly channelType: string;
+  readonly provider: string;
+  private running = false;
+  private waiters: Array<(msg: null) => void> = [];
+
+  constructor(instance?: { id?: string; provider?: string; alias?: string }) {
+    super();
+    this.channelType = instance?.id || 'startup-notice-main';
+    this.provider = instance?.provider || 'startup-notice';
+    Object.defineProperty(this, 'alias', {
+      value: instance?.alias,
+      configurable: true,
+      enumerable: true,
+      writable: false,
+    });
+  }
+
+  async start(): Promise<void> { this.running = true; }
+  async stop(): Promise<void> {
+    this.running = false;
+    for (const resolve of this.waiters.splice(0)) {
+      resolve(null);
+    }
+  }
+  isRunning(): boolean { return this.running; }
+  consumeOne(): Promise<null> {
+    if (!this.running) return Promise.resolve(null);
+    return new Promise((resolve) => {
+      this.waiters.push(resolve);
+    });
+  }
+  async send(message: OutboundMessage): Promise<SendResult> {
+    StartupNoticeAdapter.sentMessages.push(message);
+    return { ok: true, messageId: `startup-${StartupNoticeAdapter.sentMessages.length}` };
+  }
   validateConfig(): string | null { return null; }
   isAuthorized(): boolean { return true; }
 }
@@ -1886,6 +1928,54 @@ describe('bridge-manager startup runtime cleanup', () => {
     assert.equal(refreshed?.runtime_status, 'idle');
     assert.equal(refreshed?.queued_count || 0, 0);
   });
+
+  it('sends a startup status notice to active bound chats', async () => {
+    StartupNoticeAdapter.sentMessages = [];
+    registerAdapterFactory('feishu', (instance) => new StartupNoticeAdapter(instance as any));
+
+    const settings = makeSettings();
+    settings.set('bridge_channel_instances_json', JSON.stringify([
+      {
+        id: 'startup-notice-main',
+        provider: 'feishu',
+        alias: 'Startup Notice',
+        enabled: true,
+        config: {},
+      },
+    ]));
+    const store = new JsonFileStore(settings);
+    initBridgeContext({
+      store,
+      llm: noopLlm,
+      permissions: noopPermissions,
+      lifecycle: noopLifecycle,
+    });
+    _testOnly.resetStateForTests();
+    router.createBinding({
+      channelType: 'startup-notice-main',
+      channelProvider: 'feishu',
+      channelAlias: 'Startup Notice',
+      chatId: 'chat-startup',
+      userId: 'user-startup',
+      displayName: 'Startup Chat',
+    }, 'D:\\workspace\\startup');
+
+    try {
+      await start();
+      for (let i = 0; i < 20 && StartupNoticeAdapter.sentMessages.length === 0; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+    } finally {
+      await stop();
+    }
+
+    assert.equal(StartupNoticeAdapter.sentMessages.length, 1);
+    const notice = StartupNoticeAdapter.sentMessages[0];
+    assert.equal(notice.address.chatId, 'chat-startup');
+    assert.match(notice.text, /Bridge 已启动/);
+    assert.match(notice.text, /全局状态/);
+    assert.match(notice.text, /Adapter/);
+  });
 });
 
 describe('bridge-manager mirror subscription recovery', () => {
@@ -2255,6 +2345,34 @@ describe('bridge-manager new session handling', () => {
     assert.equal(store.getSession(newSessionId)?.sdk_session_id || '', '');
     assert.equal(currentBinding?.codepilotSessionId, newSessionId);
     assert.equal(currentBinding?.sdkSessionId || '', '');
+  });
+
+  it('keeps the current Codex thread after a transient resume process-exit error', () => {
+    const store = new JsonFileStore(makeSettings());
+    initBridgeContext({
+      store,
+      llm: noopLlm,
+      permissions: noopPermissions,
+      lifecycle: noopLifecycle,
+    });
+    _testOnly.resetStateForTests();
+
+    const address = { channelType: 'feishu', chatId: 'chat-resume-error' } as const;
+    const binding = router.createBinding(address, path.join(os.tmpdir(), 'cti-resume-error'));
+    store.updateSdkSessionId(binding.codepilotSessionId, 'thread-keep');
+
+    _testOnly.persistSdkSessionUpdate(
+      binding.codepilotSessionId,
+      null,
+      true,
+      'Codex 会话恢复失败，上一轮执行进程未正常退出。请稍后重试。',
+    );
+
+    const currentBinding = store.getChannelBinding(address.channelType, address.chatId);
+    assert.equal(store.getSession(binding.codepilotSessionId)?.sdk_session_id, 'thread-keep');
+    assert.equal(currentBinding?.sdkSessionId, 'thread-keep');
+    assert.equal(_testOnly.computeSdkSessionUpdate(null, true, 'timeout waiting for child process to exit'), null);
+    assert.equal(_testOnly.computeSdkSessionUpdate(null, true, 'resuming session with different model'), '');
   });
 });
 

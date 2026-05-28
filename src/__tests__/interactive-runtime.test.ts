@@ -55,6 +55,7 @@ describe('interactive-runtime', () => {
     const runtime = createInteractiveRuntime(() => state, {
       getStore: () => store,
       nowIso: () => '2026-04-13T00:00:00.000Z',
+      sessionTurnCooldownMs: 0,
     });
 
     runtime.registerInteractiveTask({
@@ -113,6 +114,7 @@ describe('interactive-runtime', () => {
     const runtime = createInteractiveRuntime(() => state, {
       getStore: () => store,
       nowIso: () => '2026-04-20T16:00:00.000Z',
+      sessionTurnCooldownMs: 0,
     });
 
     store.updateSession(session.id, {
@@ -143,6 +145,7 @@ describe('interactive-runtime', () => {
     const runtime = createInteractiveRuntime(() => state, {
       getStore: () => store,
       nowIso: () => '2026-04-20T16:05:00.000Z',
+      sessionTurnCooldownMs: 0,
     });
     let finalized: Array<{ outcome: string; detail?: string }> = [];
 
@@ -193,6 +196,7 @@ describe('interactive-runtime', () => {
     const runtime = createInteractiveRuntime(() => state, {
       getStore: () => store,
       nowIso: () => '2026-04-20T16:10:00.000Z',
+      sessionTurnCooldownMs: 0,
     });
     const abortController = new AbortController();
     let forceStopDetail: string | undefined;
@@ -249,6 +253,7 @@ describe('interactive-runtime', () => {
     const runtime = createInteractiveRuntime(() => state, {
       getStore: () => store,
       nowIso: () => '2026-04-20T16:11:00.000Z',
+      sessionTurnCooldownMs: 0,
     });
     let releaseFirstLock: (() => void) | undefined;
     let staleQueuedRan = false;
@@ -271,5 +276,38 @@ describe('interactive-runtime', () => {
     assert.equal(staleQueuedRan, false);
     assert.equal(state.sessionLocks.has(session.id), false);
     assert.equal(state.queuedCounts.has(session.id), false);
+  });
+
+  it('waits briefly before starting the next task in the same session', async () => {
+    const store = new JsonFileStore(makeSettings());
+    initTestBridgeContext(store);
+    const session = store.createSession('Runtime Cooldown', 'test-model', undefined, 'D:\\workspace\\runtime-cooldown', 'code');
+    const state = {
+      activeTasks: new Map(),
+      queuedCounts: new Map(),
+      sessionLocks: new Map(),
+    };
+    const runtime = createInteractiveRuntime(() => state, {
+      getStore: () => store,
+      nowIso: () => '2026-04-20T16:12:00.000Z',
+      sessionTurnCooldownMs: 25,
+    });
+    const events: string[] = [];
+
+    await runtime.processWithSessionLock(session.id, async () => {
+      events.push('first');
+    });
+
+    const startedAt = Date.now();
+    const second = runtime.processWithSessionLock(session.id, async () => {
+      events.push('second');
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.deepEqual(events, ['first']);
+
+    await second;
+    assert.deepEqual(events, ['first', 'second']);
+    assert.ok(Date.now() - startedAt >= 20);
   });
 });

@@ -10,6 +10,7 @@ export interface BridgeInteractiveRuntimeState {
 export interface CreateInteractiveRuntimeDeps {
   getStore(): Pick<BridgeStore, 'getSession' | 'listSessions' | 'updateSession'>;
   nowIso(): string;
+  sessionTurnCooldownMs?: number;
 }
 
 export interface InteractiveRuntime {
@@ -37,6 +38,7 @@ const TERMINAL_SESSION_HEALTH_STATUSES = new Set<NonNullable<BridgeSession['heal
   'failed',
   'aborted',
 ]);
+const DEFAULT_SESSION_TURN_COOLDOWN_MS = 1_500;
 
 function isTerminalSessionHealthStatus(status: BridgeSession['health_status'] | undefined): boolean {
   return Boolean(status && TERMINAL_SESSION_HEALTH_STATUSES.has(status));
@@ -47,6 +49,11 @@ export function createInteractiveRuntime(
   deps: CreateInteractiveRuntimeDeps,
 ): InteractiveRuntime {
   const sessionLockVersions = new Map<string, number>();
+  const lastSessionTaskFinishedAt = new Map<string, number>();
+  const sessionTurnCooldownMs = Math.max(
+    0,
+    deps.sessionTurnCooldownMs ?? DEFAULT_SESSION_TURN_COOLDOWN_MS,
+  );
 
   function getSessionLockVersion(sessionId: string): number {
     return sessionLockVersions.get(sessionId) || 0;
@@ -210,11 +217,23 @@ export function createInteractiveRuntime(
       incrementQueuedCount(sessionId);
     }
     const wrapped = async () => {
+      if (getSessionLockVersion(sessionId) !== lockVersion) return;
+      const lastFinishedAt = lastSessionTaskFinishedAt.get(sessionId);
+      if (lastFinishedAt && sessionTurnCooldownMs > 0) {
+        const remainingMs = sessionTurnCooldownMs - (Date.now() - lastFinishedAt);
+        if (remainingMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, remainingMs));
+        }
+      }
       if (queued) {
         decrementQueuedCount(sessionId);
       }
       if (getSessionLockVersion(sessionId) !== lockVersion) return;
-      await fn();
+      try {
+        await fn();
+      } finally {
+        lastSessionTaskFinishedAt.set(sessionId, Date.now());
+      }
     };
     const current = prev.then(wrapped, wrapped);
     state.sessionLocks.set(sessionId, current);

@@ -1113,7 +1113,8 @@ describe('CodexProvider error events', () => {
     const errorEvent = events.find(e => e.type === 'error');
     assert.ok(errorEvent);
     assert.match(errorEvent!.data, /会话恢复失败/);
-    assert.match(errorEvent!.data, /\/t 0/);
+    assert.match(errorEvent!.data, /当前会话会保留/);
+    assert.doesNotMatch(errorEvent!.data, /\/t 0/);
   });
 
   it('clears the cached thread id after a failed turn so the next message starts fresh', async () => {

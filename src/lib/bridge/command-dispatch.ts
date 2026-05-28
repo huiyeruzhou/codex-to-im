@@ -135,7 +135,7 @@ function formatPid(pid: number | undefined): string {
   return Number.isFinite(pid) && (pid as number) > 0 ? String(pid) : '-';
 }
 
-function buildGlobalStatusResponse(
+export function buildGlobalStatusResponse(
   store: BridgeStore,
   currentBinding: ChannelBinding | null,
   markdown: boolean,

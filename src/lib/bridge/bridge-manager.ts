@@ -8,6 +8,7 @@
  */
 
 import type {
+  ChannelAddress,
   BridgeStatus,
   InboundMessage,
 } from './types.js';
@@ -81,7 +82,7 @@ import {
   resolveNewWorkingDirectory,
   resolveNewSessionWorkingDirectory,
 } from './bridge-session-support.js';
-import { handleBridgeCommand } from './command-dispatch.js';
+import { buildGlobalStatusResponse, handleBridgeCommand } from './command-dispatch.js';
 import {
   runInteractiveMessage,
 } from './interactive-message-runner.js';
@@ -121,6 +122,7 @@ const TMUX_SCREEN_STOP_CALLBACK_PREFIX = 'tmux-screen:stop:';
 // without seeing task_complete. This is an internal mirror buffer guard, not an
 // IM idle reminder. Active streaming turns never use this fallback timeout.
 const MIRROR_TURN_BUFFER_TIMEOUT_MS = 10 * 60_000;
+const STARTUP_NOTICE_TITLE = 'Bridge 已启动';
 
 // ── Streaming preview helpers ──────────────────────────────────
 
@@ -154,6 +156,24 @@ function getPendingPermissionLinksForCurrentSession(
   const pending = store.listPendingPermissionLinksByChat(chatId);
   if (!sessionId) return pending;
   return pending.filter((link) => !link.sessionId || link.sessionId === sessionId);
+}
+
+function channelAddressFromBinding(binding: {
+  channelType: string;
+  channelProvider?: string;
+  channelAlias?: string;
+  chatId: string;
+  chatUserId?: string;
+  chatDisplayName?: string;
+}): ChannelAddress {
+  return {
+    channelType: binding.channelType,
+    channelProvider: binding.channelProvider,
+    channelAlias: binding.channelAlias,
+    chatId: binding.chatId,
+    userId: binding.chatUserId,
+    displayName: binding.chatDisplayName,
+  };
 }
 
 
@@ -577,6 +597,9 @@ export async function start(): Promise<void> {
   });
 
   console.log(`[bridge-manager] Bridge started with ${startedCount} adapter(s)`);
+  void deliverStartupNotifications().catch((err) => {
+    console.error('[bridge-manager] Startup notification failed:', describeUnknownError(err));
+  });
 }
 
 /**
@@ -678,6 +701,44 @@ export function getStatus(): BridgeStatus {
       };
     }),
   };
+}
+
+async function deliverStartupNotifications(): Promise<void> {
+  const state = getState();
+  const { store } = getBridgeContext();
+  const activeBindings = store
+    .listChannelBindings()
+    .filter((binding) => binding.active !== false);
+  const seen = new Set<string>();
+  const tasks: Array<Promise<unknown>> = [];
+
+  for (const binding of activeBindings) {
+    const adapter = state.adapters.get(binding.channelType);
+    if (!adapter?.isRunning()) continue;
+    const key = `${binding.channelType}:${binding.chatId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    const statusText = buildGlobalStatusResponse(store, binding, true);
+    const text = `${STARTUP_NOTICE_TITLE}\n\n${statusText}`;
+    tasks.push(deliverBridgeNotice(
+      adapter,
+      channelAddressFromBinding(binding),
+      text,
+      {
+        sessionId: binding.codepilotSessionId,
+        audit: false,
+      },
+    ).catch((err) => {
+      console.error('[bridge-manager] Failed to send startup notification:', {
+        channel_type: binding.channelType,
+        chat_id: binding.chatId,
+        error: describeUnknownError(err),
+      });
+    }));
+  }
+
+  await Promise.all(tasks);
 }
 
 /**
@@ -994,28 +1055,42 @@ async function handleCommand(
  *
  * Rules:
  * - If result has sdkSessionId AND no error → save the new ID
- * - If result has error (regardless of sdkSessionId) → clear to empty string
+ * - If result has a transient Codex resume/process-exit error → keep the
+ *   current ID so the next turn stays in the same Codex thread.
+ * - If result has another error (regardless of sdkSessionId) → clear to empty string
  * - Otherwise → no update needed
  */
 export function computeSdkSessionUpdate(
   sdkSessionId: string | null | undefined,
   hasError: boolean,
+  errorMessage?: string | null,
 ): string | null {
   if (sdkSessionId && !hasError) {
     return sdkSessionId;
   }
   if (hasError) {
+    if (isTransientCodexResumeError(errorMessage)) {
+      return null;
+    }
     return '';
   }
   return null;
+}
+
+function isTransientCodexResumeError(message: string | null | undefined): boolean {
+  const normalized = (message || '').toLowerCase();
+  return normalized.includes('上一轮执行进程未正常退出')
+    || normalized.includes('timeout waiting for child process to exit')
+    || normalized.includes('reconnecting...');
 }
 
 function persistSdkSessionUpdate(
   sessionId: string,
   sdkSessionId: string | null | undefined,
   hasError: boolean,
+  errorMessage?: string | null,
 ): void {
-  const update = computeSdkSessionUpdate(sdkSessionId, hasError);
+  const update = computeSdkSessionUpdate(sdkSessionId, hasError, errorMessage);
   if (update === null) {
     return;
   }
@@ -1095,5 +1170,7 @@ export const _testOnly = {
   abortMirrorSuppression,
   settleMirrorSuppression,
   persistSdkSessionUpdate,
+  computeSdkSessionUpdate,
+  deliverStartupNotifications,
   resetStateForTests,
 };

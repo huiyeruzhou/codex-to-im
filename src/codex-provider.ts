@@ -75,7 +75,7 @@ function normalizeCodexErrorMessage(message: string | null | undefined): string 
     lower.includes('timeout waiting for child process to exit')
     || lower.includes('reconnecting...')
   ) {
-    return 'Codex 会话恢复失败，上一轮执行进程未正常退出。请稍后重试；如果连续失败，请新开线程或切换到 /t 0。';
+    return 'Codex 会话恢复失败，上一轮执行进程未正常退出。请稍后重试；当前会话会保留，不会自动切换到新对话。';
   }
 
   return trimmed;
