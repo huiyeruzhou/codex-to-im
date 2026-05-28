@@ -190,6 +190,7 @@ You can also specify a directory explicitly:
 - `/tmux-attach <session>`: bind the current IM chat to a tmux session.
 - `/tmux-screen [lines] [seconds]s`: inspect the current bound tmux session screen; for example `/tmux-screen 5s` refreshes with the default line count, or `/tmux-screen 120 5s` temporarily shows 120 lines and refreshes every 5 seconds, with a 3-second minimum.
 - `/tmux-screen stop`: stop the current chat's periodic tmux screen refresh.
+- `/tmux-set enter on|off`: configure whether `/tmux ...` automatically appends Enter after sending content.
 - `/tmux ...`: send keys to the current bound tmux session and return the screen.
 - `/reasoning <1-5>`: change the reasoning effort.
 - `/ui`: inspect UI display settings; `/ui on|off` toggles whether SDK tool input/output details are shown.

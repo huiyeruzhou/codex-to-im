@@ -191,6 +191,7 @@ codex-to-im uninstall
 - `/tmux-attach <session>`：绑定当前 IM 会话到指定 tmux session。
 - `/tmux-screen [lines] [seconds]s`：查看当前绑定 tmux session 的屏幕状态；例如 `/tmux-screen 5s` 使用默认行数定时刷新，或 `/tmux-screen 120 5s` 临时显示 120 行并每 5 秒刷新，最低 3 秒。
 - `/tmux-screen stop`：停止当前聊天的 tmux 屏幕定时刷新。
+- `/tmux-set enter on|off`：设置 `/tmux ...` 每次发送内容后是否自动补 Enter。
 - `/tmux ...`：向当前绑定 tmux session 发送按键并自动返回屏幕。
 - `/reasoning <1-5>`：切换思考级别。
 - `/ui`：查看 UI 显示设置；`/ui on|off` 可切换 SDK 工具输入输出显示。

@@ -146,6 +146,14 @@ function getCaptureLines(session: BridgeSession): number {
   return normalizeCaptureLines(session.tmux_capture_lines || DEFAULT_CAPTURE_LINES);
 }
 
+function getAutoEnter(session: BridgeSession): boolean {
+  return session.tmux_auto_enter === true;
+}
+
+function formatOnOff(value: boolean): string {
+  return value ? 'on' : 'off';
+}
+
 function formatTmuxError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   if (/ENOENT/.test(message)) {
@@ -229,6 +237,7 @@ function tmuxCommandFamilyHelp(): string[] {
     '`/tmux-new [session]`：新建并绑定 tmux session；如果已存在，会提示并直接绑定。',
     '`/tmux-status`：查看当前绑定到哪个 tmux session，以及当前展示行数。',
     '`/tmux-set lines <1-500>`：设置 `/tmux ...` 自动截屏返回的行数，默认 80。',
+    '`/tmux-set enter on|off`：设置 `/tmux ...` 每次发送后是否自动补一个 Enter。',
     '`/tmux-screen [lines] [seconds]s`：查看当前绑定 tmux session 的屏幕状态；`lines` 只对本次/本轮定时生效。',
     '`/tmux-screen 5s`：使用默认行数，并每 5 秒刷新一次。',
     '`/tmux-screen 120 5s`：临时展示 120 行，并每 5 秒刷新一次；最低间隔 3 秒。',
@@ -250,8 +259,9 @@ function buildTmuxStatusResponse(session: BridgeSession, markdown: boolean): str
     [
       ['当前绑定', session.tmux_session_name || '未绑定'],
       ['展示行数', `${getCaptureLines(session)}`],
+      ['自动回车', formatOnOff(getAutoEnter(session))],
     ],
-    ['查看当前 IM 会话绑定到哪个 tmux session，以及 `/tmux ...` 自动截屏返回的展示行数。'],
+    ['查看当前 IM 会话绑定到哪个 tmux session，以及 `/tmux ...` 自动截屏返回的展示行数和发送设置。'],
     markdown,
   );
 }
@@ -262,6 +272,7 @@ function buildTmuxOverviewResponse(session: BridgeSession, markdown: boolean): s
     [
       ['当前绑定', session.tmux_session_name || '未绑定'],
       ['展示行数', `${getCaptureLines(session)}`],
+      ['自动回车', formatOnOff(getAutoEnter(session))],
     ],
     tmuxFullHelp(),
     markdown,
@@ -340,6 +351,18 @@ function parseTmuxSendActions(raw: string): { actions?: TmuxSendAction[]; error?
   const trailing = raw.slice(lastIndex);
   if (trailing) actions.push({ type: 'literal', text: trailing });
   return { actions };
+}
+
+function shouldAppendAutoEnter(actions: TmuxSendAction[], session: BridgeSession): boolean {
+  if (!getAutoEnter(session)) return false;
+  const lastAction = actions.at(-1);
+  return !(lastAction?.type === 'key' && lastAction.key === 'Enter');
+}
+
+function applyAutoEnter(actions: TmuxSendAction[], session: BridgeSession): TmuxSendAction[] {
+  return shouldAppendAutoEnter(actions, session)
+    ? [...actions, { type: 'key', key: 'Enter' }]
+    : actions;
 }
 
 function tmuxSendActionArgv(target: string, action: TmuxSendAction): TmuxArgv {
@@ -443,13 +466,26 @@ function buildTmuxAttachResponse(
   return appendTmuxCommandPreview(response, commands, markdown);
 }
 
-function parseTmuxSetArgs(args: string): { key: 'lines'; value: number } | null {
+function parseOnOff(raw: string): boolean | null {
+  const token = raw.trim().toLowerCase();
+  if (['on', 'true', '1', 'yes', 'enable', 'enabled'].includes(token)) return true;
+  if (['off', 'false', '0', 'no', 'disable', 'disabled'].includes(token)) return false;
+  return null;
+}
+
+function parseTmuxSetArgs(args: string): { key: 'lines'; value: number } | { key: 'enter'; value: boolean } | null {
   const parts = args.trim().split(/\s+/).filter(Boolean);
   if (parts.length !== 2) return null;
   const key = parts[0].toLowerCase();
-  if (!['lines', 'line', 'rows', 'row', 'capture-lines', 'capture'].includes(key)) return null;
-  if (!/^\d+$/.test(parts[1])) return null;
-  return { key: 'lines', value: normalizeCaptureLines(parts[1]) };
+  if (['lines', 'line', 'rows', 'row', 'capture-lines', 'capture'].includes(key)) {
+    if (!/^\d+$/.test(parts[1])) return null;
+    return { key: 'lines', value: normalizeCaptureLines(parts[1]) };
+  }
+  if (['enter', 'auto-enter', 'autoenter', 'submit'].includes(key)) {
+    const value = parseOnOff(parts[1]);
+    return value === null ? null : { key: 'enter', value };
+  }
+  return null;
 }
 
 function parseIntervalSeconds(raw: string): number | null {
@@ -608,16 +644,32 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
       if (!parsed) {
         return buildCommandFields(
           'tmux 设置用法',
-          [['命令', '`/tmux-set lines <1-500>`']],
-          [`当前展示行数：${getCaptureLines(session)}`],
+          [['命令', '`/tmux-set lines <1-500>` 或 `/tmux-set enter on|off`']],
+          [
+            `当前展示行数：${getCaptureLines(session)}`,
+            `当前自动回车：${formatOnOff(getAutoEnter(session))}`,
+          ],
           markdown,
         );
       }
-      store.updateSession(session.id, { tmux_capture_lines: parsed.value });
+      if (parsed.key === 'lines') {
+        store.updateSession(session.id, { tmux_capture_lines: parsed.value });
+        return buildCommandFields(
+          '已更新 tmux 设置',
+          [['展示行数', `${parsed.value}`]],
+          ['下一次 `/tmux ...` 截屏生效。'],
+          markdown,
+        );
+      }
+      store.updateSession(session.id, { tmux_auto_enter: parsed.value });
       return buildCommandFields(
         '已更新 tmux 设置',
-        [['展示行数', `${parsed.value}`]],
-        ['下一次 `/tmux ...` 截屏生效。'],
+        [['自动回车', formatOnOff(parsed.value)]],
+        [
+          parsed.value
+            ? '之后 `/tmux ...` 会在发送内容后自动补一个 Enter；如果消息已显式以 `<Enter>` 结尾，不会重复补。'
+            : '之后 `/tmux ...` 不会自动补 Enter。',
+        ],
         markdown,
       );
     }
@@ -706,11 +758,12 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
         );
       }
       const actions = parsed.actions || [];
-      await sendTmuxActions(target, actions);
+      const actionsToSend = applyAutoEnter(actions, session);
+      await sendTmuxActions(target, actionsToSend);
       await delay(CAPTURE_AFTER_SEND_DELAY_MS);
       const lines = getCaptureLines(session);
       const screen = await captureTmuxPane(target, lines);
-      return buildTmuxCaptureResponse(screen, lines, tmuxSendCommandPreviews(target, actions, lines), markdown);
+      return buildTmuxCaptureResponse(screen, lines, tmuxSendCommandPreviews(target, actionsToSend, lines), markdown);
     }
 
     return `未知 tmux 命令：${command}`;

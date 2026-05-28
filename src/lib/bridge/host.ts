@@ -103,6 +103,7 @@ export interface BridgeSession {
   /** IM-side remote tmux control state. Independent from codex_provider=tmux. */
   tmux_session_name?: string;
   tmux_capture_lines?: number;
+  tmux_auto_enter?: boolean;
   session_type?: 'normal' | 'draft';
   hidden?: boolean;
   parent_session_id?: string;

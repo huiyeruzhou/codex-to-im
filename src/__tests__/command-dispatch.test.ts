@@ -57,6 +57,7 @@ function installFakeTmux(): { binDir: string; logPath: string } {
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-fake-tmux-'));
   const logPath = path.join(binDir, 'tmux.log');
   const tmuxPath = path.join(binDir, 'tmux');
+  fs.writeFileSync(logPath, '', 'utf-8');
   fs.writeFileSync(tmuxPath, `#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "$TMUX_FAKE_LOG"
 case "$1" in
@@ -695,6 +696,83 @@ describe('command-dispatch', () => {
         adapter,
         {
           address,
+          text: '/tmux-set enter on',
+          messageId: 'incoming-tmux-set-enter-on',
+        } as any,
+        '/tmux-set enter on',
+        deps,
+      );
+      const autoEnterSession = binding ? store.getSession(binding.codepilotSessionId) : null;
+      assert.equal(autoEnterSession?.tmux_auto_enter, true);
+      assert.match(sent.at(-1) || '', /自动回车.*on/s);
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/tmux echo auto',
+          messageId: 'incoming-tmux-auto-enter',
+        } as any,
+        '/tmux echo auto',
+        deps,
+      );
+      const autoEnterResponse = sent.at(-1) || '';
+      assert.match(autoEnterResponse, /tmux send-keys -t alpha -l 'echo auto'/);
+      assert.match(autoEnterResponse, /tmux send-keys -t alpha Enter/);
+
+      const beforeExplicitEnterLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      const beforeExplicitEnterCount = (beforeExplicitEnterLog.match(/send-keys -t alpha Enter/g) || []).length;
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/tmux echo once<Enter>',
+          messageId: 'incoming-tmux-auto-enter-explicit',
+        } as any,
+        '/tmux echo once<Enter>',
+        deps,
+      );
+      const afterExplicitEnterLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      const afterExplicitEnterCount = (afterExplicitEnterLog.match(/send-keys -t alpha Enter/g) || []).length;
+      assert.equal(afterExplicitEnterCount - beforeExplicitEnterCount, 1);
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/tmux-set enter off',
+          messageId: 'incoming-tmux-set-enter-off',
+        } as any,
+        '/tmux-set enter off',
+        deps,
+      );
+      const autoEnterOffSession = binding ? store.getSession(binding.codepilotSessionId) : null;
+      assert.equal(autoEnterOffSession?.tmux_auto_enter, false);
+
+      const beforeAutoEnterOffLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/tmux echo off',
+          messageId: 'incoming-tmux-auto-enter-off',
+        } as any,
+        '/tmux echo off',
+        deps,
+      );
+      const autoEnterOffResponse = sent.at(-1) || '';
+      assert.match(autoEnterOffResponse, /tmux send-keys -t alpha -l 'echo off'/);
+      assert.doesNotMatch(autoEnterOffResponse, /tmux send-keys -t alpha Enter/);
+      const afterAutoEnterOffLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      const autoEnterOffLogDelta = afterAutoEnterOffLog.slice(beforeAutoEnterOffLog.length);
+      assert.match(autoEnterOffLogDelta, /send-keys -t alpha -l echo off/);
+      assert.doesNotMatch(autoEnterOffLogDelta, /send-keys -t alpha Enter/);
+
+      const beforeScreenLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
           text: '/tmux-screen',
           messageId: 'incoming-screen',
         } as any,
@@ -708,8 +786,9 @@ describe('command-dispatch', () => {
       assert.match(screenResponse, /真实 tmux 底层命令/);
       assert.match(screenResponse, /tmux capture-pane -t alpha -p -S -120/);
       const screenLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
-      assert.match(screenLog, /capture-pane -t alpha -p -S -120/);
-      assert.doesNotMatch(screenLog, /send-keys/);
+      const screenLogDelta = screenLog.slice(beforeScreenLog.length);
+      assert.match(screenLogDelta, /capture-pane -t alpha -p -S -120/);
+      assert.doesNotMatch(screenLogDelta, /send-keys/);
 
       await handleBridgeCommand(
         adapter,
@@ -841,6 +920,9 @@ describe('command-dispatch', () => {
 
       const log = fs.readFileSync(fakeTmux.logPath, 'utf-8');
       assert.match(log, /send-keys -t alpha -l pwd/);
+      assert.match(log, /send-keys -t alpha -l echo auto/);
+      assert.match(log, /send-keys -t alpha -l echo once/);
+      assert.match(log, /send-keys -t alpha -l echo off/);
       assert.match(log, /send-keys -t alpha Enter/);
       assert.match(log, /send-keys -t alpha C-c/);
       assert.match(log, /send-keys -t alpha C-u/);
