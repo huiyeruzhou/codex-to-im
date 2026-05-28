@@ -47,6 +47,7 @@ import {
   preprocessFeishuMarkdown,
   hasComplexMarkdown,
   buildCardContent,
+  buildRichCardContent,
   buildPostContent,
   buildStreamingTaskContent,
   buildStreamingTextContent,
@@ -832,7 +833,11 @@ export class FeishuAdapter extends BaseChannelAdapter {
     try {
       const event = data as any;
       const value = event?.action?.value ?? {};
-      const callbackData = value.callback_data;
+      const actionTag = event?.action?.tag;
+      const optionValue = typeof event?.action?.option === 'string' ? event.action.option : '';
+      const callbackData = actionTag === 'select_static' && optionValue
+        ? optionValue
+        : value.callback_data;
 
       // Extract chat/user context
       const chatId = event?.context?.open_chat_id || value.chatId || '';
@@ -844,6 +849,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         messageId,
         userId,
         actionValueKeys: Object.keys(value),
+        actionTag,
         hasCallbackData: Boolean(callbackData),
       });
 
@@ -1018,6 +1024,15 @@ export class FeishuAdapter extends BaseChannelAdapter {
         lastFullRefreshAttemptAt: now,
         lastSuccessfulFullRefreshAt: null,
       });
+
+      const latestActionRows = this.streamActionRows.get(cardKey) || [];
+      if (cardActionRowsSignature(latestActionRows) !== cardActionRowsSignature(actionRows)) {
+        const state = this.activeCards.get(cardKey);
+        if (state) {
+          state.actionRows = latestActionRows;
+          this.scheduleCardFlush(cardKey);
+        }
+      }
 
       console.log(`[feishu-adapter] Streaming card created: streamKey=${cardKey}, cardId=${cardId}, msgId=${messageId}`);
       return true;
@@ -1673,6 +1688,10 @@ export class FeishuAdapter extends BaseChannelAdapter {
       return this.sendPermissionCard(message.address.chatId, text, message.inlineButtons);
     }
 
+    if (message.richCard) {
+      return this.sendRichCard(message.address.chatId, message.richCard, text);
+    }
+
     if (message.parseMode === 'plain') {
       return this.sendAsPlainText(message.address.chatId, text);
     }
@@ -1860,6 +1879,38 @@ export class FeishuAdapter extends BaseChannelAdapter {
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : `${msgType} send failed` };
     }
+  }
+
+  /**
+   * Send a bridge command result as an interactive rich card.
+   * Falls back to the plain text command response for compatibility.
+   */
+  private async sendRichCard(
+    chatId: string,
+    card: NonNullable<OutboundMessage['richCard']>,
+    fallbackText: string,
+  ): Promise<SendResult> {
+    const cardContent = buildRichCardContent(card, chatId);
+
+    try {
+      const res = await this.withFeishuRequestTimeout(chatId, 'im.message.create:rich-command-card', () => this.restClient!.im.message.create({
+        params: { receive_id_type: 'chat_id' },
+        data: {
+          receive_id: chatId,
+          msg_type: 'interactive',
+          content: cardContent,
+        },
+      }));
+
+      if (res?.data?.message_id) {
+        return { ok: true, messageId: res.data.message_id };
+      }
+      console.warn('[feishu-adapter] Rich command card send failed:', res?.msg, res?.code);
+    } catch (err) {
+      console.warn('[feishu-adapter] Rich command card send error, falling back to text:', err instanceof Error ? err.message : err);
+    }
+
+    return this.sendAsPost(chatId, fallbackText);
   }
 
   /**

@@ -21,11 +21,13 @@ import {
 } from './turns/response-assembler.js';
 import { buildInteractiveStreamKey } from './mirror-formatters.js';
 import {
+  pushStreamFeedbackActions,
   pushStreamFeedbackStatus,
   pushStreamFeedbackTasks,
   pushStreamFeedbackText,
   pushStreamFeedbackTools,
 } from './stream-feedback-controller.js';
+import { buildCommandCallbackData } from './command-callbacks.js';
 import { getExplicitDesktopThreadId } from './turns/turn-classifier.js';
 import type { ActiveBridgeTurn } from './turns/turn-types.js';
 import {
@@ -476,6 +478,12 @@ export async function runInteractiveMessage(
   const supportsStructuredStreamUi = supportsPersistentStreamStatus
     && (adapter.supportsStructuredStreamingUi?.(msg.address.chatId) ?? true);
   let latestTasks: TaskProgressInfo[] = [];
+  const buildStopActions = (terminal?: 'completed' | 'interrupted' | 'error') => [[{
+    text: terminal === 'completed' ? '已完成' : terminal === 'interrupted' ? '已停止' : terminal ? '已结束' : '停止',
+    callbackData: buildCommandCallbackData('/stop', binding.codepilotSessionId),
+    type: terminal ? 'default' as const : 'danger' as const,
+    disabled: Boolean(terminal),
+  }]];
   const syncStructuredStreamUiState = () => {
     if (!supportsStructuredStreamUi || taskState.structuredStreamUiActive) return;
     if (adapter.hasActiveStreamingUi?.(msg.address.chatId, streamKey)) {
@@ -562,6 +570,9 @@ export async function runInteractiveMessage(
     stopStructuredStreamStatusUpdates();
     recordStructuredStreamInactiveOnce();
     endPreviewOnce();
+    if (supportsStructuredStreamUi) {
+      pushStreamFeedbackActions(streamFeedbackTarget, buildStopActions(status));
+    }
     if (hasStreamingCards && !streamUiFinalizeAttempted) {
       streamUiFinalizeAttempted = true;
       taskState.streamFinalized = await finalizeStreamingUi(
@@ -700,6 +711,7 @@ export async function runInteractiveMessage(
   };
 
   if (supportsStructuredStreamUi) {
+    pushStreamFeedbackActions(streamFeedbackTarget, buildStopActions());
     pushRunningStatus(null);
     streamStatusHeartbeat = setIntervalFn(() => {
       if (streamStatusUpdatesClosed) {

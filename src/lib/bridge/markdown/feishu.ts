@@ -1,4 +1,11 @@
-import type { TaskProgressInfo, ToolCallInfo } from '../types.js';
+import type {
+  OutboundCardActionSelect,
+  OutboundRichCard,
+  OutboundRichCardSection,
+  OutboundRichCardTable,
+  TaskProgressInfo,
+  ToolCallInfo,
+} from '../types.js';
 import { buildFencedCodeBlock } from './fence.js';
 
 export interface FeishuCardActionButton {
@@ -60,6 +67,361 @@ export function buildCardContent(text: string): string {
         },
       ],
     },
+  });
+}
+
+const DEFAULT_RICH_CARD_MAX_SECTIONS = 12;
+const RICH_CARD_TITLE_LIMIT = 120;
+const RICH_CARD_TEXT_LIMIT = 600;
+const RICH_CARD_FIELD_LIMIT = 140;
+const RICH_CARD_INLINE_FIELD_LIMIT = 3;
+const RICH_CARD_SELECT_OPTION_LIMIT = 60;
+
+function normalizeCardLine(value: string | null | undefined): string {
+  return String(value ?? '').replace(/\s+/g, ' ').trim();
+}
+
+function compactCardText(value: string | null | undefined, maxLength: number): string {
+  const normalized = normalizeCardLine(value);
+  if (normalized.length <= maxLength) return normalized;
+  if (maxLength <= 1) return '…';
+  return `${normalized.slice(0, maxLength - 1).trimEnd()}…`;
+}
+
+function buildRichCardSectionMarkdown(section: OutboundRichCardSection): string {
+  const blocks: string[] = [];
+  const title = compactCardText(section.title, RICH_CARD_TITLE_LIMIT);
+  if (title) blocks.push(`#### ${title}`);
+  const text = compactCardText(section.text, RICH_CARD_TEXT_LIMIT);
+  if (text) blocks.push(text);
+
+  const tableRows = (section.fields || [])
+    .map(([label, value]) => [normalizeCardLine(label), compactCardText(value, RICH_CARD_FIELD_LIMIT)] as const)
+    .filter(([, value]) => value);
+  if (tableRows.length > 0) {
+    blocks.push(tableRows.map(([label, value]) => `**${label}**\n${value}`).join('\n\n'));
+  }
+
+  if (section.code?.text.trim()) {
+    blocks.push(buildFencedCodeBlock(section.code.text.trim(), section.code.language || 'text'));
+  }
+  return blocks.join('\n').trim();
+}
+
+function buildCardButtonColumn(button: FeishuCardActionButton, chatId?: string): Record<string, unknown> | null {
+  if (!button.text || !button.callbackData) return null;
+  return {
+    tag: 'column',
+    width: 'auto',
+    elements: [{
+      tag: 'button',
+      text: { tag: 'plain_text', content: button.text },
+      type: button.type || 'default',
+      size: 'medium',
+      disabled: Boolean(button.disabled),
+      value: { callback_data: button.callbackData, ...(chatId ? { chatId } : {}) },
+      behaviors: [{
+        type: 'callback',
+        value: { callback_data: button.callbackData, ...(chatId ? { chatId } : {}) },
+      }],
+    }],
+  };
+}
+
+function normalizeSelectElementId(id: string | undefined, index: number): string {
+  const normalized = String(id || `command_select_${index + 1}`)
+    .replace(/[^A-Za-z0-9_]/g, '_')
+    .replace(/^[^A-Za-z]+/, '');
+  return (normalized || `command_select_${index + 1}`).slice(0, 20);
+}
+
+function buildRichCardSelectElement(
+  select: OutboundCardActionSelect,
+  index: number,
+  chatId?: string,
+): Record<string, unknown> | null {
+  const seenValues = new Set<string>();
+  const options = (select.options || [])
+    .map((option) => ({
+      text: compactCardText(option.text, RICH_CARD_SELECT_OPTION_LIMIT),
+      value: String(option.callbackData || '').trim(),
+    }))
+    .filter((option) => {
+      if (!option.text || !option.value || seenValues.has(option.value)) return false;
+      seenValues.add(option.value);
+      return true;
+    })
+    .map((option) => {
+      return {
+        text: { tag: 'plain_text', content: option.text },
+        value: option.value,
+      };
+    });
+
+  if (options.length === 0) return null;
+
+  return {
+    tag: 'select_static',
+    element_id: normalizeSelectElementId(select.id, index),
+    placeholder: {
+      tag: 'plain_text',
+      content: compactCardText(select.placeholder || '请选择', RICH_CARD_SELECT_OPTION_LIMIT),
+    },
+    type: 'default',
+    width: 'fill',
+    disabled: false,
+    behaviors: [{
+      type: 'callback',
+      value: { select_id: normalizeSelectElementId(select.id, index), ...(chatId ? { chatId } : {}) },
+    }],
+    options,
+  };
+}
+
+function buildRichCardSelectElements(
+  selects: OutboundCardActionSelect[] = [],
+  chatId?: string,
+): Array<Record<string, unknown>> {
+  return selects
+    .map((select, index) => buildRichCardSelectElement(select, index, chatId))
+    .filter((element): element is Record<string, unknown> => Boolean(element));
+}
+
+function buildRichCardFieldColumn(label: string, value: string): Record<string, unknown> {
+  return {
+    tag: 'column',
+    width: 'weighted',
+    weight: 1,
+    elements: [{
+      tag: 'markdown',
+      content: `**${label}**\n${value}`,
+      text_align: 'left',
+      text_size: 'notation',
+    }],
+  };
+}
+
+function buildRichCardSectionElements(
+  section: OutboundRichCardSection,
+  chatId?: string,
+): Array<Record<string, unknown>> {
+  const elements: Array<Record<string, unknown>> = [];
+  const title = compactCardText(section.title, RICH_CARD_TITLE_LIMIT);
+  const text = compactCardText(section.text, RICH_CARD_TEXT_LIMIT);
+  const fields = (section.fields || [])
+    .map(([label, value]) => [normalizeCardLine(label), compactCardText(value, RICH_CARD_FIELD_LIMIT)] as const)
+    .filter(([label, value]) => label && value);
+  const inlineFields = fields.slice(0, RICH_CARD_INLINE_FIELD_LIMIT);
+  const foldedFields = fields.slice(inlineFields.length);
+  const [firstActionRow = [], ...restActionRows] = section.actions || [];
+
+  const columns: Array<Record<string, unknown>> = [];
+  const mainBlocks: string[] = [];
+  if (title) mainBlocks.push(`#### ${title}`);
+  if (text) mainBlocks.push(text);
+  if (foldedFields.length > 0) {
+    mainBlocks.push(`已压缩 ${foldedFields.length} 项：${foldedFields.map(([label]) => label).join('、')}`);
+  }
+  const mainContent = mainBlocks.join('\n').trim();
+  if (mainContent) {
+    columns.push({
+      tag: 'column',
+      width: 'weighted',
+      weight: 3,
+      elements: [{
+        tag: 'markdown',
+        content: preprocessFeishuMarkdown(mainContent),
+        text_align: 'left',
+        text_size: 'normal',
+      }],
+    });
+  }
+  inlineFields.forEach(([label, value]) => {
+    columns.push(buildRichCardFieldColumn(label, value));
+  });
+  firstActionRow
+    .map((button) => buildCardButtonColumn(button, chatId))
+    .filter((column): column is Record<string, unknown> => Boolean(column))
+    .forEach((column) => columns.push(column));
+
+  if (columns.length > 0) {
+    elements.push({
+      tag: 'column_set',
+      flex_mode: 'stretch',
+      horizontal_align: 'left',
+      columns,
+    });
+  }
+
+  if (section.code?.text.trim()) {
+    elements.push({
+      tag: 'markdown',
+      content: preprocessFeishuMarkdown(buildFencedCodeBlock(section.code.text.trim(), section.code.language || 'text')),
+      text_align: 'left',
+      text_size: 'normal',
+    });
+  }
+
+  if (columns.length === 0) {
+    const fallback = buildRichCardSectionMarkdown(section);
+    if (fallback) {
+      elements.push({
+        tag: 'markdown',
+        content: preprocessFeishuMarkdown(fallback),
+        text_align: 'left',
+        text_size: 'normal',
+      });
+    }
+  }
+
+  const restActions = buildCardActionElements(restActionRows, chatId);
+  if (restActions.length > 0) {
+    elements.push(...restActions);
+  }
+  return elements;
+}
+
+function clampTablePageSize(value: number | undefined): number {
+  if (!Number.isFinite(value || 0)) return 10;
+  return Math.min(10, Math.max(1, Math.trunc(value || 10)));
+}
+
+function normalizeTableColumnWidth(value: string | undefined): string {
+  const width = String(value || 'auto').trim();
+  if (!width || width === 'auto') return 'auto';
+
+  const pixelMatch = /^(\d+)px$/.exec(width);
+  if (pixelMatch) {
+    const pixels = Number(pixelMatch[1]);
+    return `${Math.min(600, Math.max(80, pixels))}px`;
+  }
+
+  const percentMatch = /^(\d+)%$/.exec(width);
+  if (percentMatch) {
+    const percent = Number(percentMatch[1]);
+    return `${Math.min(100, Math.max(1, percent))}%`;
+  }
+
+  return 'auto';
+}
+
+function normalizeTableRowHeight(value: OutboundRichCardTable['rowHeight']): string {
+  const rowHeight = String(value || 'low').trim();
+  if (rowHeight === 'low' || rowHeight === 'middle' || rowHeight === 'high' || rowHeight === 'auto') {
+    return rowHeight;
+  }
+  if (rowHeight === 'medium') return 'middle';
+
+  const pixelMatch = /^(\d+)px$/.exec(rowHeight);
+  if (pixelMatch) {
+    const pixels = Number(pixelMatch[1]);
+    return `${Math.min(124, Math.max(32, pixels))}px`;
+  }
+
+  return 'low';
+}
+
+function buildRichCardTableElement(table: OutboundRichCardTable): Record<string, unknown> | null {
+  const columns = table.columns
+    .filter((column) => column.name && column.displayName)
+    .map((column) => ({
+      name: column.name,
+      display_name: column.displayName,
+      width: normalizeTableColumnWidth(column.width),
+      data_type: column.dataType || 'text',
+      vertical_align: column.verticalAlign || 'top',
+      horizontal_align: column.horizontalAlign || 'left',
+    }));
+  if (columns.length === 0 || table.rows.length === 0) return null;
+
+  const allowedColumnNames = new Set(columns.map((column) => String(column.name)));
+  const rows = table.rows.map((row) => {
+    const normalized: Record<string, string | number> = {};
+    for (const [key, value] of Object.entries(row)) {
+      if (!allowedColumnNames.has(key) || value === null || value === undefined) continue;
+      normalized[key] = typeof value === 'number' ? value : compactCardText(value, 500);
+    }
+    return normalized;
+  });
+
+  return {
+    tag: 'table',
+    page_size: clampTablePageSize(table.pageSize),
+    row_height: normalizeTableRowHeight(table.rowHeight),
+    freeze_first_column: Boolean(table.freezeFirstColumn),
+    columns,
+    rows,
+  };
+}
+
+export function buildRichCardContent(card: OutboundRichCard, chatId?: string): string {
+  const elements: Array<Record<string, unknown>> = [];
+
+  if (card.subtitle?.trim()) {
+    elements.push({
+      tag: 'markdown',
+      content: card.subtitle.trim(),
+      text_size: 'notation',
+    });
+  }
+
+  if (card.table) {
+    const tableElement = buildRichCardTableElement(card.table);
+    if (tableElement) {
+      if (elements.length > 0) elements.push({ tag: 'hr' });
+      elements.push(tableElement);
+    }
+  }
+
+  const selectElements = buildRichCardSelectElements(card.selects || [], chatId);
+  if (selectElements.length > 0) {
+    if (elements.length > 0) elements.push({ tag: 'hr' });
+    elements.push(...selectElements);
+  }
+
+  const maxSections = Math.max(0, card.maxSections ?? DEFAULT_RICH_CARD_MAX_SECTIONS);
+  const visibleSections = card.sections.slice(0, maxSections);
+  const hiddenSectionCount = card.sections.length - visibleSections.length;
+
+  visibleSections.forEach((section) => {
+    const sectionElements = buildRichCardSectionElements(section, chatId);
+    if (sectionElements.length === 0) return;
+    if (elements.length > 0) elements.push({ tag: 'hr' });
+    elements.push(...sectionElements);
+  });
+
+  const cardActions = buildCardActionElements(card.actions || [], chatId);
+  if (cardActions.length > 0) {
+    if (elements.length > 0) elements.push({ tag: 'hr' });
+    elements.push(...cardActions);
+  }
+
+  const footer = [
+    ...(hiddenSectionCount > 0
+      ? [`已压缩显示前 ${visibleSections.length} 条，折叠 ${hiddenSectionCount} 条；发送纯文本命令可查看完整列表。`]
+      : []),
+    ...(card.footer || []),
+  ].map((line) => line.trim()).filter(Boolean);
+  if (footer.length > 0) {
+    if (elements.length > 0) elements.push({ tag: 'hr' });
+    elements.push({
+      tag: 'markdown',
+      content: footer.join('\n'),
+      text_size: 'notation',
+    });
+  }
+  if (elements.length === 0) {
+    elements.push({ tag: 'markdown', content: '无内容', text_size: 'normal' });
+  }
+
+  return JSON.stringify({
+    schema: '2.0',
+    config: { wide_screen_mode: true },
+    header: {
+      title: { tag: 'plain_text', content: card.title },
+      template: card.template || 'blue',
+    },
+    body: { elements },
   });
 }
 
@@ -238,22 +600,8 @@ export function buildCardActionElements(
   for (const row of actionRows) {
     const columns = row
       .filter((button) => button.text && button.callbackData)
-      .map((button) => ({
-        tag: 'column',
-        width: 'auto',
-        elements: [{
-          tag: 'button',
-          text: { tag: 'plain_text', content: button.text },
-          type: button.type || 'default',
-          size: 'medium',
-          disabled: Boolean(button.disabled),
-          value: { callback_data: button.callbackData, ...(chatId ? { chatId } : {}) },
-          behaviors: [{
-            type: 'callback',
-            value: { callback_data: button.callbackData, ...(chatId ? { chatId } : {}) },
-          }],
-        }],
-      }));
+      .map((button) => buildCardButtonColumn(button, chatId))
+      .filter((column): column is Record<string, unknown> => Boolean(column));
     if (columns.length === 0) continue;
     elements.push({
       tag: 'column_set',

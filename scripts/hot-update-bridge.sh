@@ -123,8 +123,15 @@ run_worker() {
 }
 
 dispatch_worker() {
-  mkdir -p "$LOG_DIR"
-  local log_file="$LOG_DIR/hot-update-$(date +%Y%m%d-%H%M%S).log"
+  local log_stamp
+  log_stamp="$(date +%Y%m%d-%H%M%S)"
+  local log_file="$LOG_DIR/hot-update-$log_stamp.log"
+  if ! { mkdir -p "$LOG_DIR" && : >"$log_file"; } 2>/dev/null; then
+    local fallback_log_dir="${TMPDIR:-/tmp}/codex-to-im-logs"
+    mkdir -p "$fallback_log_dir"
+    log_file="$fallback_log_dir/hot-update-$log_stamp.log"
+    : >"$log_file"
+  fi
   local args=(--run)
   if [ "$USE_PULL" = "1" ]; then
     args+=(--pull)

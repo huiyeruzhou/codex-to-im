@@ -74,9 +74,9 @@ export function pushStreamFeedbackActions(
   actions: StructuredStreamingUiActionButton[][],
 ): boolean {
   if (typeof target.adapter.onStreamActions !== 'function') return false;
-  target.ensureStarted?.();
   try {
     target.adapter.onStreamActions(target.chatId, actions, target.streamKey);
+    target.ensureStarted?.();
     return true;
   } catch {
     return false;

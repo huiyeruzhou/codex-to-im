@@ -879,6 +879,70 @@ describe('feishu-adapter structured streaming regions', () => {
     }
   });
 
+  it('applies stream actions that arrive while the thinking card is being created', async () => {
+    const cardCreateCalls: Array<Record<string, any>> = [];
+    const cardUpdateCalls: Array<Record<string, any>> = [];
+    const createBlocked = createDeferred<{ data: { card_id: string } }>();
+    const adapter = new FeishuAdapter({
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      alias: '飞书',
+      config: {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        streamingEnabled: true,
+      },
+    });
+
+    (adapter as any).restClient = {
+      cardkit: {
+        v1: {
+          card: {
+            create: async (payload: Record<string, any>) => {
+              cardCreateCalls.push(payload);
+              return createBlocked.promise;
+            },
+            update: async (payload: Record<string, any>) => {
+              cardUpdateCalls.push(payload);
+              return {};
+            },
+          },
+          cardElement: {
+            content: async () => ({}),
+          },
+        },
+      },
+      im: {
+        message: {
+          create: async () => ({ data: { message_id: 'msg-1' } }),
+          reply: async () => ({ data: { message_id: 'msg-1' } }),
+        },
+      },
+    };
+
+    const createPromise = (adapter as any).createStreamingCard('chat-1', 'reply-1', 'stream-1');
+    await Promise.resolve();
+    adapter.onStreamActions('chat-1', [[{
+      text: '停止',
+      callbackData: 'cti-command:session-1:%2Fstop',
+      type: 'danger',
+    }]], 'stream-1');
+    createBlocked.resolve({ data: { card_id: 'card-1' } });
+
+    assert.equal(await createPromise, true);
+    const initialCardJson = String(cardCreateCalls[0]?.data?.data || '');
+    assert.doesNotMatch(initialCardJson, /"content":"停止"/);
+
+    const state = (adapter as any).activeCards.get('stream-1');
+    assert.ok(state?.flushInFlight);
+    await state.flushInFlight;
+
+    const refreshCardJson = String(cardUpdateCalls.at(-1)?.data?.card?.data || '');
+    assert.match(refreshCardJson, /"content":"停止"/);
+    assert.match(refreshCardJson, /"callback_data":"cti-command:session-1:%2Fstop"/);
+  });
+
   it('renders final cards without waiting tasks or running tools after completion', async () => {
     const cardUpdateCalls: Array<Record<string, any>> = [];
     const adapter = new FeishuAdapter({

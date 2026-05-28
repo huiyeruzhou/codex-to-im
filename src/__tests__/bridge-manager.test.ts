@@ -10,6 +10,8 @@ import { JsonFileStore } from '../store.js';
 import { initBridgeContext } from '../lib/bridge/context.js';
 import { _testOnly, start } from '../lib/bridge/bridge-manager.js';
 import { BaseChannelAdapter, registerAdapterFactory } from '../lib/bridge/channel-adapter.js';
+import { buildCommandCallbackData } from '../lib/bridge/command-callbacks.js';
+import { buildDesktopThreadsCommandCard } from '../lib/bridge/command-formatters.js';
 import { createMirrorSubscription } from '../lib/bridge/mirror-subscription-state.js';
 import * as router from '../lib/bridge/channel-router.js';
 import type { LifecycleHooks, LLMProvider, PermissionGateway, StreamChatParams } from '../lib/bridge/host.js';
@@ -309,6 +311,24 @@ describe('bridge-manager resolveCommandAlias', () => {
       200,
     );
     assert.match(response, /^桌面会话（当前显示 1 条，最多 200 条）/);
+  });
+
+  it('does not build desktop thread rich cards above the card limit', () => {
+    const sessions = Array.from({ length: 21 }, (_, index) => ({
+      threadId: `thread-${index + 1}`,
+      filePath: `/tmp/thread-${index + 1}.jsonl`,
+      cwd: `/tmp/project-${index + 1}`,
+      originator: 'Codex Desktop',
+      firstSeenAt: '2026-03-31T00:00:00.000Z',
+      lastEventAt: '2026-03-31T00:00:00.000Z',
+      title: `Project ${index + 1}`,
+      activeEstimate: false,
+    }));
+
+    assert.equal(buildDesktopThreadsCommandCard(sessions, false), null);
+    const card = buildDesktopThreadsCommandCard(sessions.slice(0, 20), false);
+    assert.equal(card?.table?.rows.length, 20);
+    assert.equal(card?.selects?.[0]?.options.length, 20);
   });
 
   it('maps numeric reasoning aliases to supported effort levels', () => {
@@ -1786,6 +1806,47 @@ describe('bridge-manager stop handling', () => {
     });
 
     assert.match(sent[0] || '', /当前聊天没有正在运行的 tmux 屏幕定时刷新/);
+  });
+
+  it('routes scoped command card callbacks to slash commands', async () => {
+    const sent: string[] = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      send: async (message: { text: string }) => {
+        sent.push(message.text);
+        return { ok: true, messageId: 'msg-command-stop' };
+      },
+    };
+    const address = { channelType: 'feishu', chatId: 'chat-command-callback' } as const;
+    const binding = router.createBinding(address, '/tmp/cti-command-callback');
+
+    const state = (globalThis as unknown as Record<string, any>).__bridge_manager__;
+    const abortController = new AbortController();
+    state.activeTasks.set(binding.codepilotSessionId, {
+      id: 'task-command-stop',
+      abortController,
+      adapter,
+      address,
+      streamKey: 'stream-command-stop',
+      sessionId: binding.codepilotSessionId,
+      hasStreamingCards: true,
+      structuredStreamUiActive: true,
+      streamFinalized: false,
+      uiEnded: false,
+      mirrorSuppressionId: null,
+    });
+
+    await _testOnly.handleMessage(adapter, {
+      messageId: 'incoming-command-stop',
+      address,
+      text: '',
+      timestamp: Date.now(),
+      callbackData: buildCommandCallbackData('/stop', binding.codepilotSessionId),
+    });
+
+    assert.equal(abortController.signal.aborted, true);
+    assert.match(sent[0] || '', /任务已停止/);
   });
 });
 

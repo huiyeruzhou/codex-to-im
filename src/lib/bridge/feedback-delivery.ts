@@ -2,6 +2,7 @@ import type { BaseChannelAdapter } from './channel-adapter.js';
 import type {
   ChannelAddress,
   OutboundAttachment,
+  OutboundRichCard,
   SendResult,
 } from './types.js';
 import { deliver } from './delivery-layer.js';
@@ -20,6 +21,7 @@ export async function deliverTextResponse(
   replyToMessageId?: string,
   options?: {
     audit?: boolean;
+    richCard?: OutboundRichCard;
   },
 ): Promise<SendResult> {
   if (!responseText.trim()) return { ok: true };
@@ -32,6 +34,7 @@ export async function deliverTextResponse(
       address,
       text: responseText,
       parseMode: 'Markdown',
+      richCard: options?.richCard,
       replyToMessageId,
     }, { sessionId, audit: options?.audit });
   }
@@ -39,6 +42,7 @@ export async function deliverTextResponse(
     address,
     text: parseMode === 'Markdown' ? responseText : renderedText,
     parseMode,
+    richCard: options?.richCard,
     replyToMessageId,
   }, { sessionId, audit: options?.audit });
 }
@@ -51,6 +55,7 @@ export async function deliverBridgeNotice(
     sessionId?: string;
     replyToMessageId?: string;
     audit?: boolean;
+    richCard?: OutboundRichCard;
   },
 ): Promise<SendResult> {
   return deliverTextResponse(
@@ -59,7 +64,7 @@ export async function deliverBridgeNotice(
     text,
     options?.sessionId,
     options?.replyToMessageId,
-    { audit: options?.audit },
+    { audit: options?.audit, richCard: options?.richCard },
   );
 }
 

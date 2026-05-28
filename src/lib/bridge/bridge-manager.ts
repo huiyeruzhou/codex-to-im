@@ -72,6 +72,7 @@ import {
 import {
   formatBindingChatLabel,
 } from './bridge-channel-runtime.js';
+import { parseCommandCallbackData } from './command-callbacks.js';
 import {
   formatDisplayedModel,
   getDesktopSessionByThreadIdSafe,
@@ -729,6 +730,24 @@ async function handleMessage(
 
   // Handle callback queries (permission buttons and interactive command cards)
   if (msg.callbackData) {
+    const commandCallback = parseCommandCallbackData(msg.callbackData);
+    if (commandCallback !== undefined) {
+      if (!commandCallback) {
+        await deliverBridgeNotice(adapter, msg.address, '这个按钮的命令数据无效，请改用纯文本命令。');
+        ack();
+        return;
+      }
+      const binding = store.getChannelBinding(msg.address.channelType, msg.address.chatId);
+      if (commandCallback.scopeSessionId && binding?.codepilotSessionId !== commandCallback.scopeSessionId) {
+        await deliverBridgeNotice(adapter, msg.address, '这个按钮对应的会话已不是当前聊天绑定会话，请改用纯文本命令确认当前状态。');
+        ack();
+        return;
+      }
+      await handleCommand(adapter, { ...msg, text: commandCallback.commandText, callbackData: undefined }, commandCallback.commandText);
+      ack();
+      return;
+    }
+
     const tmuxScreenSessionId = parseTmuxScreenStopCallback(msg.callbackData);
     if (tmuxScreenSessionId !== undefined) {
       const binding = store.getChannelBinding(msg.address.channelType, msg.address.chatId);

@@ -70,6 +70,8 @@ export interface OutboundMessage {
   attachments?: OutboundAttachment[];
   /** Inline keyboard buttons */
   inlineButtons?: InlineButton[][];
+  /** Optional rich command/result card. Unsupported channels should ignore it and send text. */
+  richCard?: OutboundRichCard;
   /** If replying to a specific message */
   replyToMessageId?: string;
 }
@@ -86,6 +88,65 @@ export interface OutboundAttachment {
 export interface InlineButton {
   text: string;
   callbackData: string;
+}
+
+export interface OutboundCardActionButton {
+  text: string;
+  callbackData: string;
+  type?: 'default' | 'primary' | 'danger';
+  disabled?: boolean;
+}
+
+export interface OutboundCardActionSelectOption {
+  text: string;
+  callbackData: string;
+}
+
+export interface OutboundCardActionSelect {
+  id?: string;
+  placeholder: string;
+  options: OutboundCardActionSelectOption[];
+}
+
+export interface OutboundRichCardSection {
+  title?: string;
+  text?: string;
+  fields?: Array<[string, string | null | undefined]>;
+  code?: {
+    text: string;
+    language?: string;
+  };
+  actions?: OutboundCardActionButton[][];
+}
+
+export interface OutboundRichCardTableColumn {
+  name: string;
+  displayName: string;
+  width?: string;
+  dataType?: 'text' | 'lark_md' | 'markdown' | 'number';
+  horizontalAlign?: 'left' | 'center' | 'right';
+  verticalAlign?: 'top' | 'center' | 'bottom';
+}
+
+export interface OutboundRichCardTable {
+  columns: OutboundRichCardTableColumn[];
+  rows: Array<Record<string, string | number | null | undefined>>;
+  pageSize?: number;
+  rowHeight?: 'low' | 'middle' | 'medium' | 'high' | 'auto' | `${number}px`;
+  freezeFirstColumn?: boolean;
+}
+
+export interface OutboundRichCard {
+  title: string;
+  subtitle?: string;
+  table?: OutboundRichCardTable;
+  sections: OutboundRichCardSection[];
+  footer?: string[];
+  selects?: OutboundCardActionSelect[];
+  actions?: OutboundCardActionButton[][];
+  template?: 'blue' | 'green' | 'red' | 'yellow' | 'grey';
+  /** Maximum number of sections to render in rich IM cards before folding the rest into a summary. */
+  maxSections?: number;
 }
 
 /** Result of sending a message via an adapter */

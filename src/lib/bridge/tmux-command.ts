@@ -6,8 +6,9 @@ import {
 } from '../../codex-tmux-provider.js';
 import type { BridgeSession, BridgeStore } from './host.js';
 import type { StreamChatParams } from './host.js';
-import type { ChannelBinding } from './types.js';
+import type { ChannelBinding, OutboundRichCard } from './types.js';
 import type { StructuredStreamingUiActionButton } from './channel-adapter.js';
+import { buildCommandCallbackData } from './command-callbacks.js';
 import { buildCommandFields } from './command-formatters.js';
 import { buildFencedCodeBlock } from './markdown/fence.js';
 import { sanitizeInput } from './security/validators.js';
@@ -18,6 +19,22 @@ const MAX_CAPTURE_LINES = 500;
 const MIN_SCREEN_INTERVAL_SECONDS = 3;
 const SEND_ACTION_DELAY_MS = 200;
 const CAPTURE_AFTER_SEND_DELAY_MS = 250;
+
+function buildTmuxSwitchSelect(
+  sessions: TmuxSessionInfo[],
+): NonNullable<OutboundRichCard['selects']> {
+  return [{
+    id: 'tmux_select',
+    placeholder: '选择要绑定的 tmux session',
+    options: sessions.map((session, index) => {
+      const command = `/tmux-attach ${session.name}`;
+      return {
+        text: session.name,
+        callbackData: buildCommandCallbackData(command),
+      };
+    }),
+  }];
+}
 
 interface TmuxCommandResult {
   code: number;
@@ -56,6 +73,7 @@ export interface HandleTmuxBridgeCommandParams {
       finish: (status: 'completed' | 'interrupted' | 'error', text: string) => Promise<boolean>;
     };
   };
+  richCard?: (card: OutboundRichCard) => void;
 }
 
 export interface StartCodexResumeTmuxSessionParams {
@@ -350,6 +368,50 @@ function buildTmuxSwitchResponse(
     ),
     markdown ? buildFencedCodeBlock(lines.join('\n'), 'text') : lines.join('\n'),
   ].join('\n\n');
+}
+
+function buildTmuxSwitchCommandCard(
+  sessions: TmuxSessionInfo[],
+): OutboundRichCard {
+  if (sessions.length === 0) {
+    return {
+      title: 'tmux session 选择',
+      subtitle: '当前没有 tmux session。',
+      template: 'blue',
+      sections: [{
+        text: '可以发送纯文本命令 `/tmux-new <name>` 新建并绑定。',
+      }],
+    };
+  }
+
+  return {
+    title: 'tmux session 选择',
+    subtitle: '点击“绑定”会执行对应命令；也可以继续发送纯文本命令。',
+    template: 'blue',
+    table: {
+      pageSize: 10,
+      rowHeight: 'low',
+      freezeFirstColumn: false,
+      columns: [
+        { name: 'session', displayName: 'session', width: '260px' },
+        { name: 'windows', displayName: '窗口', width: '80px', horizontalAlign: 'right' },
+        { name: 'attached', displayName: '连接', width: '80px', horizontalAlign: 'right' },
+        { name: 'command', displayName: '命令', width: '320px' },
+      ],
+      rows: sessions.map((tmuxSession) => ({
+        session: tmuxSession.name,
+        windows: Number(tmuxSession.windows || '0'),
+        attached: Number(tmuxSession.attached || '0'),
+        command: `/tmux-attach ${tmuxSession.name}`,
+      })),
+    },
+    sections: [],
+    selects: buildTmuxSwitchSelect(sessions),
+    footer: [
+      '纯文本命令：`/tmux-attach <session>` 绑定指定 session。',
+      '表格横向可滚动；长 session 名和命令会省略，可悬浮或点击查看。',
+    ],
+  };
 }
 
 function tmuxDirectHelp(): string[] {
@@ -741,8 +803,10 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
 
   try {
     if (command === '/tmux-switch') {
+      const sessions = await listTmuxSessions();
+      params.richCard?.(buildTmuxSwitchCommandCard(sessions));
       return appendTmuxCommandPreview(
-        buildTmuxSwitchResponse(await listTmuxSessions(), session.tmux_session_name, markdown),
+        buildTmuxSwitchResponse(sessions, session.tmux_session_name, markdown),
         [tmuxCommandPreview([
           'list-sessions',
           '-F',

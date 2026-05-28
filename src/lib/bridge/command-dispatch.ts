@@ -8,6 +8,7 @@ import {
   buildHealthCommandResponse,
   buildHealthListResponse,
   buildCommandFields,
+  buildDesktopThreadsCommandCard,
   buildDesktopThreadsCommandResponse,
   DEFAULT_DESKTOP_THREAD_LIST_LIMIT,
   formatCommandDateTime,
@@ -32,7 +33,7 @@ import * as broker from './permission-broker.js';
 import * as router from './channel-router.js';
 import type { BaseChannelAdapter, StructuredStreamingUiActionButton } from './channel-adapter.js';
 import type { BridgeSession, BridgeStore } from './host.js';
-import type { ChannelBinding, InboundMessage, OutboundAttachment } from './types.js';
+import type { ChannelBinding, InboundMessage, OutboundAttachment, OutboundRichCard } from './types.js';
 import { recordBindingChange, type BindingChangeAction } from './binding-audit.js';
 import { isDangerousInput, parseMode, sanitizeInput, validateSessionId } from './security/validators.js';
 import { parseSandboxMode } from '../../runtime-options.js';
@@ -476,6 +477,7 @@ export async function handleBridgeCommand(
   }
 
   let response = '';
+  let responseRichCard: OutboundRichCard | undefined;
   let responseParseMode: 'Markdown' | 'plain' = getFeedbackParseMode(adapter.channelType);
   let auditResponse = true;
   const currentBinding = store.getChannelBinding(msg.address.channelType, msg.address.chatId);
@@ -625,6 +627,7 @@ export async function handleBridgeCommand(
           responseParseMode === 'Markdown',
           true,
         );
+        responseRichCard = buildDesktopThreadsCommandCard(desktopSessions, true) || undefined;
         break;
       }
 
@@ -744,6 +747,7 @@ export async function handleBridgeCommand(
         showAll,
         limit,
       );
+      responseRichCard = buildDesktopThreadsCommandCard(desktopSessions, showAll, limit) || undefined;
       break;
     }
 
@@ -805,6 +809,9 @@ export async function handleBridgeCommand(
               },
             }
           : undefined,
+        richCard: (card) => {
+          responseRichCard = card;
+        },
       });
       break;
     }
@@ -1264,6 +1271,7 @@ export async function handleBridgeCommand(
           '当前会话',
           [
             ['Session', binding.codepilotSessionId],
+            ['codex-thread-id', binding.sdkSessionId || '-'],
             ['目录', formatCommandPath(binding.workingDirectory)],
           ],
           ['当前聊天绑定的会话已经不存在。可用 `/t` 接管桌面会话，或用 `/new proj1` / `/new 绝对路径` 创建新会话。'],
@@ -1273,6 +1281,7 @@ export async function handleBridgeCommand(
       }
 
       const desktopThreadId = getExplicitDesktopThreadId(session);
+      const codexThreadId = getCodexThreadId(session, binding);
       const threadTitle = getDesktopThreadTitle(desktopThreadId);
       const sandboxMode = resolveEffectiveSandboxMode(session);
       const networkAccess = resolveEffectiveNetworkAccess(session);
@@ -1290,6 +1299,7 @@ export async function handleBridgeCommand(
         '当前会话',
         [
           ['标题', threadTitle || getSessionDisplayName(session, binding.workingDirectory)],
+          ['codex-thread-id', codexThreadId || '-'],
           ['目录', formatCommandPath(binding.workingDirectory)],
           ['模式', formatSessionMode(binding, session)],
           ['Provider', formatSessionCodexProvider(session)],
@@ -1711,6 +1721,7 @@ export async function handleBridgeCommand(
     await deliverBridgeNotice(adapter, msg.address, response, {
       replyToMessageId: msg.messageId,
       audit: auditResponse,
+      richCard: responseRichCard,
     });
   }
 }

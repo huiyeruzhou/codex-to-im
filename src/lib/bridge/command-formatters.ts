@@ -1,13 +1,16 @@
 import path from 'node:path';
 
 import type { BridgeSession } from './host.js';
-import type { ChannelBinding } from './types.js';
+import type { ChannelBinding, OutboundRichCard } from './types.js';
+import { buildCommandCallbackData } from './command-callbacks.js';
 import type { DesktopSessionSummary } from '../../desktop-sessions.js';
 import {
   DEFAULT_DESKTOP_THREAD_LIST_LIMIT,
   MAX_DESKTOP_THREAD_LIST_LIMIT,
   parseListIndex,
 } from './command-aliases.js';
+
+const DESKTOP_THREADS_CARD_MAX_ITEMS = 20;
 
 export function resolveByIndexOrPrefix<T>(
   raw: string,
@@ -156,6 +159,61 @@ export function buildDesktopThreadsCommandResponse(
         ],
     markdown,
   );
+}
+
+export function buildDesktopThreadsCommandCard(
+  desktopSessions: DesktopSessionSummary[],
+  showAll: boolean,
+  _limit = DEFAULT_DESKTOP_THREAD_LIST_LIMIT,
+): OutboundRichCard | null {
+  if (desktopSessions.length > DESKTOP_THREADS_CARD_MAX_ITEMS) return null;
+  const actualCount = desktopSessions.length;
+  const title = showAll
+    ? `桌面会话（${actualCount}/${MAX_DESKTOP_THREAD_LIST_LIMIT}）`
+    : `最近 ${actualCount} 条桌面会话`;
+
+  return {
+    title,
+    subtitle: '点击“接管”会执行对应命令；也可以继续发送纯文本命令。',
+    template: 'blue',
+    table: {
+      pageSize: 10,
+      rowHeight: 'low',
+      freezeFirstColumn: true,
+      columns: [
+        { name: 'index', displayName: '#', width: '80px', horizontalAlign: 'center' },
+        { name: 'title', displayName: '标题', width: '260px' },
+        { name: 'cwd', displayName: '目录', width: '340px' },
+        { name: 'originator', displayName: '来源', width: '140px' },
+        { name: 'command', displayName: '命令', width: '88px' },
+      ],
+      rows: desktopSessions.map((session, index) => ({
+        index: index + 1,
+        title: session.title || '未命名线程',
+        cwd: formatCommandPath(session.cwd),
+        originator: session.originator || 'Codex Desktop',
+        command: `/t ${index + 1}`,
+      })),
+    },
+    sections: [],
+    selects: [{
+      id: 'desktop_select',
+      placeholder: '选择要接管的桌面会话',
+      options: desktopSessions.map((session, index) => ({
+        text: `${index + 1}. ${session.title || session.cwd || '未命名线程'}`,
+        callbackData: buildCommandCallbackData(`/t ${index + 1}`),
+      })),
+    }],
+    footer: showAll
+      ? [
+          '纯文本命令：`/t 1` 接管第 1 条，`/t` 返回最近列表。',
+          `超过 ${DESKTOP_THREADS_CARD_MAX_ITEMS} 条时只发送文本列表，避免卡片过长。`,
+        ]
+      : [
+          '纯文本命令：`/t 1` 接管第 1 条。',
+          `更多：\`/t all\` 最多 ${MAX_DESKTOP_THREAD_LIST_LIMIT} 条，\`/t n 100\` 查看最近 100 条。`,
+        ],
+  };
 }
 
 export function toUserVisibleBindingError(error: unknown, fallback: string): string {

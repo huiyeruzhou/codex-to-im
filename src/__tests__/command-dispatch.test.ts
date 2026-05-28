@@ -9,6 +9,7 @@ import { CONFIG_PATH, CONFIG_V2_PATH, CTI_HOME } from '../config.js';
 import { JsonFileStore } from '../store.js';
 import { initBridgeContext } from '../lib/bridge/context.js';
 import { handleBridgeCommand } from '../lib/bridge/command-dispatch.js';
+import { buildCommandCallbackData, parseCommandCallbackData } from '../lib/bridge/command-callbacks.js';
 import * as router from '../lib/bridge/channel-router.js';
 
 const DATA_DIR = path.join(CTI_HOME, 'data');
@@ -99,6 +100,16 @@ describe('command-dispatch', () => {
     fs.rmSync(CONFIG_V2_PATH, { force: true });
   });
 
+  it('round-trips interactive command callback data', () => {
+    const callbackData = buildCommandCallbackData('/stop', 'session-1');
+    assert.deepEqual(parseCommandCallbackData(callbackData), {
+      commandText: '/stop',
+      scopeSessionId: 'session-1',
+    });
+    assert.equal(parseCommandCallbackData('perm:allow:1'), undefined);
+    assert.equal(parseCommandCallbackData('cti-command::not-a-command'), null);
+  });
+
   it('switches /thread 0 into the hidden draft session and keeps normal mode', async () => {
     const store = initTestContext();
     const sent: string[] = [];
@@ -145,6 +156,10 @@ describe('command-dispatch', () => {
     };
     const address = { channelType: 'feishu-default', chatId: 'chat-prebound-status', displayName: 'Prebound Chat' } as const;
     const session = store.createSession('prebound-session', 'test-model', undefined, '/tmp/prebound-status');
+    store.updateSession(session.id, {
+      sdk_session_id: 'codex-thread-prebound',
+      codex_thread_id: 'codex-thread-prebound',
+    });
     store.upsertChannelDefaultTarget({
       channelType: 'feishu-default',
       channelProvider: 'feishu',
@@ -173,6 +188,8 @@ describe('command-dispatch', () => {
     assert.equal(store.getChannelDefaultTarget(address.channelType), null);
     assert.match(sent[0] || '', /当前会话/);
     assert.match(sent[0] || '', /prebound-session/);
+    assert.match(sent[0] || '', /codex-thread-id/);
+    assert.match(sent[0] || '', /codex-thread-prebound/);
   });
 
   it('renders /check health diagnostics for the current session', async () => {
@@ -691,10 +708,12 @@ describe('command-dispatch', () => {
 
     try {
       const sent: string[] = [];
+      const richCards: any[] = [];
       const adapter: any = {
         channelType: 'feishu',
-        send: async (message: { text: string }) => {
+        send: async (message: { text: string; richCard?: any }) => {
           sent.push(message.text);
+          if (message.richCard) richCards.push(message.richCard);
           return { ok: true, messageId: `reply-tmux-${sent.length}` };
         },
       };
@@ -719,6 +738,16 @@ describe('command-dispatch', () => {
       assert.match(sent.at(-1) || '', /\/tmux-attach <session>|\/tmux-attach &lt;session&gt;/);
       assert.match(sent.at(-1) || '', /真实 tmux 底层命令/);
       assert.match(sent.at(-1) || '', /tmux list-sessions -F/);
+      assert.equal(richCards.at(-1)?.title, 'tmux session 选择');
+      assert.deepEqual(
+        richCards.at(-1)?.table?.columns?.map((column: any) => column.name),
+        ['session', 'windows', 'attached', 'command'],
+      );
+      assert.equal(richCards.at(-1)?.table?.freezeFirstColumn, false);
+      assert.equal(richCards.at(-1)?.table?.rows?.[0]?.session, 'alpha');
+      assert.match(richCards.at(-1)?.table?.rows?.[0]?.command || '', /^\/tmux-attach /);
+      assert.equal(richCards.at(-1)?.selects?.[0]?.options?.[0]?.text, 'alpha');
+      assert.match(richCards.at(-1)?.selects?.[0]?.options?.[0]?.callbackData || '', /^cti-command:/);
 
       await handleBridgeCommand(
         adapter,
