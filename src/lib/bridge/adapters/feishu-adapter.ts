@@ -51,9 +51,11 @@ import {
   buildStreamingTaskContent,
   buildStreamingTextContent,
   buildStreamingToolsContent,
+  buildCardActionElements,
   buildFinalCardJson,
   buildPermissionButtonCard,
   formatElapsed,
+  type FeishuCardActionButton,
 } from '../markdown/feishu.js';
 
 /** Max number of message_ids to keep for dedup. */
@@ -84,6 +86,8 @@ interface FeishuCardState {
   renderedTasksText: string | null;
   renderedToolsText: string | null;
   renderedStatusText: string | null;
+  actionRows: FeishuCardActionButton[][];
+  renderedActionSignature: string;
   lastUpdateAt: number;
   throttleTimer: ReturnType<typeof setTimeout> | null;
   flushInFlight: Promise<void> | null;
@@ -105,6 +109,7 @@ const CARD_FULL_REFRESH_INTERVAL_MS = 5 * 60_000;
 const INITIAL_STREAMING_STATUS = '处理中';
 const EMPTY_STREAMING_TASKS = '';
 const EMPTY_STREAMING_TOOLS = '';
+const CARD_LOG_PREVIEW_MAX = 240;
 
 type EnvLike = Record<string, string | undefined>;
 type FeishuProxyTarget = {
@@ -340,12 +345,130 @@ function describeEnabledProxies(site: 'feishu' | 'lark', env: EnvLike = process.
   return descriptions;
 }
 
+function truncateForCardLog(value: string, max = CARD_LOG_PREVIEW_MAX): string {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= max) return normalized;
+  return `${normalized.slice(0, Math.max(0, max - 1))}…`;
+}
+
+function shortHash(value: string): string {
+  return crypto.createHash('sha256').update(value).digest('hex').slice(0, 12);
+}
+
+function summarizeTextForCardLog(value: string): Record<string, unknown> {
+  return {
+    chars: value.length,
+    bytes: Buffer.byteLength(value, 'utf8'),
+    lines: value ? value.split(/\r\n|\r|\n/).length : 0,
+    sha256: shortHash(value),
+    preview: truncateForCardLog(value),
+  };
+}
+
+function collectCardJsonDiagnostics(value: unknown, stats: {
+  elementIds: string[];
+  callbackCount: number;
+  markdownCount: number;
+  buttonCount: number;
+}): void {
+  if (!value || typeof value !== 'object') return;
+  if (Array.isArray(value)) {
+    for (const item of value) collectCardJsonDiagnostics(item, stats);
+    return;
+  }
+
+  const record = value as Record<string, unknown>;
+  if (typeof record.element_id === 'string') stats.elementIds.push(record.element_id);
+  if (record.tag === 'markdown') stats.markdownCount += 1;
+  if (record.tag === 'button') stats.buttonCount += 1;
+  if (typeof record.callback_data === 'string') stats.callbackCount += 1;
+  for (const child of Object.values(record)) collectCardJsonDiagnostics(child, stats);
+}
+
+function summarizeCardJsonForLog(cardJson: string): Record<string, unknown> {
+  const summary: Record<string, unknown> = summarizeTextForCardLog(cardJson);
+  try {
+    const parsed = JSON.parse(cardJson) as unknown;
+    const stats = {
+      elementIds: [] as string[],
+      callbackCount: 0,
+      markdownCount: 0,
+      buttonCount: 0,
+    };
+    collectCardJsonDiagnostics(parsed, stats);
+    summary.elementIds = [...new Set(stats.elementIds)];
+    summary.markdownCount = stats.markdownCount;
+    summary.buttonCount = stats.buttonCount;
+    summary.callbackCount = stats.callbackCount;
+  } catch (err) {
+    summary.parseError = err instanceof Error ? err.message : String(err);
+  }
+  return summary;
+}
+
+function summarizeFeishuResponseForLog(result: unknown): string | undefined {
+  if (!result || typeof result !== 'object') return undefined;
+  const record = result as Record<string, unknown>;
+  const parts: string[] = [];
+
+  if (typeof record.code !== 'undefined') parts.push(`code=${String(record.code)}`);
+  if (typeof record.msg !== 'undefined') parts.push(`msg=${truncateForCardLog(String(record.msg), 120)}`);
+  if (typeof record.request_id !== 'undefined') parts.push(`request_id=${String(record.request_id)}`);
+
+  const data = record.data;
+  if (data && typeof data === 'object') {
+    const dataRecord = data as Record<string, unknown>;
+    for (const key of ['message_id', 'card_id', 'reaction_id', 'image_key', 'file_key']) {
+      if (typeof dataRecord[key] !== 'undefined') parts.push(`${key}=${String(dataRecord[key])}`);
+    }
+  }
+
+  return parts.length > 0 ? parts.join(', ') : undefined;
+}
+
 function buildStreamingCardBody(
   content: string,
   tasksText: string,
   toolsText: string,
   statusText: string,
+  actionRows: FeishuCardActionButton[][] = [],
+  chatId?: string,
 ): Record<string, unknown> {
+  const elements: Array<Record<string, unknown>> = [
+    {
+      tag: 'markdown',
+      content,
+      text_align: 'left',
+      text_size: 'normal',
+      element_id: 'streaming_content',
+    },
+    {
+      tag: 'markdown',
+      content: tasksText,
+      text_align: 'left',
+      text_size: 'normal',
+      element_id: 'streaming_tasks',
+    },
+    {
+      tag: 'markdown',
+      content: toolsText,
+      text_align: 'left',
+      text_size: 'normal',
+      element_id: 'streaming_tools',
+    },
+    {
+      tag: 'markdown',
+      content: statusText,
+      text_align: 'left',
+      text_size: 'notation',
+      element_id: 'streaming_status',
+    },
+  ];
+  const actionElements = buildCardActionElements(actionRows, chatId);
+  if (actionElements.length > 0) {
+    elements.push({ tag: 'hr' }, ...actionElements);
+  }
+
   return {
     schema: '2.0',
     config: {
@@ -354,37 +477,43 @@ function buildStreamingCardBody(
       summary: { content: '思考中...' },
     },
     body: {
-      elements: [
-        {
-          tag: 'markdown',
-          content,
-          text_align: 'left',
-          text_size: 'normal',
-          element_id: 'streaming_content',
-        },
-        {
-          tag: 'markdown',
-          content: tasksText,
-          text_align: 'left',
-          text_size: 'normal',
-          element_id: 'streaming_tasks',
-        },
-        {
-          tag: 'markdown',
-          content: toolsText,
-          text_align: 'left',
-          text_size: 'normal',
-          element_id: 'streaming_tools',
-        },
-        {
-          tag: 'markdown',
-          content: statusText,
-          text_align: 'left',
-          text_size: 'notation',
-          element_id: 'streaming_status',
-        },
-      ],
+      elements,
     },
+  };
+}
+
+function normalizeCardActionRows(actionRows: FeishuCardActionButton[][]): FeishuCardActionButton[][] {
+  return actionRows
+    .map((row) => row
+      .filter((button) => button.text && button.callbackData)
+      .map((button) => ({
+        text: button.text,
+        callbackData: button.callbackData,
+        type: button.type || 'default',
+        disabled: Boolean(button.disabled),
+      })))
+    .filter((row) => row.length > 0);
+}
+
+function cardActionRowsSignature(actionRows: FeishuCardActionButton[][]): string {
+  return JSON.stringify(normalizeCardActionRows(actionRows));
+}
+
+function summarizeCardActionRows(actionRows: FeishuCardActionButton[][]): {
+  rowCount: number;
+  buttonCount: number;
+  labels: string[];
+  callbackPrefixes: string[];
+  disabledCount: number;
+} {
+  const normalized = normalizeCardActionRows(actionRows);
+  const buttons = normalized.flat();
+  return {
+    rowCount: normalized.length,
+    buttonCount: buttons.length,
+    labels: buttons.map((button) => button.text),
+    callbackPrefixes: buttons.map((button) => button.callbackData.split(':').slice(0, 2).join(':')),
+    disabledCount: buttons.filter((button) => button.disabled).length,
   };
 }
 
@@ -443,6 +572,8 @@ export class FeishuAdapter extends BaseChannelAdapter {
   private activeCards = new Map<string, FeishuCardState>();
   /** In-flight card creation promises per stream key — prevents duplicate creation. */
   private cardCreatePromises = new Map<string, Promise<boolean>>();
+  /** Action rows to apply when a streaming card is created or refreshed. */
+  private streamActionRows = new Map<string, FeishuCardActionButton[][]>();
   /** Cached tenant token for upload APIs. */
   private tenantTokenCache:
     | { token: string; expiresAt: number; appId: string; appSecret: string; domain: string }
@@ -645,6 +776,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     }
     this.activeCards.clear();
     this.cardCreatePromises.clear();
+    this.streamActionRows.clear();
 
     // Clear state
     this.seenMessageIds.clear();
@@ -701,12 +833,29 @@ export class FeishuAdapter extends BaseChannelAdapter {
       const event = data as any;
       const value = event?.action?.value ?? {};
       const callbackData = value.callback_data;
-      if (!callbackData) return FALLBACK_TOAST;
 
       // Extract chat/user context
       const chatId = event?.context?.open_chat_id || value.chatId || '';
       const messageId = event?.context?.open_message_id || event?.open_message_id || '';
       const userId = event?.operator?.open_id || event?.open_id || '';
+
+      console.log('[feishu-adapter] Card action trigger received:', {
+        chatId,
+        messageId,
+        userId,
+        actionValueKeys: Object.keys(value),
+        hasCallbackData: Boolean(callbackData),
+      });
+
+      if (!callbackData) {
+        console.warn('[feishu-adapter] Card action missing callback_data:', {
+          chatId,
+          messageId,
+          actionValuePreview: this.previewLogValue(value),
+          rawPreview: this.previewLogValue(event),
+        });
+        return FALLBACK_TOAST;
+      }
 
       console.log('[feishu-adapter] Incoming card action event:', {
         chatId,
@@ -779,15 +928,32 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
     try {
       // Step 1: Create card via CardKit v1
+      const actionRows = this.streamActionRows.get(cardKey) || [];
+      const actionSummary = summarizeCardActionRows(actionRows);
+      if (actionSummary.buttonCount > 0) {
+        console.log('[feishu-adapter] Creating streaming card with actions:', {
+          streamKey: cardKey,
+          chatId,
+          ...actionSummary,
+        });
+      }
       const cardBody = buildStreamingCardBody(
         '💭 Thinking...',
         EMPTY_STREAMING_TASKS,
         EMPTY_STREAMING_TOOLS,
         INITIAL_STREAMING_STATUS,
+        actionRows,
+        chatId,
       );
+      const initialCardJson = JSON.stringify(cardBody);
+      console.log('[feishu-adapter] Streaming card create payload:', {
+        streamKey: cardKey,
+        chatId,
+        ...summarizeCardJsonForLog(initialCardJson),
+      });
 
       const createResp = await this.withFeishuRequestTimeout<{ data?: { card_id?: string } }>(cardKey, 'card.create', () => cardkit.card.create({
-        data: { type: 'card_json', data: JSON.stringify(cardBody) },
+        data: { type: 'card_json', data: initialCardJson },
       }));
       const cardId = createResp?.data?.card_id;
       if (!cardId) {
@@ -838,6 +1004,8 @@ export class FeishuAdapter extends BaseChannelAdapter {
         renderedTasksText: EMPTY_STREAMING_TASKS,
         renderedToolsText: EMPTY_STREAMING_TOOLS,
         renderedStatusText: INITIAL_STREAMING_STATUS,
+        actionRows,
+        renderedActionSignature: cardActionRowsSignature(actionRows),
         lastUpdateAt: 0,
         throttleTimer: null,
         flushInFlight: null,
@@ -881,6 +1049,22 @@ export class FeishuAdapter extends BaseChannelAdapter {
     const state = this.activeCards.get(cardKey);
     if (!state || !this.restClient) return;
     state.pendingStatusText = statusText || INITIAL_STREAMING_STATUS;
+    this.scheduleCardFlush(cardKey);
+  }
+
+  private updateCardActions(chatId: string, actionRows: FeishuCardActionButton[][], streamKey?: string): void {
+    const cardKey = this.resolveStreamKey(chatId, streamKey);
+    const normalized = normalizeCardActionRows(actionRows);
+    this.streamActionRows.set(cardKey, normalized);
+    console.log('[feishu-adapter] Streaming card actions updated:', {
+      streamKey: cardKey,
+      chatId,
+      ...summarizeCardActionRows(normalized),
+      activeCard: this.activeCards.has(cardKey),
+    });
+    const state = this.activeCards.get(cardKey);
+    if (!state || !this.restClient) return;
+    state.actionRows = normalized;
     this.scheduleCardFlush(cardKey);
   }
 
@@ -953,9 +1137,11 @@ export class FeishuAdapter extends BaseChannelAdapter {
     const tasksText = state.pendingTasksText || EMPTY_STREAMING_TASKS;
     const toolsText = buildStreamingToolsContent(state.toolCalls) || EMPTY_STREAMING_TOOLS;
     const statusText = state.pendingStatusText || INITIAL_STREAMING_STATUS;
+    const actionRows = state.actionRows || [];
+    const actionSignature = cardActionRowsSignature(actionRows);
     const updates: Array<{ elementId: string; content: string; onSuccess: () => void }> = [];
 
-    if (this.shouldFullRefreshCard(state, Date.now())) {
+    if (actionSignature !== state.renderedActionSignature || this.shouldFullRefreshCard(state, Date.now())) {
       const refreshed = await this.flushFullCardRefresh(
         streamKey,
         state,
@@ -963,6 +1149,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         tasksText,
         toolsText,
         statusText,
+        actionRows,
       );
       if (refreshed) return;
     }
@@ -1134,9 +1321,24 @@ export class FeishuAdapter extends BaseChannelAdapter {
         finalText = `${trimmedExisting}\n\n${trimmedResponse}`;
       }
 
-      const finalCardJson = buildFinalCardJson(finalText, state.taskItems, state.toolCalls, footer, status);
+      const finalCardJson = buildFinalCardJson(
+        finalText,
+        state.taskItems,
+        state.toolCalls,
+        footer,
+        status,
+        state.actionRows,
+        state.chatId,
+      );
 
       state.sequence++;
+      console.log('[feishu-adapter] Final card update payload:', {
+        streamKey: cardKey,
+        cardId: state.cardId,
+        status,
+        sequence: state.sequence,
+        ...summarizeCardJsonForLog(finalCardJson),
+      });
       await this.withFeishuRequestTimeout(cardKey, 'card.update', () => cardkit.card.update({
         path: { card_id: state.cardId },
         data: {
@@ -1161,6 +1363,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       return false;
     } finally {
       this.activeCards.delete(cardKey);
+      this.streamActionRows.delete(cardKey);
     }
   }
 
@@ -1193,6 +1396,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       clearTimeout(state.throttleTimer);
     }
     this.activeCards.delete(cardKey);
+    this.streamActionRows.delete(cardKey);
   }
 
   /**
@@ -1235,6 +1439,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     tasksText: string,
     toolsText: string,
     statusText: string,
+    actionRows: FeishuCardActionButton[][] = [],
   ): Promise<boolean> {
     state.lastFullRefreshAttemptAt = Date.now();
     const cardkit = (this.restClient as any)?.cardkit?.v1;
@@ -1242,20 +1447,36 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
     try {
       state.sequence++;
+      const refreshCardJson = JSON.stringify(buildStreamingCardBody(content, tasksText, toolsText, statusText, actionRows, state.chatId));
+      console.log('[feishu-adapter] Streaming card full refresh payload:', {
+        streamKey,
+        cardId: state.cardId,
+        sequence: state.sequence,
+        ...summarizeCardJsonForLog(refreshCardJson),
+      });
       await this.withFeishuRequestTimeout(streamKey, 'card.update:streaming_refresh', () => cardkit.card.update({
         path: { card_id: state.cardId },
         data: {
           card: {
             type: 'card_json',
-            data: JSON.stringify(buildStreamingCardBody(content, tasksText, toolsText, statusText)),
+            data: refreshCardJson,
           },
           sequence: state.sequence,
         },
       }));
+      const actionSummary = summarizeCardActionRows(actionRows);
+      if (actionSummary.buttonCount > 0) {
+        console.log('[feishu-adapter] Streaming card full refresh included actions:', {
+          streamKey,
+          cardId: state.cardId,
+          ...actionSummary,
+        });
+      }
       state.renderedText = content;
       state.renderedTasksText = tasksText;
       state.renderedToolsText = toolsText;
       state.renderedStatusText = statusText;
+      state.renderedActionSignature = cardActionRowsSignature(actionRows);
       state.lastSuccessfulFullRefreshAt = Date.now();
       this.markCardFlushSuccess(state);
       return true;
@@ -1312,7 +1533,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
     try {
       const result = await Promise.race([operationPromise, timeoutPromise]);
-      this.logRequestOperation('success', scope, target, startedAt);
+      this.logRequestOperation('success', scope, target, startedAt, summarizeFeishuResponseForLog(result));
       return result;
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
@@ -1407,6 +1628,11 @@ export class FeishuAdapter extends BaseChannelAdapter {
       return;
     }
     this.updateCardStatus(chatId, statusText, cardKey);
+  }
+
+  onStreamActions(chatId: string, actionRows: FeishuCardActionButton[][], streamKey?: string): void {
+    if (!this.isStreamingEnabled()) return;
+    this.updateCardActions(chatId, actionRows, streamKey);
   }
 
   async onStreamEnd(

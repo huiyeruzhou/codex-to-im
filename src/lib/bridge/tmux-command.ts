@@ -7,6 +7,7 @@ import {
 import type { BridgeSession, BridgeStore } from './host.js';
 import type { StreamChatParams } from './host.js';
 import type { ChannelBinding } from './types.js';
+import type { StructuredStreamingUiActionButton } from './channel-adapter.js';
 import { buildCommandFields } from './command-formatters.js';
 import { buildFencedCodeBlock } from './markdown/fence.js';
 import { sanitizeInput } from './security/validators.js';
@@ -47,9 +48,11 @@ export interface HandleTmuxBridgeCommandParams {
   markdown: boolean;
   screenMonitor?: {
     key: string;
+    stopCallbackData?: string;
     deliver: (text: string) => Promise<void>;
     card?: {
       update: (text: string, statusText: string) => void;
+      actions?: (actions: StructuredStreamingUiActionButton[][]) => void;
       finish: (status: 'completed' | 'interrupted' | 'error', text: string) => Promise<boolean>;
     };
   };
@@ -82,8 +85,10 @@ interface TmuxScreenMonitor {
   intervalSeconds: number;
   markdown: boolean;
   deliver: (text: string) => Promise<void>;
+  stopCallbackData?: string;
   card?: {
     update: (text: string, statusText: string) => void;
+    actions?: (actions: StructuredStreamingUiActionButton[][]) => void;
     finish: (status: 'completed' | 'interrupted' | 'error', text: string) => Promise<boolean>;
   };
   busy: boolean;
@@ -246,6 +251,12 @@ export async function startCodexResumeTmuxSession(params: StartCodexResumeTmuxSe
     codexCommand,
     tmuxCommand: tmuxCommandPreview(tmuxArgs),
   };
+}
+
+export async function sendTmuxInterrupt(target: string): Promise<string> {
+  const args: TmuxArgv = ['send-keys', '-t', target, 'C-c'];
+  await runTmux(args);
+  return tmuxCommandPreview(args);
 }
 
 function normalizeCaptureLines(value: unknown): number {
@@ -568,6 +579,15 @@ function formatTmuxScreenCardStatus(target: string, lines: number, intervalSecon
   return `tmux ${target} · ${lines} lines · every ${intervalSeconds}s · ${refreshedAt}`;
 }
 
+function buildTmuxScreenStopActions(callbackData: string, stopped: boolean): StructuredStreamingUiActionButton[][] {
+  return [[{
+    text: stopped ? '已停止' : '停止',
+    callbackData,
+    type: stopped ? 'default' : 'danger',
+    disabled: stopped,
+  }]];
+}
+
 function buildTmuxAttachResponse(
   title: string,
   fields: Array<[string, string | null | undefined]>,
@@ -664,8 +684,10 @@ function startTmuxScreenMonitor(params: {
   intervalSeconds: number;
   markdown: boolean;
   deliver: (text: string) => Promise<void>;
+  stopCallbackData?: string;
   card?: {
     update: (text: string, statusText: string) => void;
+    actions?: (actions: StructuredStreamingUiActionButton[][]) => void;
     finish: (status: 'completed' | 'interrupted' | 'error', text: string) => Promise<boolean>;
   };
 }): void {
@@ -707,6 +729,7 @@ function startTmuxScreenMonitor(params: {
     intervalSeconds: params.intervalSeconds,
     markdown: params.markdown,
     deliver: params.deliver,
+    stopCallbackData: params.stopCallbackData,
     card: params.card,
     busy: false,
   };
@@ -754,6 +777,9 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
         const stopped = stopTmuxScreenMonitor(params.screenMonitor.key);
         if (!stopped) return '当前聊天没有正在运行的 tmux 屏幕定时刷新。';
         if (stopped.card) {
+          if (stopped.stopCallbackData) {
+            stopped.card.actions?.(buildTmuxScreenStopActions(stopped.stopCallbackData, true));
+          }
           await stopped.card.finish('interrupted', '已停止 tmux 屏幕定时刷新。');
         }
         return '已停止 tmux 屏幕定时刷新。';
@@ -775,6 +801,9 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
           commands: card ? [] : [commandPreview],
         });
         if (card) {
+          if (params.screenMonitor.stopCallbackData) {
+            card.actions?.(buildTmuxScreenStopActions(params.screenMonitor.stopCallbackData, false));
+          }
           card.update(initialText, formatTmuxScreenCardStatus(target, lines, parsed.intervalSeconds));
         }
         startTmuxScreenMonitor({
@@ -784,6 +813,7 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
           intervalSeconds: parsed.intervalSeconds,
           markdown,
           deliver: params.screenMonitor.deliver,
+          stopCallbackData: params.screenMonitor.stopCallbackData,
           card,
         });
         if (card) return '';

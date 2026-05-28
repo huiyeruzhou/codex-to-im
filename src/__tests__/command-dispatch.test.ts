@@ -515,6 +515,68 @@ describe('command-dispatch', () => {
     assert.match(sent[0] || '', /旧会话「Bridge: chat-stop-stale」任务已停止/);
   });
 
+  it('maps /stop to C-c for a running tmux provider mirror turn', async () => {
+    const store = initTestContext();
+    const fakeTmux = installFakeTmux();
+    const oldPath = process.env.PATH || '';
+    const oldFakeLog = process.env.TMUX_FAKE_LOG;
+    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${oldPath}`;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+    const sent: string[] = [];
+    const forcedStops: Array<{ sessionId: string; detail?: string }> = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      send: async (message: { text: string }) => {
+        sent.push(message.text);
+        return { ok: true, messageId: 'reply-stop-tmux-provider' };
+      },
+    };
+    const address = { channelType: 'feishu', chatId: 'chat-stop-tmux-provider' } as const;
+    const binding = router.createBinding(address, 'D:\\workspace\\stop-tmux-provider');
+    store.updateSession(binding.codepilotSessionId, {
+      codex_provider: 'tmux',
+      tmux_session_name: 'alpha',
+      mirror_status: 'watching',
+      runtime_status: 'running',
+      health_status: 'running_active',
+    });
+
+    try {
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/stop',
+          messageId: 'incoming-stop-tmux-provider',
+        } as any,
+        '/stop',
+        {
+          getActiveTask: () => undefined,
+          forceStopSession: async (sessionId, detail) => {
+            forcedStops.push({ sessionId, detail });
+            return false;
+          },
+          diagnoseSessionHealth: async () => null,
+          diagnoseAllActiveSessions: async () => [],
+        },
+      );
+
+      const log = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      assert.match(log, /send-keys -t alpha C-c/);
+      assert.deepEqual(forcedStops, []);
+      assert.match(sent[0] || '', /已发送停止按键/);
+      assert.match(sent[0] || '', /tmux send-keys -t alpha C-c/);
+    } finally {
+      process.env.PATH = oldPath;
+      if (oldFakeLog === undefined) {
+        delete process.env.TMUX_FAKE_LOG;
+      } else {
+        process.env.TMUX_FAKE_LOG = oldFakeLog;
+      }
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+    }
+  });
+
   it('removes the current binding on /unbind', async () => {
     const store = initTestContext();
     const sent: string[] = [];
@@ -952,6 +1014,7 @@ describe('command-dispatch', () => {
     const sent: string[] = [];
     const cardTexts: Array<{ chatId: string; text: string; streamKey?: string }> = [];
     const cardStatuses: Array<{ chatId: string; text: string; streamKey?: string }> = [];
+    const cardActions: Array<{ chatId: string; actions: any[][]; streamKey?: string }> = [];
     const cardEnds: Array<{ chatId: string; status: string; text: string; streamKey?: string }> = [];
     const adapter: any = {
       channelType: 'feishu',
@@ -966,6 +1029,9 @@ describe('command-dispatch', () => {
       },
       onStreamStatus: (chatId: string, text: string, streamKey?: string) => {
         cardStatuses.push({ chatId, text, streamKey });
+      },
+      onStreamActions: (chatId: string, actions: any[][], streamKey?: string) => {
+        cardActions.push({ chatId, actions, streamKey });
       },
       onStreamEnd: async (chatId: string, status: string, text: string, streamKey?: string) => {
         cardEnds.push({ chatId, status, text, streamKey });
@@ -1015,6 +1081,13 @@ describe('command-dispatch', () => {
       assert.equal(cardStatuses.length, 1);
       assert.match(cardStatuses[0].text, /tmux alpha/);
       assert.match(cardStatuses[0].text, /every 5s/);
+      assert.equal(cardActions.length, 1);
+      assert.equal(cardActions[0].chatId, address.chatId);
+      assert.equal(cardActions[0].streamKey, cardTexts[0].streamKey);
+      assert.equal(cardActions[0].actions[0][0].text, '停止');
+      assert.match(cardActions[0].actions[0][0].callbackData, /^tmux-screen:stop:/);
+      assert.equal(cardActions[0].actions[0][0].type, 'danger');
+      assert.equal(cardActions[0].actions[0][0].disabled, false);
 
       await handleBridgeCommand(
         adapter,
@@ -1029,6 +1102,9 @@ describe('command-dispatch', () => {
       monitorStarted = false;
 
       assert.match(sent.at(-1) || '', /已停止 tmux 屏幕定时刷新/);
+      assert.equal(cardActions.length, 2);
+      assert.equal(cardActions[1].actions[0][0].text, '已停止');
+      assert.equal(cardActions[1].actions[0][0].disabled, true);
       assert.equal(cardEnds.length, 1);
       assert.equal(cardEnds[0].chatId, address.chatId);
       assert.equal(cardEnds[0].status, 'interrupted');

@@ -29,6 +29,13 @@ export interface StructuredStreamingUiSnapshot {
   consecutiveFailures?: number;
 }
 
+export interface StructuredStreamingUiActionButton {
+  text: string;
+  callbackData: string;
+  type?: 'default' | 'primary' | 'danger';
+  disabled?: boolean;
+}
+
 export abstract class BaseChannelAdapter {
   private inboundQueue: InboundMessage[] = [];
   private inboundWaiters: Array<(msg: InboundMessage | null) => void> = [];
@@ -132,6 +139,12 @@ export abstract class BaseChannelAdapter {
    * without mutating the main streamed content body.
    */
   onStreamStatus?(_chatId: string, _statusText: string, _streamKey?: string): void;
+
+  /**
+   * Replace the action button rows attached to a structured streaming UI.
+   * Adapters that do not support interactive cards can ignore this hook.
+   */
+  onStreamActions?(_chatId: string, _actions: StructuredStreamingUiActionButton[][], _streamKey?: string): void;
 
   /**
    * Whether this adapter can use a structured streaming UI for the given chat.

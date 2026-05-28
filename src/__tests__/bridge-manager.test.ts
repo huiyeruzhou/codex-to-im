@@ -1763,6 +1763,30 @@ describe('bridge-manager stop handling', () => {
     assert.equal(state.activeTasks.has(binding.codepilotSessionId), false);
     assert.match(sent[0] || '', /旧会话「Bridge: chat-stop」任务已停止/);
   });
+
+  it('routes tmux screen card stop callbacks to /tmux-screen stop', async () => {
+    const sent: string[] = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      send: async (message: { text: string }) => {
+        sent.push(message.text);
+        return { ok: true, messageId: 'msg-tmux-screen-stop' };
+      },
+    };
+    const address = { channelType: 'feishu', chatId: 'chat-tmux-screen-callback' } as const;
+    const binding = router.createBinding(address, '/tmp/cti-tmux-screen-callback');
+
+    await _testOnly.handleMessage(adapter, {
+      messageId: 'incoming-tmux-screen-callback',
+      address,
+      text: '',
+      timestamp: Date.now(),
+      callbackData: `tmux-screen:stop:${encodeURIComponent(binding.codepilotSessionId)}`,
+    });
+
+    assert.match(sent[0] || '', /当前聊天没有正在运行的 tmux 屏幕定时刷新/);
+  });
 });
 
 describe('bridge-manager startup runtime cleanup', () => {

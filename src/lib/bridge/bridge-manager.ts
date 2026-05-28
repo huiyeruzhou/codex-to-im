@@ -32,7 +32,6 @@ import {
   parseDesktopThreadListArgs,
   resolveCommandAlias,
   isBridgeCommandText,
-  isKnownBridgeCommand,
   toModelPromptText,
   toUserVisibleBindingError,
   toUserVisibleCommandError,
@@ -116,6 +115,7 @@ const MIRROR_PROMPT_MATCH_GRACE_MS = 120_000;
 const DESKTOP_TERMINAL_FINALIZATION_TIMEOUT_MS = 30_000;
 const MIRROR_STREAM_STATUS_IDLE_START_MS = 180_000;
 const MIRROR_STREAM_STATUS_HEARTBEAT_MS = 10_000;
+const TMUX_SCREEN_STOP_CALLBACK_PREFIX = 'tmux-screen:stop:';
 // Timeout after the last desktop event before we flush a buffered mirror turn
 // without seeing task_complete. This is an internal mirror buffer guard, not an
 // IM idle reminder. Active streaming turns never use this fallback timeout.
@@ -692,6 +692,17 @@ export function registerAdapter(adapter: BaseChannelAdapter): void {
   });
 }
 
+function parseTmuxScreenStopCallback(callbackData: string): string | null | undefined {
+  if (!callbackData.startsWith(TMUX_SCREEN_STOP_CALLBACK_PREFIX)) return undefined;
+  const encodedSessionId = callbackData.slice(TMUX_SCREEN_STOP_CALLBACK_PREFIX.length);
+  if (!encodedSessionId) return null;
+  try {
+    return decodeURIComponent(encodedSessionId);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Handle a single inbound message.
  */
@@ -716,8 +727,21 @@ async function handleMessage(
     }
   };
 
-  // Handle callback queries (permission buttons)
+  // Handle callback queries (permission buttons and interactive command cards)
   if (msg.callbackData) {
+    const tmuxScreenSessionId = parseTmuxScreenStopCallback(msg.callbackData);
+    if (tmuxScreenSessionId !== undefined) {
+      const binding = store.getChannelBinding(msg.address.channelType, msg.address.chatId);
+      if (!binding) {
+        await deliverBridgeNotice(adapter, msg.address, '当前聊天没有绑定会话，无法停止 tmux 屏幕定时刷新。');
+      } else if (tmuxScreenSessionId && binding.codepilotSessionId !== tmuxScreenSessionId) {
+        await deliverBridgeNotice(adapter, msg.address, '这个停止按钮对应的会话已不是当前聊天绑定会话。请发送 `/tmux-screen stop` 检查当前状态。');
+      } else {
+        await handleCommand(adapter, { ...msg, text: '/tmux-screen stop', callbackData: undefined }, '/tmux-screen stop');
+      }
+      ack();
+      return;
+    }
     const handled = broker.handlePermissionCallback(msg.callbackData, msg.address.chatId, msg.callbackMessageId);
     if (handled) {
       await deliverBridgeNotice(adapter, msg.address, 'Permission response recorded.');
@@ -819,6 +843,22 @@ async function handleMessage(
       ack();
       return;
     }
+    if (isBridgeCommandText(rawText)) {
+      try {
+        await handleCommand(adapter, msg, rawText);
+      } catch (error) {
+        const commandToken = rawText.trim().split(/\s+/)[0] || '';
+        const rawCommand = commandToken.split('@')[0].toLowerCase();
+        const args = rawText.trim().slice(commandToken.length).trim();
+        const resolvedCommand = resolveCommandAlias(rawCommand, args);
+        console.error(`[bridge-manager] tmux provider command failed: ${resolvedCommand}`, error);
+        await deliverBridgeNotice(adapter, msg.address, toUserVisibleCommandError(resolvedCommand, error), {
+          replyToMessageId: msg.messageId,
+        });
+      }
+      ack();
+      return;
+    }
     const { text, truncated } = sanitizeInput(modelText);
     if (truncated) {
       console.warn(`[bridge-manager] tmux provider input truncated from ${modelText.length} to ${text.length} chars for chat ${msg.address.chatId}`);
@@ -831,20 +871,11 @@ async function handleMessage(
       });
     }
     if (text) {
-      const commandToken = text.trim().split(/\s+/)[0] || '';
-      const rawCommand = commandToken.split('@')[0].toLowerCase();
-      const args = text.trim().slice(commandToken.length).trim();
-      const commandText = text.trim().startsWith('/') && isKnownBridgeCommand(rawCommand, args)
-        ? text
-        : `/tmux ${text}`;
-      const resolvedCommand = commandText === text
-        ? resolveCommandAlias(rawCommand, args)
-        : '/tmux';
       try {
-        await handleCommand(adapter, msg, commandText);
+        await handleCommand(adapter, msg, `/tmux ${text}`);
       } catch (error) {
-        console.error(`[bridge-manager] tmux provider command forwarding failed: ${resolvedCommand}`, error);
-        await deliverBridgeNotice(adapter, msg.address, toUserVisibleCommandError(resolvedCommand, error), {
+        console.error('[bridge-manager] tmux provider command forwarding failed: /tmux', error);
+        await deliverBridgeNotice(adapter, msg.address, toUserVisibleCommandError('/tmux', error), {
           replyToMessageId: msg.messageId,
         });
       }

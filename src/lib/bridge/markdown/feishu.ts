@@ -1,6 +1,13 @@
 import type { TaskProgressInfo, ToolCallInfo } from '../types.js';
 import { buildFencedCodeBlock } from './fence.js';
 
+export interface FeishuCardActionButton {
+  text: string;
+  callbackData: string;
+  type?: 'default' | 'primary' | 'danger';
+  disabled?: boolean;
+}
+
 /**
  * Feishu-specific Markdown processing.
  *
@@ -223,6 +230,41 @@ export function buildStreamingTaskContent(tasks: TaskProgressInfo[]): string {
   return buildTaskProgressMarkdown(tasks);
 }
 
+export function buildCardActionElements(
+  actionRows: FeishuCardActionButton[][] = [],
+  chatId?: string,
+): Array<Record<string, unknown>> {
+  const elements: Array<Record<string, unknown>> = [];
+  for (const row of actionRows) {
+    const columns = row
+      .filter((button) => button.text && button.callbackData)
+      .map((button) => ({
+        tag: 'column',
+        width: 'auto',
+        elements: [{
+          tag: 'button',
+          text: { tag: 'plain_text', content: button.text },
+          type: button.type || 'default',
+          size: 'medium',
+          disabled: Boolean(button.disabled),
+          value: { callback_data: button.callbackData, ...(chatId ? { chatId } : {}) },
+          behaviors: [{
+            type: 'callback',
+            value: { callback_data: button.callbackData, ...(chatId ? { chatId } : {}) },
+          }],
+        }],
+      }));
+    if (columns.length === 0) continue;
+    elements.push({
+      tag: 'column_set',
+      flex_mode: 'none',
+      horizontal_align: 'left',
+      columns,
+    });
+  }
+  return elements;
+}
+
 /**
  * Build the final card JSON (schema 2.0) with text, tool progress, and footer.
  */
@@ -232,6 +274,8 @@ export function buildFinalCardJson(
   tools: ToolCallInfo[],
   footer: { status: string; elapsed: string } | null,
   terminalStatus?: FinalCardTerminalStatus,
+  actionRows: FeishuCardActionButton[][] = [],
+  chatId?: string,
 ): string {
   const elements: Array<Record<string, unknown>> = [];
 
@@ -291,6 +335,14 @@ export function buildFinalCardJson(
     }
   }
 
+  const actionElements = buildCardActionElements(actionRows, chatId);
+  if (actionElements.length > 0) {
+    if (elements.length > 0) {
+      elements.push({ tag: 'hr' });
+    }
+    elements.push(...actionElements);
+  }
+
   return JSON.stringify({
     schema: '2.0',
     config: { wide_screen_mode: true },
@@ -323,6 +375,10 @@ export function buildPermissionButtonCard(
       type: btn.type,
       size: 'medium',
       value: { callback_data: `perm:${btn.action}:${permissionRequestId}`, ...(chatId ? { chatId } : {}) },
+      behaviors: [{
+        type: 'callback',
+        value: { callback_data: `perm:${btn.action}:${permissionRequestId}`, ...(chatId ? { chatId } : {}) },
+      }],
     }],
   }));
 

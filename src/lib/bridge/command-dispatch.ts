@@ -30,7 +30,7 @@ import { getBridgeContext } from './context.js';
 import { deliverBridgeNotice, deliverResponse } from './feedback-delivery.js';
 import * as broker from './permission-broker.js';
 import * as router from './channel-router.js';
-import type { BaseChannelAdapter } from './channel-adapter.js';
+import type { BaseChannelAdapter, StructuredStreamingUiActionButton } from './channel-adapter.js';
 import type { BridgeSession, BridgeStore } from './host.js';
 import type { ChannelBinding, InboundMessage, OutboundAttachment } from './types.js';
 import { recordBindingChange, type BindingChangeAction } from './binding-audit.js';
@@ -62,10 +62,12 @@ import { buildFencedCodeBlock } from './markdown/fence.js';
 import {
   codexTmuxSessionName,
   handleTmuxBridgeCommand,
+  sendTmuxInterrupt,
   startCodexResumeTmuxSession,
 } from './tmux-command.js';
 import {
   finalizeStreamFeedback,
+  pushStreamFeedbackActions,
   pushStreamFeedbackStatus,
   pushStreamFeedbackText,
   type StreamFeedbackTarget,
@@ -77,6 +79,28 @@ const REASONING_OPTIONS_TEXT = '可选：`1=minimal` `2=low` `3=medium` `4=high`
 const SANDBOX_OPTIONS_TEXT = '可选：`read-only` `workspace-write` `danger-full-access` `default`（回到全局默认）';
 const NETWORK_OPTIONS_TEXT = '可选：`on`/`true` 开启网络，`off`/`false` 关闭网络，`default` 回到全局默认。';
 const UI_DETAIL_OPTIONS_TEXT = '可选：`on` 显示 SDK 工具输入输出，`off` 只显示工具名和状态、正文更接近 mirror；兼容 `/ui detail on|off`。';
+const TMUX_SCREEN_STOP_CALLBACK_PREFIX = 'tmux-screen:stop:';
+const RUNNING_HEALTH_STATUSES = new Set([
+  'running_active',
+  'waiting_tool',
+  'slow_observed',
+  'suspected_stall',
+  'suspected_stream_ui_stall',
+  'suspected_detached',
+]);
+
+function sessionLooksRunning(session: BridgeSession | null | undefined): boolean {
+  return session?.runtime_status === 'running'
+    || session?.runtime_status === 'queued'
+    || RUNNING_HEALTH_STATUSES.has(session?.health_status || '');
+}
+
+function shouldMapStopToTmuxInterrupt(session: BridgeSession | null | undefined): session is BridgeSession & { tmux_session_name: string } {
+  return session?.codex_provider === 'tmux'
+    && Boolean(session.tmux_session_name)
+    && session.mirror_status === 'watching'
+    && sessionLooksRunning(session);
+}
 
 function parseHistoryLimitArg(raw: string): number | null {
   const token = raw.trim();
@@ -753,6 +777,9 @@ export async function handleBridgeCommand(
               pushStreamFeedbackText(tmuxScreenTarget, text);
               pushStreamFeedbackStatus(tmuxScreenTarget, statusText);
             },
+            actions: (actions: StructuredStreamingUiActionButton[][]) => {
+              pushStreamFeedbackActions(tmuxScreenTarget, actions);
+            },
             finish: (status: 'completed' | 'interrupted' | 'error', text: string) => (
               finalizeStreamFeedback(tmuxScreenTarget, status, text)
             ),
@@ -768,6 +795,7 @@ export async function handleBridgeCommand(
         screenMonitor: command === '/tmux-screen'
           ? {
               key: `${msg.address.channelType}:${msg.address.chatId}:${binding.codepilotSessionId}`,
+              stopCallbackData: `${TMUX_SCREEN_STOP_CALLBACK_PREFIX}${encodeURIComponent(binding.codepilotSessionId)}`,
               card: tmuxScreenCard,
               deliver: async (text) => {
                 await deliverBridgeNotice(adapter, msg.address, text, {
@@ -1519,17 +1547,23 @@ export async function handleBridgeCommand(
       const binding = router.resolve(msg.address);
       const session = store.getSession(binding.codepilotSessionId);
       const task = deps.getActiveTask(binding.codepilotSessionId);
-      const runningHealthStatuses = new Set([
-        'running_active',
-        'waiting_tool',
-        'slow_observed',
-        'suspected_stall',
-        'suspected_stream_ui_stall',
-        'suspected_detached',
-      ]);
-      const looksRunning = session?.runtime_status === 'running'
-        || session?.runtime_status === 'queued'
-        || runningHealthStatuses.has(session?.health_status || '');
+      const looksRunning = sessionLooksRunning(session);
+      if (!task && shouldMapStopToTmuxInterrupt(session)) {
+        const command = await sendTmuxInterrupt(session.tmux_session_name);
+        response = buildCommandFields(
+          '已发送停止按键',
+          [
+            ['Provider', 'tmux'],
+            ['tmux session', session.tmux_session_name],
+          ],
+          [
+            '当前会话处于 tmux Provider，且 mirror 显示任务仍在输出；`/stop` 已映射为向 Codex TUI 发送 `C-c`。',
+            `底层命令：\`${command}\``,
+          ],
+          responseParseMode === 'Markdown',
+        );
+        break;
+      }
       if (task || looksRunning) {
         const taskName = getSessionDisplayName(session, binding.workingDirectory);
         const detail = '用户执行 /stop，已停止当前任务。';

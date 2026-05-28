@@ -788,6 +788,97 @@ describe('feishu-adapter structured streaming regions', () => {
     blocked.resolve({});
   });
 
+  it('renders action buttons on streaming cards and keeps them disabled after finalization', async () => {
+    const cardCreateCalls: Array<Record<string, any>> = [];
+    const cardUpdateCalls: Array<Record<string, any>> = [];
+    const logs: unknown[][] = [];
+    const oldLog = console.log;
+    const adapter = new FeishuAdapter({
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      alias: '飞书',
+      config: {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+        streamingEnabled: true,
+      },
+    });
+
+    console.log = (...args: unknown[]) => {
+      logs.push(args);
+      oldLog(...args);
+    };
+    try {
+      (adapter as any).restClient = {
+        cardkit: {
+          v1: {
+            card: {
+              create: async (payload: Record<string, any>) => {
+                cardCreateCalls.push(payload);
+                return { data: { card_id: 'card-1' } };
+              },
+              settings: async () => ({}),
+              update: async (payload: Record<string, any>) => {
+                cardUpdateCalls.push(payload);
+                return {};
+              },
+            },
+            cardElement: {
+              content: async () => ({}),
+            },
+          },
+        },
+        im: {
+          message: {
+            create: async () => ({ data: { message_id: 'msg-1' } }),
+            reply: async () => ({ data: { message_id: 'msg-1' } }),
+          },
+        },
+      };
+
+      adapter.onStreamActions('chat-1', [[{
+        text: '停止',
+        callbackData: 'tmux-screen:stop:session-1',
+        type: 'danger',
+      }]], 'stream-1');
+      await (adapter as any).createStreamingCard('chat-1', 'reply-1', 'stream-1');
+
+      const initialCardJson = String(cardCreateCalls[0]?.data?.data || '');
+      const initialCard = JSON.parse(initialCardJson);
+      const initialButton = initialCard.body?.elements?.[5]?.columns?.[0]?.elements?.[0];
+      assert.match(initialCardJson, /"tag":"button"/);
+      assert.match(initialCardJson, /"content":"停止"/);
+      assert.match(initialCardJson, /"callback_data":"tmux-screen:stop:session-1"/);
+      assert.equal(initialButton?.behaviors?.[0]?.type, 'callback');
+      assert.equal(initialButton?.behaviors?.[0]?.value?.callback_data, 'tmux-screen:stop:session-1');
+
+      adapter.onStreamActions('chat-1', [[{
+        text: '已停止',
+        callbackData: 'tmux-screen:stop:session-1',
+        type: 'default',
+        disabled: true,
+      }]], 'stream-1');
+
+      const finalized = await adapter.onStreamEnd('chat-1', 'interrupted', '已停止 tmux 屏幕定时刷新。', 'stream-1');
+      const finalCardJson = String(cardUpdateCalls.at(-1)?.data?.card?.data || '');
+      const finalCard = JSON.parse(finalCardJson);
+      const finalButton = finalCard.body?.elements?.at(-1)?.columns?.[0]?.elements?.[0];
+
+      assert.equal(finalized, true);
+      assert.match(finalCardJson, /"content":"已停止"/);
+      assert.match(finalCardJson, /"callback_data":"tmux-screen:stop:session-1"/);
+      assert.match(finalCardJson, /"disabled":true/);
+      assert.equal(finalButton?.behaviors?.[0]?.type, 'callback');
+      assert.equal(finalButton?.behaviors?.[0]?.value?.callback_data, 'tmux-screen:stop:session-1');
+      assert.ok(logs.some((entry) => entry[0] === '[feishu-adapter] Streaming card actions updated:'));
+      assert.ok(logs.some((entry) => entry[0] === '[feishu-adapter] Creating streaming card with actions:'));
+      assert.ok(logs.some((entry) => entry[0] === '[feishu-adapter] Streaming card full refresh included actions:'));
+    } finally {
+      console.log = oldLog;
+    }
+  });
+
   it('renders final cards without waiting tasks or running tools after completion', async () => {
     const cardUpdateCalls: Array<Record<string, any>> = [];
     const adapter = new FeishuAdapter({

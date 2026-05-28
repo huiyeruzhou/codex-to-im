@@ -178,17 +178,20 @@ describe('bridge command e2e', () => {
       assert.match(restartLog, new RegExp(`new-session -d -s ${normalTmuxSession}`));
       assert.match(restartLog, new RegExp(`resume ${normalThreadId}`));
 
+      const beforeRoutingLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
       await _testOnly.handleMessage(adapter, inboundMessage(address, '普通消息', 'incoming-runtime-plain'));
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/goal 检查权限', 'incoming-runtime-unknown-command'));
       await _testOnly.handleMessage(adapter, inboundMessage(address, '//plan 下一步', 'incoming-runtime-escaped-command'));
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/tmux /compact', 'incoming-runtime-tmux-command'));
 
-      const routedLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      const unknownCommandResponse = adapter.sent.find((message) => message.text.includes('未知命令：/goal'))?.text || '';
+      assert.match(unknownCommandResponse, /未知命令：\/goal/);
+      const routedLog = fs.readFileSync(fakeTmux.logPath, 'utf-8').slice(beforeRoutingLog.length);
       assert.match(routedLog, new RegExp(`send-keys -t ${normalTmuxSession} -l 普通消息`));
-      assert.match(routedLog, new RegExp(`send-keys -t ${normalTmuxSession} -l /goal 检查权限`));
+      assert.doesNotMatch(routedLog, new RegExp(`send-keys -t ${normalTmuxSession} -l /goal 检查权限`));
       assert.match(routedLog, new RegExp(`send-keys -t ${normalTmuxSession} -l /plan 下一步`));
       assert.match(routedLog, new RegExp(`send-keys -t ${normalTmuxSession} -l /compact`));
-      assert.ok((routedLog.match(new RegExp(`send-keys -t ${normalTmuxSession} Enter`, 'g')) || []).length >= 4);
+      assert.ok((routedLog.match(new RegExp(`send-keys -t ${normalTmuxSession} Enter`, 'g')) || []).length >= 3);
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/mode yolo', 'incoming-runtime-block-mode'));
       assert.match(adapter.sent.at(-1)?.text || '', /当前是 tmux Provider/);
