@@ -60,6 +60,12 @@ import { readDesktopSessionMessagesByFilePath } from '../../desktop-sessions.js'
 import { getCodexThreadId, getExplicitDesktopThreadId } from './turns/turn-classifier.js';
 import { buildFencedCodeBlock } from './markdown/fence.js';
 import { handleTmuxBridgeCommand } from './tmux-command.js';
+import {
+  finalizeStreamFeedback,
+  pushStreamFeedbackStatus,
+  pushStreamFeedbackText,
+  type StreamFeedbackTarget,
+} from './stream-feedback-controller.js';
 
 const MODE_OPTIONS_TEXT = '可选：`normal`（普通执行，默认） `yolo`（跳过审批和沙箱）。兼容：`code` 等同于 `normal`。';
 const CODEX_PROVIDER_OPTIONS_TEXT = '可选：`sdk`（默认 SDK 路径） `tmux`（Codex TUI/tmux 路径）';
@@ -688,6 +694,28 @@ export async function handleBridgeCommand(
         response = '当前会话不存在，无法维护 tmux 状态。';
         break;
       }
+      const tmuxScreenKey = `tmux-screen:${msg.address.channelType}:${msg.address.chatId}:${binding.codepilotSessionId}`;
+      const tmuxScreenTarget: StreamFeedbackTarget = {
+        adapter,
+        channelType: adapter.channelType,
+        chatId: msg.address.chatId,
+        streamKey: tmuxScreenKey,
+      };
+      const tmuxScreenCard = (
+        command === '/tmux-screen'
+        && adapter.supportsStructuredStreamingUi?.(msg.address.chatId)
+        && typeof adapter.onStreamText === 'function'
+      )
+        ? {
+            update: (text: string, statusText: string) => {
+              pushStreamFeedbackText(tmuxScreenTarget, text);
+              pushStreamFeedbackStatus(tmuxScreenTarget, statusText);
+            },
+            finish: (status: 'completed' | 'interrupted' | 'error', text: string) => (
+              finalizeStreamFeedback(tmuxScreenTarget, status, text)
+            ),
+          }
+        : undefined;
       response = await handleTmuxBridgeCommand({
         command,
         args,
@@ -698,6 +726,7 @@ export async function handleBridgeCommand(
         screenMonitor: command === '/tmux-screen'
           ? {
               key: `${msg.address.channelType}:${msg.address.chatId}:${binding.codepilotSessionId}`,
+              card: tmuxScreenCard,
               deliver: async (text) => {
                 await deliverBridgeNotice(adapter, msg.address, text, {
                   sessionId: binding.codepilotSessionId,

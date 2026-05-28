@@ -939,4 +939,121 @@ describe('command-dispatch', () => {
       fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
     }
   });
+
+  it('updates a streaming card for timed tmux screen refresh when supported', async () => {
+    const store = initTestContext();
+    const fakeTmux = installFakeTmux();
+    const oldPath = process.env.PATH || '';
+    const oldFakeLog = process.env.TMUX_FAKE_LOG;
+    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${oldPath}`;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+
+    const address = { channelType: 'feishu', chatId: 'chat-tmux-card' } as const;
+    const sent: string[] = [];
+    const cardTexts: Array<{ chatId: string; text: string; streamKey?: string }> = [];
+    const cardStatuses: Array<{ chatId: string; text: string; streamKey?: string }> = [];
+    const cardEnds: Array<{ chatId: string; status: string; text: string; streamKey?: string }> = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      send: async (message: { text: string }) => {
+        sent.push(message.text);
+        return { ok: true, messageId: `reply-tmux-card-${sent.length}` };
+      },
+      supportsStructuredStreamingUi: () => true,
+      onStreamText: (chatId: string, text: string, streamKey?: string) => {
+        cardTexts.push({ chatId, text, streamKey });
+      },
+      onStreamStatus: (chatId: string, text: string, streamKey?: string) => {
+        cardStatuses.push({ chatId, text, streamKey });
+      },
+      onStreamEnd: async (chatId: string, status: string, text: string, streamKey?: string) => {
+        cardEnds.push({ chatId, status, text, streamKey });
+        return true;
+      },
+    };
+    const deps = {
+      getActiveTask: () => undefined,
+      diagnoseSessionHealth: async () => null,
+      diagnoseAllActiveSessions: async () => [],
+    };
+    let monitorStarted = false;
+
+    try {
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/tmux-attach alpha',
+          messageId: 'incoming-tmux-card-attach',
+        } as any,
+        '/tmux-attach alpha',
+        deps,
+      );
+      sent.length = 0;
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/tmux-screen 5s',
+          messageId: 'incoming-tmux-card-screen',
+        } as any,
+        '/tmux-screen 5s',
+        deps,
+      );
+      monitorStarted = true;
+
+      assert.equal(sent.length, 0);
+      assert.equal(cardTexts.length, 1);
+      assert.equal(cardTexts[0].chatId, address.chatId);
+      assert.match(cardTexts[0].streamKey || '', /^tmux-screen:/);
+      assert.match(cardTexts[0].text, /tmux 当前屏幕状态/);
+      assert.match(cardTexts[0].text, /alpha-screen/);
+      assert.match(cardTexts[0].text, /定时刷新.*5s/s);
+      assert.doesNotMatch(cardTexts[0].text, /真实 tmux 底层命令/);
+      assert.equal(cardStatuses.length, 1);
+      assert.match(cardStatuses[0].text, /tmux alpha/);
+      assert.match(cardStatuses[0].text, /every 5s/);
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/tmux-screen stop',
+          messageId: 'incoming-tmux-card-stop',
+        } as any,
+        '/tmux-screen stop',
+        deps,
+      );
+      monitorStarted = false;
+
+      assert.match(sent.at(-1) || '', /已停止 tmux 屏幕定时刷新/);
+      assert.equal(cardEnds.length, 1);
+      assert.equal(cardEnds[0].chatId, address.chatId);
+      assert.equal(cardEnds[0].status, 'interrupted');
+      assert.match(cardEnds[0].text, /已停止 tmux 屏幕定时刷新/);
+      assert.equal(cardEnds[0].streamKey, cardTexts[0].streamKey);
+    } finally {
+      if (monitorStarted) {
+        await handleBridgeCommand(
+          adapter,
+          {
+            address,
+            text: '/tmux-screen stop',
+            messageId: 'incoming-tmux-card-cleanup',
+          } as any,
+          '/tmux-screen stop',
+          deps,
+        );
+      }
+      process.env.PATH = oldPath;
+      if (oldFakeLog === undefined) {
+        delete process.env.TMUX_FAKE_LOG;
+      } else {
+        process.env.TMUX_FAKE_LOG = oldFakeLog;
+      }
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+    }
+  });
 });

@@ -43,6 +43,10 @@ export interface HandleTmuxBridgeCommandParams {
   screenMonitor?: {
     key: string;
     deliver: (text: string) => Promise<void>;
+    card?: {
+      update: (text: string, statusText: string) => void;
+      finish: (status: 'completed' | 'interrupted' | 'error', text: string) => Promise<boolean>;
+    };
   };
 }
 
@@ -59,6 +63,10 @@ interface TmuxScreenMonitor {
   intervalSeconds: number;
   markdown: boolean;
   deliver: (text: string) => Promise<void>;
+  card?: {
+    update: (text: string, statusText: string) => void;
+    finish: (status: 'completed' | 'interrupted' | 'error', text: string) => Promise<boolean>;
+  };
   busy: boolean;
 }
 
@@ -422,7 +430,7 @@ function buildTmuxScreenResponse(
   const notes = ['只查看当前屏幕，不发送任何按键。'];
   if (options?.intervalSeconds) {
     notes.push(options.monitorStarted
-      ? `已开启定时刷新：每 ${options.intervalSeconds} 秒发送一次；发送 \`/tmux-screen stop\` 停止。`
+      ? `已开启定时刷新：每 ${options.intervalSeconds} 秒刷新一次；发送 \`/tmux-screen stop\` 停止。`
       : `定时刷新：每 ${options.intervalSeconds} 秒。`);
   }
   const response = [
@@ -440,6 +448,11 @@ function buildTmuxScreenResponse(
     screenBlock + suffix,
   ].join('\n').trim();
   return appendTmuxCommandPreview(response, options?.commands || [], markdown);
+}
+
+function formatTmuxScreenCardStatus(target: string, lines: number, intervalSeconds: number): string {
+  const refreshedAt = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+  return `tmux ${target} · ${lines} lines · every ${intervalSeconds}s · ${refreshedAt}`;
 }
 
 function buildTmuxAttachResponse(
@@ -523,12 +536,12 @@ function parseTmuxScreenArgs(args: string): TmuxScreenArgs | null {
   return { action: 'show', lines, intervalSeconds };
 }
 
-function stopTmuxScreenMonitor(key: string): boolean {
+function stopTmuxScreenMonitor(key: string): TmuxScreenMonitor | null {
   const existing = screenMonitors.get(key);
-  if (!existing) return false;
+  if (!existing) return null;
   clearInterval(existing.timer);
   screenMonitors.delete(key);
-  return true;
+  return existing;
 }
 
 function startTmuxScreenMonitor(params: {
@@ -538,6 +551,10 @@ function startTmuxScreenMonitor(params: {
   intervalSeconds: number;
   markdown: boolean;
   deliver: (text: string) => Promise<void>;
+  card?: {
+    update: (text: string, statusText: string) => void;
+    finish: (status: 'completed' | 'interrupted' | 'error', text: string) => Promise<boolean>;
+  };
 }): void {
   stopTmuxScreenMonitor(params.key);
   const monitor: TmuxScreenMonitor = {
@@ -546,18 +563,28 @@ function startTmuxScreenMonitor(params: {
       monitor.busy = true;
       try {
         const screen = await captureTmuxPane(monitor.target, monitor.lines);
-        await monitor.deliver(buildTmuxScreenResponse(
+        const text = buildTmuxScreenResponse(
           monitor.target,
           screen,
           monitor.lines,
           monitor.markdown,
           {
             intervalSeconds: monitor.intervalSeconds,
-            commands: [tmuxCommandPreview(captureTmuxArgv(monitor.target, monitor.lines))],
+            commands: monitor.card ? [] : [tmuxCommandPreview(captureTmuxArgv(monitor.target, monitor.lines))],
           },
-        ));
+        );
+        if (monitor.card) {
+          monitor.card.update(text, formatTmuxScreenCardStatus(monitor.target, monitor.lines, monitor.intervalSeconds));
+        } else {
+          await monitor.deliver(text);
+        }
       } catch (error) {
-        await monitor.deliver(formatTmuxError(error));
+        const text = formatTmuxError(error);
+        if (monitor.card) {
+          monitor.card.update(text, `tmux ${monitor.target} · refresh failed`);
+        } else {
+          await monitor.deliver(text);
+        }
       } finally {
         monitor.busy = false;
       }
@@ -567,6 +594,7 @@ function startTmuxScreenMonitor(params: {
     intervalSeconds: params.intervalSeconds,
     markdown: params.markdown,
     deliver: params.deliver,
+    card: params.card,
     busy: false,
   };
   screenMonitors.set(params.key, monitor);
@@ -611,7 +639,11 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
       if (parsed.action === 'stop') {
         if (!params.screenMonitor) return '当前环境不支持停止 tmux 屏幕定时刷新。';
         const stopped = stopTmuxScreenMonitor(params.screenMonitor.key);
-        return stopped ? '已停止 tmux 屏幕定时刷新。' : '当前聊天没有正在运行的 tmux 屏幕定时刷新。';
+        if (!stopped) return '当前聊天没有正在运行的 tmux 屏幕定时刷新。';
+        if (stopped.card) {
+          await stopped.card.finish('interrupted', '已停止 tmux 屏幕定时刷新。');
+        }
+        return '已停止 tmux 屏幕定时刷新。';
       }
 
       const target = session.tmux_session_name;
@@ -623,6 +655,15 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
       const screen = await captureTmuxPane(target, lines);
       if (parsed.intervalSeconds) {
         if (!params.screenMonitor) return appendTmuxCommandPreview('当前环境不支持 tmux 屏幕定时刷新。', [commandPreview], markdown);
+        const card = params.screenMonitor.card;
+        const initialText = buildTmuxScreenResponse(target, screen, lines, markdown, {
+          intervalSeconds: parsed.intervalSeconds,
+          monitorStarted: true,
+          commands: card ? [] : [commandPreview],
+        });
+        if (card) {
+          card.update(initialText, formatTmuxScreenCardStatus(target, lines, parsed.intervalSeconds));
+        }
         startTmuxScreenMonitor({
           key: params.screenMonitor.key,
           target,
@@ -630,7 +671,9 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
           intervalSeconds: parsed.intervalSeconds,
           markdown,
           deliver: params.screenMonitor.deliver,
+          card,
         });
+        if (card) return '';
       }
       return buildTmuxScreenResponse(target, screen, lines, markdown, {
         intervalSeconds: parsed.intervalSeconds,
