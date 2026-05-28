@@ -187,7 +187,7 @@ codex-to-im uninstall
 - `/mode <normal|yolo>`：切换运行模式（`code` 会映射为 `normal`，其它旧模式不再支持）。
 - `/provider <sdk|tmux>`：切换当前 IM 会话使用的 Codex Provider。
 - `/reasoning <1-5>`：切换思考级别。
-- `/ui`：查看 UI 显示设置；`/ui detail on|off` 可切换 SDK 执行细节是否写入消息文本。
+- `/ui`：查看 UI 显示设置；`/ui on|off` 可切换 SDK 工具输入输出显示。
 - `/model`：查看当前模型和可选模型。
 - `/model <模型名>`：切换当前 IM 会话模型。
 - `/history` 或 `/his`：查看当前线程最近原始消息。

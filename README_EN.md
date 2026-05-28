@@ -186,7 +186,7 @@ You can also specify a directory explicitly:
 - `/mode <normal|yolo>`: change the runtime mode (`code` maps to `normal`; other legacy modes are no longer supported).
 - `/provider <sdk|tmux>`: change the Codex provider used by the current IM session.
 - `/reasoning <1-5>`: change the reasoning effort.
-- `/ui`: inspect UI display settings; `/ui detail on|off` toggles whether SDK execution details are written into message text.
+- `/ui`: inspect UI display settings; `/ui on|off` toggles whether SDK tool input/output details are shown.
 - `/model`: inspect the current model and available models.
 - `/model <model name>`: change the model for the current IM session.
 - `/history` or `/his`: inspect recent raw messages for the current thread.

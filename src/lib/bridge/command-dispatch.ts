@@ -64,7 +64,7 @@ const CODEX_PROVIDER_OPTIONS_TEXT = '可选：`sdk`（默认 SDK 路径） `tmux
 const REASONING_OPTIONS_TEXT = '可选：`1=minimal` `2=low` `3=medium` `4=high` `5=xhigh`';
 const SANDBOX_OPTIONS_TEXT = '可选：`read-only` `workspace-write` `danger-full-access` `default`（回到全局默认）';
 const NETWORK_OPTIONS_TEXT = '可选：`on`/`true` 开启网络，`off`/`false` 关闭网络，`default` 回到全局默认。';
-const UI_DETAIL_OPTIONS_TEXT = '可选：`on`/`detail` 显示 SDK 执行细节，`off`/`compact` 只保留正文显示。';
+const UI_DETAIL_OPTIONS_TEXT = '可选：`on` 显示 SDK 工具输入输出，`off` 只显示工具名和状态、正文更接近 mirror；兼容 `/ui detail on|off`。';
 
 function parseHistoryLimitArg(raw: string): number | null {
   const token = raw.trim();
@@ -87,7 +87,7 @@ function parseUiDetailArg(raw: string): boolean | null {
 }
 
 function formatUiDetailMode(enabled: boolean): string {
-  return enabled ? '显示执行细节' : '只显示正文';
+  return enabled ? '显示工具输入输出' : '只显示工具名、状态和正文';
 }
 
 function parseUiArgs(raw: string): { action: 'show' } | { action: 'set-details'; enabled: boolean } | null {
@@ -812,7 +812,7 @@ export async function handleBridgeCommand(
       if (!parsedUi) {
         response = buildCommandFields(
           'UI 显示设置用法',
-          [['命令', '`/ui detail on|off`']],
+          [['命令', '`/ui on|off`']],
           [UI_DETAIL_OPTIONS_TEXT],
           responseParseMode === 'Markdown',
         );
@@ -822,10 +822,10 @@ export async function handleBridgeCommand(
       if (parsedUi.action === 'show') {
         response = buildCommandFields(
           'UI 显示设置',
-          [['SDK 执行细节', formatUiDetailMode(currentConfig.sdkToolCallDetailsInText !== false)]],
+          [['SDK 工具详情', formatUiDetailMode(currentConfig.sdkToolCallDetailsInText !== false)]],
           [
             UI_DETAIL_OPTIONS_TEXT,
-            '这个设置只影响 SDK 对话写入文本预览/history 的细节量；mirror 仍按 Desktop JSONL 展示。',
+            '这是全局设置，会影响 SDK 对话文本预览/history，以及流式工具区是否展示工具输入输出；mirror 仍按 Desktop JSONL 展示。',
           ],
           responseParseMode === 'Markdown',
         );
@@ -835,7 +835,7 @@ export async function handleBridgeCommand(
       saveConfig({ ...currentConfig, sdkToolCallDetailsInText: parsedUi.enabled });
       response = buildCommandFields(
         '已更新 UI 显示设置',
-        [['SDK 执行细节', formatUiDetailMode(parsedUi.enabled)]],
+        [['SDK 工具详情', formatUiDetailMode(parsedUi.enabled)]],
         ['修改从下一轮 Codex 请求开始生效；正在运行的任务请先 `/stop` 后重发。'],
         responseParseMode === 'Markdown',
       );
@@ -1355,7 +1355,7 @@ export async function handleBridgeCommand(
         '- `/r` 查看思考级别；可用 `1 | 2 | 3 | 4 | 5`',
         '- `/sb` 查看或切换 Codex 沙箱；可用 `read-only | workspace-write | danger-full-access | default`',
         '- `/net` 查看或切换 Codex 网络；可用 `on | off | default`',
-        '- `/ui` 查看 UI 显示设置；`/ui detail on|off` 切换 SDK 执行细节显示',
+        '- `/ui` 查看 UI 显示设置；`/ui on|off` 切换 SDK 工具输入输出显示',
         '- `/model` 查看当前模型；`/model gpt-5.4` 可切换，`/model default` 回退到默认模型',
         '- `/t 0` 临时草稿线程',
         '- `/t 0 reset` 重置草稿线程',

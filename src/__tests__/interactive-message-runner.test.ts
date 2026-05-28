@@ -8,17 +8,18 @@ import { CTI_HOME } from '../config.js';
 import { JsonFileStore } from '../store.js';
 import { initBridgeContext } from '../lib/bridge/context.js';
 import { BaseChannelAdapter } from '../lib/bridge/channel-adapter.js';
-import type { InboundMessage, OutboundAttachment, OutboundMessage, SendResult } from '../lib/bridge/types.js';
+import type { InboundMessage, OutboundAttachment, OutboundMessage, SendResult, ToolCallInfo } from '../lib/bridge/types.js';
 import * as router from '../lib/bridge/channel-router.js';
 import { formatInteractiveRuntimeStatus, runInteractiveMessage, type InteractiveTaskState } from '../lib/bridge/interactive-message-runner.js';
 
 const DATA_DIR = path.join(CTI_HOME, 'data');
 
-function makeSettings(): Map<string, string> {
+function makeSettings(overrides: Record<string, string> = {}): Map<string, string> {
   return new Map([
     ['remote_bridge_enabled', 'true'],
     ['bridge_default_model', 'test-model'],
     ['bridge_default_mode', 'code'],
+    ...Object.entries(overrides),
   ]);
 }
 
@@ -27,6 +28,7 @@ class FakeFeishuStreamingAdapter extends BaseChannelAdapter {
   readonly provider = 'feishu';
   readonly streamedTexts: string[] = [];
   readonly streamedStatuses: string[] = [];
+  readonly streamedTools: ToolCallInfo[][] = [];
   readonly streamEnds: Array<{ status: 'completed' | 'interrupted' | 'error'; text: string }> = [];
   readonly messageStarts: Array<{ chatId: string; streamKey?: string }> = [];
   readonly messageEnds: Array<{ chatId: string; streamKey?: string }> = [];
@@ -69,6 +71,11 @@ class FakeFeishuStreamingAdapter extends BaseChannelAdapter {
   onStreamStatus(_chatId: string, statusText: string): void {
     this.streamUiActive = true;
     this.streamedStatuses.push(statusText);
+  }
+
+  onToolEvent(_chatId: string, tools: ToolCallInfo[]): void {
+    this.streamUiActive = true;
+    this.streamedTools.push(tools.map((tool) => ({ ...tool })));
   }
 
   async onStreamEnd(
@@ -424,6 +431,99 @@ describe('interactive-message-runner', () => {
     );
 
     assert.equal(clock.activeCount(), 0);
+  });
+
+  it('hides SDK tool input and output in streaming cards when UI details are off', async () => {
+    fs.rmSync(DATA_DIR, { recursive: true, force: true });
+    const store = new JsonFileStore(makeSettings({
+      bridge_sdk_tool_call_details_in_text: 'false',
+    }));
+    initBridgeContext({
+      store,
+      llm: {
+        streamChat() {
+          return new ReadableStream({
+            start(controller) {
+              controller.close();
+            },
+          });
+        },
+      },
+      permissions: {
+        resolvePendingPermission: () => false,
+      },
+      lifecycle: {},
+    });
+
+    const adapter = new FakeFeishuStreamingAdapter();
+    const address = {
+      channelType: 'feishu-default',
+      channelProvider: 'feishu',
+      chatId: 'chat-tool-details-off',
+      userId: 'user-tool-details-off',
+    } as const;
+    router.createBinding(address, 'D:\\workspace\\tool-details-off');
+    const taskStateMap = new Map<string, InteractiveTaskState>();
+
+    await runInteractiveMessage(
+      adapter,
+      {
+        messageId: 'incoming-tool-details-off-1',
+        address,
+        text: 'hello',
+        timestamp: Date.now(),
+      },
+      'hello',
+      undefined,
+      {
+        registerInteractiveTask(task) {
+          taskStateMap.set(task.sessionId, task);
+        },
+        resetMirrorSessionForInteractiveRun() {},
+        isCurrentInteractiveTask(sessionId, taskId) {
+          return taskStateMap.get(sessionId)?.id === taskId;
+        },
+        touchInteractiveTask() {},
+        recordInteractiveHealthStart() {},
+        recordInteractiveHealthProgress() {},
+        recordInteractiveHealthTool() {},
+        recordInteractiveHealthEnd() {},
+        beginMirrorSuppression() { return 'suppression-tool-details-off'; },
+        abortMirrorSuppression() {},
+        settleMirrorSuppression() {},
+        releaseInteractiveTask(sessionId, taskId) {
+          if (taskStateMap.get(sessionId)?.id === taskId) {
+            taskStateMap.delete(sessionId);
+          }
+        },
+        async deliverResponse() {},
+        persistSdkSessionUpdate() {},
+        processMessageImpl: async (_binding, _text, _onPermission, _abortSignal, _files, _onPartialText, onToolEvent) => {
+          onToolEvent?.('tool-1', 'shell_command', 'running', {
+            input: { command: 'cat secret-input.txt' },
+          });
+          onToolEvent?.('tool-1', '', 'complete', {
+            output: 'secret-output',
+          });
+          return {
+            responseText: '最终回复',
+            outboundAttachments: [],
+            tokenUsage: null,
+            hasError: false,
+            errorMessage: '',
+            permissionRequests: [],
+            sdkSessionId: null,
+          };
+        },
+      },
+    );
+
+    assert.ok(adapter.streamedTools.length >= 1);
+    const latestTools = adapter.streamedTools.at(-1) || [];
+    assert.equal(latestTools[0]?.name, 'shell_command');
+    assert.equal(latestTools[0]?.status, 'complete');
+    assert.equal(latestTools[0]?.input, null);
+    assert.equal(latestTools[0]?.output, null);
   });
 
   it('finalizes a hanging task from an external terminal desktop event', async () => {

@@ -315,6 +315,7 @@ export async function runInteractiveMessage(
   const processMessageImpl = deps.processMessageImpl ?? engine.processMessage;
   const forwardPermissionRequestImpl = deps.forwardPermissionRequestImpl ?? broker.forwardPermissionRequest;
   const structuredStreamStatusConfig = getStructuredStreamStatusConfig();
+  const showSdkToolDetails = shouldWriteSdkToolDetailsInText();
   const streamStatusIdleDetectionStartMs = Math.max(
     0,
     deps.streamStatusIdleDetectionStartMs ?? structuredStreamStatusConfig.idleStartMs,
@@ -618,7 +619,7 @@ export async function runInteractiveMessage(
         toolCallTracker.set(toolId, { id: toolId, name: 'tool', status, input: null, output: null });
       }
     }
-    if (detail) {
+    if (detail && showSdkToolDetails) {
       const existing = toolCallTracker.get(toolId);
       if (existing) {
         if (typeof detail.input !== 'undefined') {
@@ -784,9 +785,9 @@ export async function runInteractiveMessage(
         }
       },
       {
-        expandToolCalls: shouldWriteSdkToolDetailsInText(),
+        expandToolCalls: showSdkToolDetails,
         streamPreview: {
-          includeToolSnippets: !hasStreamingCards,
+          includeToolSnippets: showSdkToolDetails && !hasStreamingCards,
         },
       },
     );
