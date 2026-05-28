@@ -155,10 +155,10 @@ describe('command-dispatch', () => {
       adapter,
       {
         address,
-        text: '/status',
+        text: '/',
         messageId: 'incoming-prebound-status',
       } as any,
-      '/status',
+      '/',
       {
         getActiveTask: () => undefined,
         diagnoseSessionHealth: async () => null,
@@ -288,7 +288,7 @@ describe('command-dispatch', () => {
     assert.doesNotMatch(response, /检查时间/);
   });
 
-  it('renders /status without creating a session or binding for an unbound chat', async () => {
+  it('renders /status as global bridge status without creating a session or binding for an unbound chat', async () => {
     const store = initTestContext();
     const sent: string[] = [];
     const adapter: any = {
@@ -316,8 +316,10 @@ describe('command-dispatch', () => {
     );
 
     const response = sent[0] || '';
-    assert.match(response, /当前会话/);
-    assert.match(response, /还没有绑定会话/);
+    assert.match(response, /全局状态/);
+    assert.match(response, /Bridge/);
+    assert.match(response, /Bridge PID/);
+    assert.match(response, /当前聊天绑定.*未绑定/s);
     assert.equal(store.getChannelBinding(address.channelType, address.chatId), null);
     assert.equal(store.listSessions().length, 0);
     assert.deepEqual(readAuditSummaries(), []);

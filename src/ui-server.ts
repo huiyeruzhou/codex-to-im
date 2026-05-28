@@ -1560,7 +1560,8 @@ function renderHtml(): string {
                 <h3 class="command-section-title">最常用</h3>
                 <div class="command-list">
                   <div class="command-list-head"><div>命令</div><div>原始命令</div><div>说明</div></div>
-                  <div class="command-item"><div class="command-col-command"><code>/</code></div><div class="command-col-original"><code>/status</code></div><div class="command-col-desc">查看当前会话。</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>/</code></div><div class="command-col-original">—</div><div class="command-col-desc">查看当前聊天/当前会话诊断。</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>/status</code></div><div class="command-col-original"><code>/status</code></div><div class="command-col-desc">查看全局状态：通道、Bridge/UI 进程、PID、绑定与会话数量。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/check</code></div><div class="command-col-original"><code>/health</code></div><div class="command-col-desc">查看当前会话健康状态。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/check all</code></div><div class="command-col-original"><code>/health all</code></div><div class="command-col-desc">查看所有运行中会话的健康状态。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>//...</code></div><div class="command-col-original">—</div><div class="command-col-desc">向模型发送以 <code>/</code> 开头的文本，避免被当成桥接命令。</div></div>

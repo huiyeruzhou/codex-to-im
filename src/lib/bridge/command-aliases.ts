@@ -15,7 +15,7 @@ export function resolveCommandAlias(rawCommand: string, args: string): string {
     case '/check':
       return '/health';
     case '/':
-      return '/status';
+      return '/current';
     case '/h':
       return '/help';
     case '/t':

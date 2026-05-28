@@ -71,7 +71,7 @@ describe('bridge command e2e', () => {
     await _testOnly.handleMessage(adapter, inboundMessage(address, '/sandbox danger-full-access', 'incoming-runtime-sandbox'));
     await _testOnly.handleMessage(adapter, inboundMessage(address, '/network on', 'incoming-runtime-network'));
     await _testOnly.handleMessage(adapter, inboundMessage(address, '/m ask', 'incoming-runtime-invalid-mode'));
-    await _testOnly.handleMessage(adapter, inboundMessage(address, '/status', 'incoming-runtime-status'));
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/', 'incoming-runtime-status'));
 
     const session = store.getSession(binding.codepilotSessionId);
     assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.mode, 'yolo');

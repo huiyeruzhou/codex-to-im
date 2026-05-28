@@ -173,7 +173,8 @@ You can also specify a directory explicitly:
 
 ## Common Commands
 
-- `/` or `/status`: inspect the current session, thread, model, mode, reasoning effort, and shared-mirror status.
+- `/`: inspect the current chat/session diagnostics, including thread, model, mode, reasoning effort, and shared-mirror status.
+- `/status`: inspect global status, including channels, Bridge/UI processes and PIDs, bindings, and session counts.
 - `/check`: inspect session health; use `/check all` for active sessions.
 - `//...`: send text that starts with `/` to the model, for example `//status` is sent as `/status`.
 - `/t`: list the latest 10 desktop threads.

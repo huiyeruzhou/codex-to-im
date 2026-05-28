@@ -226,7 +226,7 @@ describe('bridge-manager resolveNewWorkingDirectory', () => {
 describe('bridge-manager resolveCommandAlias', () => {
   it('maps command aliases that change routing behavior', () => {
     const cases: Array<[string, string, string]> = [
-      ['/', '', '/status'],
+      ['/', '', '/current'],
       ['/check', '', '/health'],
       ['//', '', '//'],
       ['/t', '', '/threads'],

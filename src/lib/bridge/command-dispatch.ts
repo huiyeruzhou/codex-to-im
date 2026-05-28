@@ -3,6 +3,7 @@ import path from 'node:path';
 import { getOrCreateDraftSession } from '../../internal-sessions.js';
 import { isCliOnlyCodexModel, readConfiguredCodexModel } from '../../codex-models.js';
 import { loadConfig, saveConfig } from '../../config.js';
+import { getBridgeStatus, getCurrentUiServerUrl, getUiServerStatus } from '../../service-manager.js';
 import {
   buildHealthCommandResponse,
   buildHealthListResponse,
@@ -30,7 +31,7 @@ import { deliverBridgeNotice, deliverResponse } from './feedback-delivery.js';
 import * as broker from './permission-broker.js';
 import * as router from './channel-router.js';
 import type { BaseChannelAdapter } from './channel-adapter.js';
-import type { BridgeSession } from './host.js';
+import type { BridgeSession, BridgeStore } from './host.js';
 import type { ChannelBinding, InboundMessage, OutboundAttachment } from './types.js';
 import { recordBindingChange, type BindingChangeAction } from './binding-audit.js';
 import { isDangerousInput, parseMode, sanitizeInput, validateSessionId } from './security/validators.js';
@@ -89,6 +90,93 @@ function parseUiDetailArg(raw: string): boolean | null {
 
 function formatUiDetailMode(enabled: boolean): string {
   return enabled ? '显示工具输入输出' : '只显示工具名、状态和正文';
+}
+
+function formatGlobalRunning(running: boolean): string {
+  return running ? 'running' : 'stopped';
+}
+
+function formatPid(pid: number | undefined): string {
+  return Number.isFinite(pid) && (pid as number) > 0 ? String(pid) : '-';
+}
+
+function buildGlobalStatusResponse(
+  store: BridgeStore,
+  currentBinding: ChannelBinding | null,
+  markdown: boolean,
+): string {
+  const config = loadConfig();
+  const bridgeStatus = getBridgeStatus();
+  const uiStatus = getUiServerStatus();
+  const bindings = store.listChannelBindings();
+  const activeBindings = bindings.filter((binding) => binding.active !== false);
+  const sessions = store.listSessions();
+  const runningSessions = sessions.filter((session) => session.runtime_status === 'running' || session.runtime_status === 'queued');
+  const adapters = bridgeStatus.adapters || [];
+  const enabledChannels = (config.channels || []).filter((channel) => channel.enabled !== false);
+  const uiUrl = getCurrentUiServerUrl();
+
+  const channelLines = (config.channels || []).map((channel) => {
+    const adapter = adapters.find((item) => item.channelType === channel.id);
+    return [
+      channel.id,
+      `alias=${channel.alias || '-'}`,
+      `provider=${channel.provider}`,
+      `enabled=${channel.enabled !== false ? 'yes' : 'no'}`,
+      `adapter=${adapter ? formatGlobalRunning(adapter.running) : 'missing'}`,
+      adapter?.error ? `error=${adapter.error}` : '',
+    ].filter(Boolean).join('  ');
+  });
+  const bindingLines = activeBindings.map((binding) => {
+    const session = store.getSession(binding.codepilotSessionId);
+    return [
+      binding.channelType,
+      binding.channelAlias ? `alias=${binding.channelAlias}` : '',
+      binding.chatDisplayName ? `chat=${binding.chatDisplayName}` : `chat=${binding.chatId}`,
+      `session=${binding.codepilotSessionId.slice(0, 8)}`,
+      session?.runtime_status ? `runtime=${session.runtime_status}` : '',
+    ].filter(Boolean).join('  ');
+  });
+
+  const main = buildCommandFields(
+    '全局状态',
+    [
+      ['Bridge', formatGlobalRunning(bridgeStatus.running)],
+      ['Bridge PID', formatPid(bridgeStatus.pid)],
+      ['Bridge Run ID', bridgeStatus.runId || '-'],
+      ['Bridge 启动时间', formatCommandDateTime(bridgeStatus.startedAt)],
+      ['Bridge 上次退出', bridgeStatus.lastExitReason || '-'],
+      ['UI Server', formatGlobalRunning(uiStatus.running)],
+      ['UI PID', formatPid(uiStatus.pid)],
+      ['UI 地址', uiUrl || '-'],
+      ['通道', `${enabledChannels.length}/${(config.channels || []).length} enabled`],
+      ['Adapter', `${adapters.filter((adapter) => adapter.running).length}/${adapters.length} running`],
+      ['绑定', `${activeBindings.length}/${bindings.length} active`],
+      ['会话', `${sessions.length} total, ${runningSessions.length} running/queued`],
+      ['当前聊天绑定', currentBinding ? `${currentBinding.channelType}:${currentBinding.chatId} -> ${currentBinding.codepilotSessionId.slice(0, 8)}` : '未绑定'],
+    ],
+    [
+      '发送 `/` 查看当前聊天/当前会话诊断；发送 `/check` 查看当前会话健康检查。',
+    ],
+    markdown,
+  );
+
+  const sections: string[] = [main];
+  if (channelLines.length > 0) {
+    sections.push([
+      markdown ? '**通道明细**' : '通道明细',
+      '',
+      markdown ? buildFencedCodeBlock(channelLines.join('\n'), 'text') : channelLines.join('\n'),
+    ].join('\n').trim());
+  }
+  if (bindingLines.length > 0) {
+    sections.push([
+      markdown ? '**绑定明细**' : '绑定明细',
+      '',
+      markdown ? buildFencedCodeBlock(bindingLines.join('\n'), 'text') : bindingLines.join('\n'),
+    ].join('\n').trim());
+  }
+  return sections.join('\n\n');
 }
 
 function parseUiArgs(raw: string): { action: 'show' } | { action: 'set-details'; enabled: boolean } | null {
@@ -319,8 +407,9 @@ export async function handleBridgeCommand(
   let responseParseMode: 'Markdown' | 'plain' = getFeedbackParseMode(adapter.channelType);
   let auditResponse = true;
   const currentBinding = store.getChannelBinding(msg.address.channelType, msg.address.chatId);
-  const commandBinding = currentBinding
-    || (store.getChannelDefaultTarget(msg.address.channelType) ? router.resolve(msg.address) : null);
+  const commandBinding = command === '/status'
+    ? currentBinding
+    : currentBinding || (store.getChannelDefaultTarget(msg.address.channelType) ? router.resolve(msg.address) : null);
 
   switch (command) {
     case '/start':
@@ -977,6 +1066,16 @@ export async function handleBridgeCommand(
 
     case '/status': {
       auditResponse = false;
+      response = buildGlobalStatusResponse(
+        store,
+        currentBinding,
+        responseParseMode === 'Markdown',
+      );
+      break;
+    }
+
+    case '/current': {
+      auditResponse = false;
       const binding = commandBinding;
       if (!binding) {
         response = buildCommandFields(
@@ -1378,7 +1477,8 @@ export async function handleBridgeCommand(
         '**命令速览**',
         '',
         '**常用**',
-        '- `/` 当前会话',
+        '- `/` 当前聊天/当前会话诊断',
+        '- `/status` 全局状态（通道、Bridge/UI 进程、PID、绑定与会话数量）',
         '- `/check` 健康检查',
         '- `/check all` 查看所有运行中会话的健康状态',
         '- `//...` 向模型发送以 `/` 开头的文本',
