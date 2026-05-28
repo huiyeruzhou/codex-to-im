@@ -18,3 +18,24 @@ This approach:
 - Reduces maintainer burden by enabling users to self-diagnose
 - Leverages the fact that users already have an AI coding assistant installed
 - Provides actionable next steps rather than just error explanations
+
+## Hot Updating the Local Bridge
+
+When the user asks to hot update or redeploy the local Codex-to-IM bridge, use the project script instead of running `codex-to-im stop` in the foreground. The foreground command can stop the bridge that is carrying the current Codex session and abort itself.
+
+1. Confirm the current working directory is the `codex-to-im` project directory.
+2. If and only if the user explicitly asks to pull latest changes, pass `--pull`; otherwise omit it.
+3. Dispatch the detached updater from the project root:
+
+   ```bash
+   bash scripts/hot-update-bridge.sh
+   ```
+
+   With pull:
+
+   ```bash
+   bash scripts/hot-update-bridge.sh --pull
+   ```
+4. Tell the user exactly which command was dispatched, whether `--pull` was requested, where the hot update log is, and where the bridge log is.
+
+The script is responsible for using Node.js 24, detecting `--use-env-proxy`, running build and tests, and restarting the bridge from a detached worker. The default bridge log path is `~/.codex-to-im/logs/bridge.log`.
