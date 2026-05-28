@@ -105,7 +105,7 @@ function tmuxSessionName(sessionId: string): string {
   return `cti-${process.pid}-${Date.now()}-${safe}`;
 }
 
-function buildCodexTuiEnv(): Record<string, string> {
+export function buildCodexTuiEnv(): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined) env[key] = value;

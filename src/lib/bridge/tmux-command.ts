@@ -1,6 +1,11 @@
 import { spawn } from 'node:child_process';
 
+import {
+  buildCodexTuiArgs,
+  buildCodexTuiEnv,
+} from '../../codex-tmux-provider.js';
 import type { BridgeSession, BridgeStore } from './host.js';
+import type { StreamChatParams } from './host.js';
 import type { ChannelBinding } from './types.js';
 import { buildCommandFields } from './command-formatters.js';
 import { buildFencedCodeBlock } from './markdown/fence.js';
@@ -50,6 +55,20 @@ export interface HandleTmuxBridgeCommandParams {
   };
 }
 
+export interface StartCodexResumeTmuxSessionParams {
+  sessionName: string;
+  threadId: string;
+  bridgeSessionId: string;
+  workingDirectory?: string;
+  model?: string;
+  sandboxMode?: StreamChatParams['sandboxMode'];
+  networkAccessEnabled?: boolean;
+  modelReasoningEffort?: StreamChatParams['modelReasoningEffort'];
+  skipGitRepoCheck?: boolean;
+  codexMode?: StreamChatParams['codexMode'];
+  permissionMode?: string;
+}
+
 interface TmuxScreenArgs {
   action: 'show' | 'stop';
   lines?: number;
@@ -84,6 +103,53 @@ function quoteShellArg(value: string): string {
 
 function tmuxCommandPreview(args: readonly string[]): string {
   return ['tmux', ...args].map(quoteShellArg).join(' ');
+}
+
+function codexCommandPreview(args: readonly string[]): string {
+  return ['codex', ...args].map(quoteShellArg).join(' ');
+}
+
+function shouldForwardCodexTuiEnv(key: string): boolean {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) return false;
+  if (key.startsWith('CTI_')) return true;
+  if (key.startsWith('OPENAI_')) return true;
+  if (key.startsWith('HTTPS_PROXY')) return true;
+  if (key.startsWith('HTTP_PROXY')) return true;
+  if (key.startsWith('ALL_PROXY')) return true;
+  if (key.startsWith('NO_PROXY')) return true;
+  if (key.startsWith('NODE_')) return true;
+  if (key.startsWith('NVM_')) return true;
+  if (key.startsWith('LC_')) return true;
+  return [
+    'CODEX_API_KEY',
+    'CODEX_HOME',
+    'HOME',
+    'LANG',
+    'LITELLM_KEY',
+    'LOGNAME',
+    'PATH',
+    'SHELL',
+    'SSL_CERT_FILE',
+    'TERM',
+    'USER',
+  ].includes(key);
+}
+
+function codexCommandWithEnvPreview(args: readonly string[]): string {
+  const forwardedEnv = Object.entries(buildCodexTuiEnv())
+    .filter(([key]) => shouldForwardCodexTuiEnv(key))
+    .sort(([a], [b]) => a.localeCompare(b));
+  if (forwardedEnv.length === 0) return codexCommandPreview(args);
+  return [
+    'env',
+    ...forwardedEnv.map(([key, value]) => `${key}=${quoteShellArg(value)}`),
+    codexCommandPreview(args),
+  ].join(' ');
+}
+
+export function codexTmuxSessionName(threadId: string): string {
+  const safe = threadId.trim().replace(/[^A-Za-z0-9_.-]/g, '-').slice(0, 180);
+  return `codex-${safe || 'thread'}`;
 }
 
 function captureTmuxArgv(target: string, lines: number): TmuxArgv {
@@ -133,6 +199,52 @@ async function runTmux(args: string[], stdin?: string): Promise<TmuxCommandResul
     throw new Error((result.stderr || result.stdout || `tmux ${args[0] || ''} failed`).trim());
   }
   return result;
+}
+
+export function buildCodexResumeTmuxCommand(params: StartCodexResumeTmuxSessionParams): {
+  tmuxArgs: string[];
+  codexCommand: string;
+} {
+  const codexArgs = buildCodexTuiArgs({
+    prompt: '',
+    sessionId: params.bridgeSessionId,
+    sdkSessionId: params.threadId,
+    model: params.model,
+    forceModel: false,
+    sandboxMode: params.sandboxMode,
+    networkAccessEnabled: params.networkAccessEnabled,
+    modelReasoningEffort: params.modelReasoningEffort,
+    skipGitRepoCheck: params.skipGitRepoCheck,
+    workingDirectory: params.workingDirectory,
+    permissionMode: params.permissionMode,
+    codexMode: params.codexMode,
+  }, []);
+  const codexCommand = codexCommandWithEnvPreview(codexArgs);
+  const tmuxArgs = ['new-session', '-d', '-s', params.sessionName];
+  if (params.workingDirectory) {
+    tmuxArgs.push('-c', params.workingDirectory);
+  }
+  tmuxArgs.push('--', codexCommand);
+  return { tmuxArgs, codexCommand };
+}
+
+export async function startCodexResumeTmuxSession(params: StartCodexResumeTmuxSessionParams): Promise<{
+  existed: boolean;
+  sessionName: string;
+  codexCommand: string;
+  tmuxCommand: string;
+}> {
+  const existed = await hasTmuxSession(params.sessionName);
+  const { tmuxArgs, codexCommand } = buildCodexResumeTmuxCommand(params);
+  if (!existed) {
+    await runTmux(tmuxArgs);
+  }
+  return {
+    existed,
+    sessionName: params.sessionName,
+    codexCommand,
+    tmuxCommand: tmuxCommandPreview(tmuxArgs),
+  };
 }
 
 function normalizeCaptureLines(value: unknown): number {

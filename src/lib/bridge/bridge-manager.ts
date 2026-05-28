@@ -32,6 +32,7 @@ import {
   parseDesktopThreadListArgs,
   resolveCommandAlias,
   isBridgeCommandText,
+  isKnownBridgeCommand,
   toModelPromptText,
   toUserVisibleBindingError,
   toUserVisibleCommandError,
@@ -808,6 +809,50 @@ async function handleMessage(
 
   const modelText = toModelPromptText(rawText);
 
+  const tmuxProviderBinding = store.getChannelBinding(msg.address.channelType, msg.address.chatId);
+  const tmuxProviderSession = tmuxProviderBinding ? store.getSession(tmuxProviderBinding.codepilotSessionId) : null;
+  if (tmuxProviderSession?.codex_provider === 'tmux') {
+    if (hasAttachments) {
+      await deliverBridgeNotice(adapter, msg.address, '当前处于 tmux Provider，普通附件不会自动转发到 Codex TUI。请先发送 `/provider sdk`，或在 Codex TUI 内自行读取本地文件。', {
+        replyToMessageId: msg.messageId,
+      });
+      ack();
+      return;
+    }
+    const { text, truncated } = sanitizeInput(modelText);
+    if (truncated) {
+      console.warn(`[bridge-manager] tmux provider input truncated from ${modelText.length} to ${text.length} chars for chat ${msg.address.chatId}`);
+      store.insertAuditLog({
+        channelType: adapter.channelType,
+        chatId: msg.address.chatId,
+        direction: 'inbound',
+        messageId: msg.messageId,
+        summary: `[TRUNCATED] tmux provider input truncated from ${modelText.length} chars`,
+      });
+    }
+    if (text) {
+      const commandToken = text.trim().split(/\s+/)[0] || '';
+      const rawCommand = commandToken.split('@')[0].toLowerCase();
+      const args = text.trim().slice(commandToken.length).trim();
+      const commandText = text.trim().startsWith('/') && isKnownBridgeCommand(rawCommand, args)
+        ? text
+        : `/tmux ${text}`;
+      const resolvedCommand = commandText === text
+        ? resolveCommandAlias(rawCommand, args)
+        : '/tmux';
+      try {
+        await handleCommand(adapter, msg, commandText);
+      } catch (error) {
+        console.error(`[bridge-manager] tmux provider command forwarding failed: ${resolvedCommand}`, error);
+        await deliverBridgeNotice(adapter, msg.address, toUserVisibleCommandError(resolvedCommand, error), {
+          replyToMessageId: msg.messageId,
+        });
+      }
+    }
+    ack();
+    return;
+  }
+
   // Check for IM commands (before sanitization — commands are validated individually).
   // A leading double slash escapes one slash so users can send model prompts
   // that intentionally begin with "/" without invoking bridge commands.
@@ -885,6 +930,7 @@ async function handleCommand(
     getActiveTask: (sessionId) => INTERACTIVE_RUNTIME.getActiveTask(sessionId),
     forceStopSession: (sessionId, detail) => INTERACTIVE_RUNTIME.forceStopSession(sessionId, detail),
     recordInteractiveHealthEnd: (sessionId, outcome, detail) => SESSION_HEALTH_RUNTIME.recordInteractiveEnd(sessionId, outcome, detail),
+    reconcileMirrorSubscriptions,
     diagnoseSessionHealth: (sessionId) => SESSION_HEALTH_RUNTIME.diagnoseSessionHealth(sessionId),
     diagnoseAllActiveSessions: () => SESSION_HEALTH_RUNTIME.diagnoseAllActiveSessions(),
   });

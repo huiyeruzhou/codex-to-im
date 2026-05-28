@@ -59,7 +59,11 @@ import {
 import { readDesktopSessionMessagesByFilePath } from '../../desktop-sessions.js';
 import { getCodexThreadId, getExplicitDesktopThreadId } from './turns/turn-classifier.js';
 import { buildFencedCodeBlock } from './markdown/fence.js';
-import { handleTmuxBridgeCommand } from './tmux-command.js';
+import {
+  codexTmuxSessionName,
+  handleTmuxBridgeCommand,
+  startCodexResumeTmuxSession,
+} from './tmux-command.js';
 import {
   finalizeStreamFeedback,
   pushStreamFeedbackStatus,
@@ -311,6 +315,34 @@ function formatSessionCodexProvider(session?: BridgeSession | null): string {
   return session?.codex_provider || 'default';
 }
 
+function isTmuxProviderSession(session?: BridgeSession | null): boolean {
+  return session?.codex_provider === 'tmux';
+}
+
+function buildTmuxProviderModeBlockedResponse(markdown: boolean): string {
+  return buildCommandFields(
+    '当前是 tmux Provider',
+    [],
+    [
+      '`/mode` 无法影响已经启动的 Codex TUI 终端。',
+      '如需切换 yolo，请先发送 `/provider sdk` 退出 tmux Provider，再发送 `/m yolo`，然后重新发送 `/provider tmux`。',
+    ],
+    markdown,
+  );
+}
+
+function buildTmuxProviderRuntimeOptionBlockedResponse(commandLabel: string, markdown: boolean): string {
+  return buildCommandFields(
+    '当前是 tmux Provider',
+    [['命令', commandLabel]],
+    [
+      '这个设置无法影响已经启动的 Codex TUI 终端。',
+      '请在 Codex TUI 里使用内置 slash 命令调整，或发送 `/provider sdk` 退出后重新配置再进入 tmux Provider。',
+    ],
+    markdown,
+  );
+}
+
 function buildActiveTaskSwitchBlockedResponse(
   store: ReturnType<typeof getBridgeContext>['store'],
   binding: ChannelBinding,
@@ -366,8 +398,18 @@ export interface BridgeCommandDispatchDeps {
   getActiveTask(sessionId: string): { abortController: AbortController } | undefined;
   forceStopSession?(sessionId: string, detail?: string): Promise<boolean>;
   recordInteractiveHealthEnd?(sessionId: string, outcome: 'completed' | 'failed' | 'aborted', detail?: string): void;
+  reconcileMirrorSubscriptions?(): Promise<void>;
   diagnoseSessionHealth(sessionId: string): Promise<import('./session-health-runtime.js').SessionHealthDiagnosis | null>;
   diagnoseAllActiveSessions(): Promise<import('./session-health-runtime.js').SessionHealthDiagnosis[]>;
+}
+
+async function reconcileMirrorSubscriptionsBestEffort(deps: BridgeCommandDispatchDeps, context: string): Promise<void> {
+  if (!deps.reconcileMirrorSubscriptions) return;
+  try {
+    await deps.reconcileMirrorSubscriptions();
+  } catch (error) {
+    console.error(`[command-dispatch] Mirror reconcile failed during ${context}:`, error);
+  }
 }
 
 export async function handleBridgeCommand(
@@ -801,6 +843,10 @@ export async function handleBridgeCommand(
         );
         break;
       }
+      if (isTmuxProviderSession(session)) {
+        response = buildTmuxProviderModeBlockedResponse(responseParseMode === 'Markdown');
+        break;
+      }
       const requestedMode = parseMode(args);
       if (!requestedMode) {
         response = buildCommandFields(
@@ -858,14 +904,74 @@ export async function handleBridgeCommand(
         );
         break;
       }
-      store.updateSession(session.id, { codex_provider: requestedProvider });
+      if (requestedProvider === 'sdk') {
+        store.updateSession(session.id, {
+          codex_provider: 'sdk',
+          desktop_thread_id: undefined,
+          thread_origin: getCodexThreadId(session, binding) ? 'bridge' : undefined,
+        });
+        await reconcileMirrorSubscriptionsBestEffort(deps, 'provider sdk switch');
+        response = buildCommandFields(
+          '已切换 Codex Provider',
+          [
+            ['模式', formatSessionMode(binding, store.getSession(session.id))],
+            ['Provider', 'sdk'],
+          ],
+          ['之后的普通消息会回到 SDK Provider；tmux 会话不会自动关闭。'],
+          responseParseMode === 'Markdown',
+        );
+        break;
+      }
+
+      const threadId = getCodexThreadId(session, binding);
+      if (!threadId) {
+        response = buildCommandFields(
+          '无法进入 tmux Provider',
+          [],
+          ['当前会话还没有 codex_thread_id。请先用 SDK Provider 发送一条普通消息创建 Codex thread，再发送 `/provider tmux`。'],
+          responseParseMode === 'Markdown',
+        );
+        break;
+      }
+      const mode = formatSessionMode(binding, session);
+      const tmuxSessionName = codexTmuxSessionName(threadId);
+      const startResult = await startCodexResumeTmuxSession({
+        sessionName: tmuxSessionName,
+        threadId,
+        bridgeSessionId: session.id,
+        workingDirectory: binding.workingDirectory || session.working_directory,
+        sandboxMode: resolveEffectiveSandboxMode(session) as import('../../config.js').CodexSandboxMode,
+        networkAccessEnabled: resolveEffectiveNetworkAccess(session),
+        modelReasoningEffort: resolveEffectiveReasoningEffort(session) as import('../../config.js').CodexReasoningEffort,
+        skipGitRepoCheck: (store.getSetting('bridge_codex_skip_git_repo_check') || '').toLowerCase() === 'true',
+        codexMode: mode === 'yolo' ? 'yolo' : 'normal',
+        permissionMode: mode === 'yolo' ? 'never' : 'acceptEdits',
+      });
+      store.updateSdkSessionId(session.id, threadId);
+      store.updateSession(session.id, {
+        codex_provider: 'tmux',
+        tmux_session_name: tmuxSessionName,
+        tmux_auto_enter: true,
+        codex_thread_id: threadId,
+        desktop_thread_id: threadId,
+        thread_origin: 'desktop',
+      });
+      await reconcileMirrorSubscriptionsBestEffort(deps, 'provider tmux switch');
       response = buildCommandFields(
         '已切换 Codex Provider',
         [
-          ['模式', formatSessionMode(binding, session)],
-          ['Provider', requestedProvider],
+          ['模式', mode],
+          ['Provider', 'tmux'],
+          ['codex_thread_id', threadId],
+          ['tmux session', tmuxSessionName],
+          ['自动回车', 'on'],
         ],
-        ['修改从下一轮 Codex 请求开始生效；正在运行的任务请先 `/stop` 后重发。'],
+        [
+          startResult.existed
+            ? '同名 tmux session 已存在，已直接绑定。'
+            : '已启动 Codex TUI 并 resume 当前 thread。',
+          '之后普通消息会发送到这个 tmux session；回复由 mirror 机制从 Codex session JSONL 自动同步。',
+        ],
         responseParseMode === 'Markdown',
       );
       break;
@@ -888,6 +994,10 @@ export async function handleBridgeCommand(
           [SANDBOX_OPTIONS_TEXT, '发送 `/sandbox workspace-write` 可切换；修改从下一轮 Codex 请求开始生效。'],
           responseParseMode === 'Markdown',
         );
+        break;
+      }
+      if (isTmuxProviderSession(session)) {
+        response = buildTmuxProviderRuntimeOptionBlockedResponse('`/sandbox`', responseParseMode === 'Markdown');
         break;
       }
       const requestedSandbox = args.trim().toLowerCase();
@@ -938,6 +1048,10 @@ export async function handleBridgeCommand(
           [NETWORK_OPTIONS_TEXT, '这个开关会传给 `sandbox_workspace_write.network_access`；下一轮 Codex 请求生效。'],
           responseParseMode === 'Markdown',
         );
+        break;
+      }
+      if (isTmuxProviderSession(session)) {
+        response = buildTmuxProviderRuntimeOptionBlockedResponse('`/network`', responseParseMode === 'Markdown');
         break;
       }
       const networkAccess = parseNetworkAccessArg(args);

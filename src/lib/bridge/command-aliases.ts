@@ -46,6 +46,42 @@ export function resolveCommandAlias(rawCommand: string, args: string): string {
   }
 }
 
+const KNOWN_BRIDGE_COMMANDS = new Set([
+  '/start',
+  '/new',
+  '/thread',
+  '/threads',
+  '/tmux',
+  '/tmux-switch',
+  '/tmux-attach',
+  '/tmux-new',
+  '/tmux-status',
+  '/tmux-screen',
+  '/tmux-set',
+  '/reasoning',
+  '/cwd',
+  '/mode',
+  '/provider',
+  '/sandbox',
+  '/network',
+  '/ui',
+  '/model',
+  '/status',
+  '/current',
+  '/health',
+  '/history',
+  '/cat',
+  '/file',
+  '/stop',
+  '/perm',
+  '/unbind',
+  '/help',
+]);
+
+export function isKnownBridgeCommand(rawCommand: string, args = ''): boolean {
+  return KNOWN_BRIDGE_COMMANDS.has(resolveCommandAlias(rawCommand.toLowerCase(), args));
+}
+
 export function isEscapedSlashPrompt(rawText: string): boolean {
   return rawText.trim().startsWith('//');
 }
