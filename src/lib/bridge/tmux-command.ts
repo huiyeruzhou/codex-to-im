@@ -236,9 +236,10 @@ export async function startCodexResumeTmuxSession(params: StartCodexResumeTmuxSe
 }> {
   const existed = await hasTmuxSession(params.sessionName);
   const { tmuxArgs, codexCommand } = buildCodexResumeTmuxCommand(params);
-  if (!existed) {
-    await runTmux(tmuxArgs);
+  if (existed) {
+    await runTmux(['kill-session', '-t', params.sessionName]);
   }
+  await runTmux(tmuxArgs);
   return {
     existed,
     sessionName: params.sessionName,

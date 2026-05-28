@@ -49,6 +49,13 @@ case "$1" in
     fi
     exit 0
     ;;
+  kill-session)
+    target="$3"
+    tmp="\${state}.tmp"
+    grep -Fxv -- "$target" "$state" > "$tmp" 2>/dev/null || true
+    mv "$tmp" "$state"
+    exit 0
+    ;;
   send-keys)
     exit 0
     ;;
@@ -159,6 +166,17 @@ describe('bridge command e2e', () => {
       assert.match(startLog, /--config 'model_reasoning_effort="high"'/);
       assert.match(startLog, /--config sandbox_workspace_write.network_access=true/);
       assert.match(startLog, new RegExp(`resume ${normalThreadId}`));
+
+      const beforeRestartLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/provider tmux', 'incoming-runtime-provider-restart'));
+      const restartResponse = adapter.sent.at(-1)?.text || '';
+      const restartLog = fs.readFileSync(fakeTmux.logPath, 'utf-8').slice(beforeRestartLog.length);
+      assert.match(restartResponse, /同名 tmux session 已存在/);
+      assert.match(restartResponse, /销毁并重新启动/);
+      assert.match(restartLog, new RegExp(`has-session -t ${normalTmuxSession}`));
+      assert.match(restartLog, new RegExp(`kill-session -t ${normalTmuxSession}`));
+      assert.match(restartLog, new RegExp(`new-session -d -s ${normalTmuxSession}`));
+      assert.match(restartLog, new RegExp(`resume ${normalThreadId}`));
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '普通消息', 'incoming-runtime-plain'));
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/goal 检查权限', 'incoming-runtime-unknown-command'));

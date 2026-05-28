@@ -968,7 +968,7 @@ export async function handleBridgeCommand(
         ],
         [
           startResult.existed
-            ? '同名 tmux session 已存在，已直接绑定。'
+            ? '同名 tmux session 已存在，已先销毁并重新启动 Codex TUI。'
             : '已启动 Codex TUI 并 resume 当前 thread。',
           '之后普通消息会发送到这个 tmux session；回复由 mirror 机制从 Codex session JSONL 自动同步。',
         ],
