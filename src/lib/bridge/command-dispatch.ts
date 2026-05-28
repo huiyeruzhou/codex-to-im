@@ -64,6 +64,7 @@ const CODEX_PROVIDER_OPTIONS_TEXT = '可选：`sdk`（默认 SDK 路径） `tmux
 const REASONING_OPTIONS_TEXT = '可选：`1=minimal` `2=low` `3=medium` `4=high` `5=xhigh`';
 const SANDBOX_OPTIONS_TEXT = '可选：`read-only` `workspace-write` `danger-full-access` `default`（回到全局默认）';
 const NETWORK_OPTIONS_TEXT = '可选：`on`/`true` 开启网络，`off`/`false` 关闭网络，`default` 回到全局默认。';
+const UI_DETAIL_OPTIONS_TEXT = '可选：`on`/`detail` 显示 SDK 执行细节，`off`/`compact` 只保留正文显示。';
 
 function parseHistoryLimitArg(raw: string): number | null {
   const token = raw.trim();
@@ -71,6 +72,48 @@ function parseHistoryLimitArg(raw: string): number | null {
   const parsed = Number(token);
   if (!Number.isInteger(parsed) || parsed < 1 || parsed > 20) return null;
   return parsed;
+}
+
+function parseUiDetailArg(raw: string): boolean | null {
+  const token = raw.trim().toLowerCase();
+  if (!token) return null;
+  if (token === 'on' || token === 'true' || token === '1' || token === 'yes' || token === 'detail' || token === 'details' || token === 'verbose') {
+    return true;
+  }
+  if (token === 'off' || token === 'false' || token === '0' || token === 'no' || token === 'compact' || token === 'brief') {
+    return false;
+  }
+  return null;
+}
+
+function formatUiDetailMode(enabled: boolean): string {
+  return enabled ? '显示执行细节' : '只显示正文';
+}
+
+function parseUiArgs(raw: string): { action: 'show' } | { action: 'set-details'; enabled: boolean } | null {
+  const parts = raw.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return { action: 'show' };
+
+  // Compatibility for the short-lived /tools on|off command: /tools resolves
+  // here with only the on/off token as args.
+  if (parts.length === 1) {
+    const direct = parseUiDetailArg(parts[0]);
+    if (direct !== null) return { action: 'set-details', enabled: direct };
+  }
+
+  const topic = parts[0]?.toLowerCase();
+  if (
+    topic === 'detail'
+    || topic === 'details'
+    || topic === 'tool'
+    || topic === 'tools'
+    || topic === 'sdk'
+  ) {
+    const enabled = parseUiDetailArg(parts.slice(1).join(' '));
+    return enabled === null ? null : { action: 'set-details', enabled };
+  }
+
+  return null;
 }
 
 function resolveHistorySessionFile(
@@ -763,6 +806,42 @@ export async function handleBridgeCommand(
       break;
     }
 
+    case '/ui': {
+      const currentConfig = loadConfig();
+      const parsedUi = parseUiArgs(args);
+      if (!parsedUi) {
+        response = buildCommandFields(
+          'UI 显示设置用法',
+          [['命令', '`/ui detail on|off`']],
+          [UI_DETAIL_OPTIONS_TEXT],
+          responseParseMode === 'Markdown',
+        );
+        break;
+      }
+
+      if (parsedUi.action === 'show') {
+        response = buildCommandFields(
+          'UI 显示设置',
+          [['SDK 执行细节', formatUiDetailMode(currentConfig.sdkToolCallDetailsInText !== false)]],
+          [
+            UI_DETAIL_OPTIONS_TEXT,
+            '这个设置只影响 SDK 对话写入文本预览/history 的细节量；mirror 仍按 Desktop JSONL 展示。',
+          ],
+          responseParseMode === 'Markdown',
+        );
+        break;
+      }
+
+      saveConfig({ ...currentConfig, sdkToolCallDetailsInText: parsedUi.enabled });
+      response = buildCommandFields(
+        '已更新 UI 显示设置',
+        [['SDK 执行细节', formatUiDetailMode(parsedUi.enabled)]],
+        ['修改从下一轮 Codex 请求开始生效；正在运行的任务请先 `/stop` 后重发。'],
+        responseParseMode === 'Markdown',
+      );
+      break;
+    }
+
     case '/model': {
       const binding = currentBinding || router.resolve(msg.address);
       const session = store.getSession(binding.codepilotSessionId);
@@ -1276,6 +1355,7 @@ export async function handleBridgeCommand(
         '- `/r` 查看思考级别；可用 `1 | 2 | 3 | 4 | 5`',
         '- `/sb` 查看或切换 Codex 沙箱；可用 `read-only | workspace-write | danger-full-access | default`',
         '- `/net` 查看或切换 Codex 网络；可用 `on | off | default`',
+        '- `/ui` 查看 UI 显示设置；`/ui detail on|off` 切换 SDK 执行细节显示',
         '- `/model` 查看当前模型；`/model gpt-5.4` 可切换，`/model default` 回退到默认模型',
         '- `/t 0` 临时草稿线程',
         '- `/t 0 reset` 重置草稿线程',

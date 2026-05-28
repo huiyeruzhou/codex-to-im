@@ -235,6 +235,7 @@ export async function processMessage(
   onStatusNote?: OnStatusNote,
   onPromptPrepared?: (promptText: string) => void,
   options?: {
+    expandToolCalls?: boolean;
     streamPreview?: {
       includeToolSnippets?: boolean;
     };
@@ -405,6 +406,7 @@ async function consumeStream(
   onTaskEvent?: OnTaskEvent,
   onStatusNote?: OnStatusNote,
   options?: {
+    expandToolCalls?: boolean;
     streamPreview?: {
       includeToolSnippets?: boolean;
     };
@@ -416,7 +418,6 @@ async function consumeStream(
   /** Monotonically accumulated text for streaming preview — never resets on tool_use. */
   let previewText = '';
   let separateNextPreviewText = false;
-  const includeToolSnippets = options?.streamPreview?.includeToolSnippets !== false;
   let tokenUsage: TokenUsage | null = null;
   let hasError = false;
   let errorMessage = '';
@@ -426,6 +427,8 @@ async function consumeStream(
   const outboundAttachments: OutboundAttachment[] = [];
   const toolPreview = new Map<string, { name: string; input: unknown }>();
   let lastReasoningNote: string | null = null;
+  const expandToolCalls = options?.expandToolCalls !== false;
+  const includeToolSnippets = expandToolCalls && options?.streamPreview?.includeToolSnippets !== false;
 
   const formatSseErrorPayload = (raw: string): string => {
     const trimmed = (raw || '').trim();
@@ -467,18 +470,20 @@ async function consumeStream(
           break;
 
         case 'tool_use': {
-          if (currentText.trim()) {
+          if (expandToolCalls && currentText.trim()) {
             contentBlocks.push({ type: 'text', text: currentText });
             currentText = '';
           }
           try {
             const toolData = JSON.parse(event.data);
-            contentBlocks.push({
-              type: 'tool_use',
-              id: toolData.id,
-              name: toolData.name,
-              input: toolData.input,
-            });
+            if (expandToolCalls) {
+              contentBlocks.push({
+                type: 'tool_use',
+                id: toolData.id,
+                name: toolData.name,
+                input: toolData.input,
+              });
+            }
             toolPreview.set(toolData.id, { name: toolData.name, input: toolData.input });
             if (onToolEvent) {
               try {
@@ -505,14 +510,16 @@ async function consumeStream(
               content: resultData.content,
               is_error: resultData.is_error || false,
             };
-            if (seenToolResultIds.has(resultData.tool_use_id)) {
-              const idx = contentBlocks.findIndex(
-                (b) => b.type === 'tool_result' && 'tool_use_id' in b && b.tool_use_id === resultData.tool_use_id
-              );
-              if (idx >= 0) contentBlocks[idx] = newBlock;
-            } else {
-              seenToolResultIds.add(resultData.tool_use_id);
-              contentBlocks.push(newBlock);
+            if (expandToolCalls) {
+              if (seenToolResultIds.has(resultData.tool_use_id)) {
+                const idx = contentBlocks.findIndex(
+                  (b) => b.type === 'tool_result' && 'tool_use_id' in b && b.tool_use_id === resultData.tool_use_id
+                );
+                if (idx >= 0) contentBlocks[idx] = newBlock;
+              } else {
+                seenToolResultIds.add(resultData.tool_use_id);
+                contentBlocks.push(newBlock);
+              }
             }
             if (onToolEvent) {
               try {

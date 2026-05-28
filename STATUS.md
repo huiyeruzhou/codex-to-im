@@ -7,13 +7,52 @@
 - IM 命令入口主要在 `src/lib/bridge/command-dispatch.ts`，外层由 `src/lib/bridge/bridge-manager.ts` 处理消息、路由、锁、健康状态和交付。
 - session/thread 身份目前有三组字段需要区分：旧兼容字段 `sdk_session_id`，Bridge/SDK 线程字段 `codex_thread_id`，Desktop 线程字段 `desktop_thread_id`，并通过 `thread_origin` 辅助判断来源。
 - `/his`/`/history` 当前有两类历史来源：优先读取 Codex Desktop JSONL 文件，找不到文件时退回 Bridge 缓存消息；`/his json` 只能用于已经落盘的 Codex session JSONL。
-- 已存在未提交改动：`.gitignore`、`src/__tests__/bridge-manager.test.ts`、`src/__tests__/bridge-command-e2e.test.ts`、`src/__tests__/test-bridge-utils.ts`。本轮会在这些现有改动基础上继续，不回退用户已有工作。
 
-## 当前目标
+## 消息流与展示链路理解
 
-- 在保证代码功能完全不变的前提下，梳理测试结构，减少没有行为价值的单测，增加覆盖真实命令入口和真实持久化路径的端到端测试。
-- 对 history 的不同建模方案做中文说明，供维护者决策；代码层面暂不做会改变语义的数据模型改造。
-- 审计命令菜单、IM 命令后端实现和 Web 前端配置之间的匹配关系，找出命令设计、说明文案、回显内容和前后端配置不一致的问题。
+### 普通 IM 对话如何操纵消息
+
+- 普通 IM 消息入口是 `bridge-manager.handleMessage()`：先处理权限回调、命令、输入清洗，再调用 `runInteractiveMessage()`。
+- `runInteractiveMessage()` 负责一次 active task 的生命周期：注册 task/turn、启动 IM 侧消息 UI、绑定流式预览/卡片回调、调用 `conversation-engine.processMessage()`，最后通过 `delivery-pipeline` 投递最终文本和附件。
+- `processMessage()` 会先把用户消息写入 Bridge 缓存消息：`CTI_HOME/data/messages/<sessionId>.json`。如果用户带文件，会先尝试把文件落到工作目录 `.codepilot-uploads/`，再在持久化消息前面写入 `<!--files:JSON-->` 元数据。
+- `processMessage()` 构造给 Codex 的 prompt 时，会从 Bridge 缓存取最近 50 条消息作为 `conversationHistory`，排除刚写入的当前用户消息。也就是说普通 IM 的上下文来源是 Bridge 自己的 messages JSON，不是直接读取 Desktop JSONL。
+- 默认 SDK 路径下，`codex-provider` 调用 Codex SDK 的 `thread.runStreamed()`，消费 SDK 的 typed thread/item event。bridge 随后把这些 SDK event 映射成自己的内部 SSE 字符串：`status`、`text`、`tool_use`、`tool_result`、`task_update`、`result`、`error` 等。这里不是前端浏览器直接消费的 HTTP SSE，而是 provider 到 conversation engine 之间的内部 `ReadableStream<string>` 协议。
+- `conversation-engine.consumeStream()` 再用 `consumeSseEvents()` 解析这些 `data: ...` 行：`text` 累加成正文，`tool_use/tool_result` 变成结构化 content block，`status` 更新 session/thread id、模型或 reasoning note，`task_update` 同步 todo/task，`result` 保存 token usage 和最终 SDK session id，`error` 变成错误响应。
+- assistant 最终持久化到 Bridge 缓存：如果有工具块，就把 content blocks 整体 JSON stringify；如果只有正文，就保存纯文本。正文里的 `<cti-send>` 附件协议会在保存和最终投递前被清理/提取。
+- 如果当前 session 是显式 Desktop-backed（有 `desktop_thread_id`），IM 发起的消息仍然会走 SDK stream 做进度来源，但 turn 会被标记为 `im_desktop_reuse`；最终答案可能等待 Desktop JSONL 的 `task_complete.last_agent_message` 再和 SDK final 合并。同时会开启 mirror suppression，避免同一批 Desktop JSONL records 又被 mirror 当成桌面主动消息重复投递。
+
+### Mirror 如何操纵消息
+
+- mirror 只针对显式 Desktop thread 建立 subscription；普通 IM session 只有 `codex_thread_id` 时不会自动成为 mirror 来源。
+- mirror 的输入源是 Codex Desktop session JSONL 文件，路径来自 `~/.codex/sessions/**/*.jsonl` 的 Desktop session index/scan 结果。`mirror-runtime` 为 subscription 记录 file path、offset、cursor、pending turn，并用 `fs.watch()` 加 reconcile 轮询读取增量。
+- `mirror-reconcile-core.readMirrorDeliverableRecords()` 按文件快照判断是增量读还是全量恢复读，再调用 `desktop-sessions` 的 JSONL parser 生成 `DesktopMirrorRecord[]`。cursor 用 signature/count/timestamp 找“上次看到哪里”；首次初始化只建立 cursor，不把旧历史全部投递。
+- 读到的新 records 会先进入 `desktop-terminal-router`。如果它们属于当前 active 的 IM Desktop reuse turn，就被 claimed，后续用于该 IM turn 的 terminal finalization，不进入 mirror delivery。
+- 未被 claimed 的 records 才是 Desktop 主动发生的 mirror 内容。它们会先过 `filterSuppressedMirrorRecords()` 去掉 IM 回声 records；suppression 现在只过滤 records，不再作为整个 mirror delivery 的全局阻塞条件。
+- `mirror-delivery-plan` 把 records 放入 subscription buffer；`mirror-turns.consumeMirrorRecords()` 按 `task_started/message/reasoning/plan_update/tool_started/tool_finished/task_complete/task_aborted` 维护一个 pending mirror turn。assistant/commentary 文本会追加到流式正文，tool/task/status 会更新结构化状态；`task_complete` 或 `task_aborted` 才 finalize 成 `FinalizedDesktopMirrorTurn`。
+- mirror 的实时 UI 和最终投递集中在 `mirror-feedback-controller`：Feishu 且支持 streaming hooks 时，先用 `onMirrorStreamStart/onStreamText/onToolEvent/onTaskEvent/onStreamStatus` 更新卡片，结束时用 `onStreamEnd` 收尾；如果卡片收尾不可用或失败，则回退到普通最终消息。最终正文会先经过 `assembleDesktopFinalResponse()` 清理附件协议，再用 `formatMirrorMessage()` 包上桌面线程标题、用户消息和 Codex 回复。
+
+### 前端/IM UI 如何显示
+
+- IM 侧普通对话的实时显示由 adapter capability 决定。支持 `onStreamText` 的通道会走流式卡片；支持 structured streaming UI 的 Feishu 还会显示工具、任务和运行状态。没有流式卡片的通道会尽量用 `sendPreview()` 草稿预览，最终仍发送普通消息。
+- 普通 IM 对话结束时，`runInteractiveMessage()` 会先尝试 finalize streaming UI；如果结构化卡片已经承载了最终正文，就跳过重复文本投递，但仍会补发附件。没有卡片或卡片失败时，走普通 `deliverResponse()`。
+- mirror UI 与普通 IM UI 共用 `stream-feedback-controller` 和 delivery pipeline 的思想，但入口不同：mirror 的流式卡片来自 Desktop JSONL records，而普通 IM 的流式卡片来自 SDK stream events。
+- Web 控制台的会话历史页不是实时聊天 UI。它通过 `/api/session-history?targetKey=...` 拉取一次数据，前端 `renderSessionHistory()` 把消息渲染成 `.chat-history-message` 列表，并提供“显示解析/显示 JSONL”和“复制 JSONL”按钮。
+
+### History 中的消息如何显示
+
+- Web history 对 `session:<id>` 的处理：如果 Bridge session 上能找到 `codex_thread_id` 对应的 Desktop JSONL，就显示 Desktop 来源；否则读取 Bridge 缓存 messages JSON。
+- Web history 对 `desktop:<threadId>` 的处理：直接读取对应 Desktop JSONL。
+- Desktop JSONL 展示路径是：`readDesktopSessionJsonlHistoryStreamByFilePath()` -> `parseDesktopSessionJsonlHistoryText()` -> 每行 JSONL 分类为 role/kind/content/rawJsonl -> `uiHistoryMessage()` 用 MarkdownIt 预渲染 `renderedContent`。前端默认显示解析后的 Markdown，切换 raw 时显示原始 JSONL 行。
+- Bridge 缓存展示路径是：`store.getMessages(session.id)` -> `uiHistoryMessage(role, 'bridge:message', content, timestamp)`。这类消息没有真实 JSONL 行，`rawJsonl` 是 UI 层合成的 `{ role, kind, content, timestamp }` JSON 字符串。
+- IM 命令 `/his` 与 Web history 有相近但不完全相同的投影：它优先用同一套 Desktop JSONL history entry parser 转成 `BridgeMessage[]`，只保留 user/assistant/commentary/task_complete 等可读消息并去重；找不到 Desktop JSONL 时退回 Bridge 缓存。`/his json` 不做解析，直接把原始 session JSONL 文件作为附件发送。
+
+## 当前结论
+
+- 测试结构整理已完成：减少低价值直连单测，增加覆盖真实命令入口和持久化路径的 bridge command E2E。
+- JSONL/history 链路已收敛：`/his` 复用 Web history 同源的 Desktop JSONL history entry 解析结果。
+- 命令菜单、IM 命令后端实现和 Web 前端配置的主要不一致项已处理，剩余项集中在会话配置 tri-state、通道测试按钮语义和文档提示。
+- `config.env` 到 `config.v2.json` 的同步策略已实现，并避免用 env 直接覆盖无法匹配的已有多通道实例。
+- SDK 工具执行细节的文本展示已增加全局配置：Web 基础配置和 IM `/ui detail on|off` 都可切换；默认保持展示。
 
 ## 命令与前端配置审计
 
@@ -63,6 +102,7 @@
 - `/model` CLI-only 模型提示改为“仅 IM/CLI”，与 Web 的“仅 IM”说法收敛。
 - Web `/api/config` 保存 `historyMessageLimit` 时后端 clamp 到 1-20，并显式接受 `workspace-write` sandbox。
 - `config.env` 比 `config.v2.json` 更新且内容不是当前 v2 自动快照时，`loadConfig()` 会把 env 中显式出现的全局配置 overlay 到 `config.v2.json`；通道配置只更新匹配到同一通道的实例，匹配不到则新增 env 导入通道并提示，任何实际同步写入 v2 的情况都会提示。
+- 新增 `sdkToolCallDetailsInText` 全局配置，默认开启；关闭后 SDK 对话仍保留结构化工具事件回调，但不再把工具调用/结果写入文本预览和 Bridge assistant history。
 
 ## 时间线
 
@@ -83,4 +123,8 @@
 - 2026-05-28 06:52 CST：继续处理命令/前端配置审计项。更新 `command-dispatch.ts` 和 `ui-server.ts` 的命令文案、`/status` 普通 IM 会话提示、`/new --force` 条件提示、`historyMessageLimit` clamp 与 `workspace-write` 保存逻辑；补充/调整 bridge command E2E 和 `/new` 断言。执行 `npm run typecheck` 通过，定向 18 个测试通过，全量 `npm test` 398 个测试全部通过。
 - 2026-05-28 07:04 CST：按要求先提交并推送当前基线：`1d2e798 test: streamline bridge command coverage`，已推送到 `origin/master`。后续开始实现“用户修改 `config.env` 后同步更新全局 `config.v2.json`”的新功能。
 - 2026-05-28 07:14 CST：实现 env -> v2 同步：当 `config.env` mtime 新于 `config.v2.json` 且不是当前 v2 自动生成快照时，按 env 中显式键覆盖 runtime 和默认 provider 通道配置，并保留 v2 多通道实例；`saveConfig()` 改为先写 env 快照再写 v2，避免自身快照被误判为用户修改。补充配置测试覆盖 env overlay 与自动快照 no-op；执行 `npm run typecheck`、定向 `config.test.ts`、全量 `npm test`，400 个测试全部通过。
-- 2026-05-28 07:24 CST：根据反馈修正 env 通道同步策略：不再用 provider 的首个通道直接覆盖；飞书按 `CTI_FEISHU_APP_ID` 匹配已有通道，微信按 `CTI_WEIXIN_BASE_URL` 匹配，未匹配时新增 `<provider>-env` 通道并 `console.warn` 提示；只要 env 变更实际写入 `config.v2.json`，也会输出总同步提示。此修正暂不 push。
+- 2026-05-28 07:24 CST：根据反馈修正 env 通道同步策略：不再用 provider 的首个通道直接覆盖；飞书按 `CTI_FEISHU_APP_ID` 匹配已有通道，微信按 `CTI_WEIXIN_BASE_URL` 匹配，未匹配时新增 `<provider>-env` 通道并 `console.warn` 提示；只要 env 变更实际写入 `config.v2.json`，也会输出总同步提示。
+- 2026-05-28 07:40 CST：梳理普通 IM、Desktop reuse、Desktop mirror、IM 流式 UI、Web history 和 `/his` 的消息操纵/展示链路，并记录到“消息流与展示链路理解”。
+- 2026-05-28 08:10 CST：新增 `sdkToolCallDetailsInText` 全局显示配置，默认开启。Web 基础配置增加“消息中显示 SDK 执行细节”，IM 增加 `/ui detail on|off` 命令；关闭后 SDK 对话仍保留结构化工具事件回调，但不再把工具调用/结果写入文本预览和 Bridge assistant history。旧的 `/tools on|off` 作为命令兼容入口保留，不出现在帮助文案中。执行 `source ~/.nvm/nvm.sh && npm run typecheck` 通过，定向 26 个测试通过，全量 `npm test` 403 个测试全部通过。
+- 2026-05-28 11:21 CST：恢复上下文后复验当前工作区：`source ~/.nvm/nvm.sh && npm run typecheck` 通过，`source ~/.nvm/nvm.sh && npm test` 通过，403 个测试全部通过；`git diff --check` 无空白错误。
+- 2026-05-28 12:18 CST：整理 `STATUS.md`，移除已过期的未提交/暂不推送说明，并修正 `/tools` 兼容说明。

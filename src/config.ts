@@ -31,6 +31,7 @@ export interface RuntimeConfigV2 {
   codexSandboxMode?: CodexSandboxMode;
   codexNetworkAccess?: boolean;
   codexReasoningEffort?: CodexReasoningEffort;
+  sdkToolCallDetailsInText?: boolean;
   uiAllowLan?: boolean;
   uiAccessToken?: string;
 }
@@ -88,6 +89,7 @@ export interface Config {
   codexSandboxMode?: CodexSandboxMode;
   codexNetworkAccess?: boolean;
   codexReasoningEffort?: CodexReasoningEffort;
+  sdkToolCallDetailsInText?: boolean;
   uiAllowLan?: boolean;
   uiAccessToken?: string;
   schemaVersion?: number;
@@ -566,6 +568,7 @@ function expandConfig(v2: ConfigV2File): Config {
     codexSandboxMode: v2.runtime.codexSandboxMode ?? 'workspace-write',
     codexNetworkAccess: v2.runtime.codexNetworkAccess !== false,
     codexReasoningEffort: v2.runtime.codexReasoningEffort ?? 'medium',
+    sdkToolCallDetailsInText: v2.runtime.sdkToolCallDetailsInText !== false,
     uiAllowLan: v2.runtime.uiAllowLan === true,
     uiAccessToken: v2.runtime.uiAccessToken || undefined,
   };
@@ -592,6 +595,7 @@ function buildV2FileFromExpandedConfig(config: Config, current?: ConfigV2File | 
       codexSandboxMode: config.codexSandboxMode,
       codexNetworkAccess: config.codexNetworkAccess === true,
       codexReasoningEffort: config.codexReasoningEffort,
+      sdkToolCallDetailsInText: config.sdkToolCallDetailsInText !== false,
       uiAllowLan: config.uiAllowLan,
       uiAccessToken: config.uiAccessToken,
     },
@@ -627,6 +631,7 @@ export function loadConfig(): Config {
       codexSandboxMode: 'workspace-write',
       codexNetworkAccess: true,
       codexReasoningEffort: 'medium',
+      sdkToolCallDetailsInText: true,
       uiAllowLan: false,
     },
     channels: [],
@@ -810,6 +815,10 @@ export function configToSettings(config: Config): Map<string, string> {
   m.set(
     "bridge_codex_reasoning_effort",
     config.codexReasoningEffort || 'medium',
+  );
+  m.set(
+    "bridge_sdk_tool_call_details_in_text",
+    config.sdkToolCallDetailsInText === false ? "false" : "true",
   );
   m.set(
     "bridge_channel_instances_json",

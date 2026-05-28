@@ -6,7 +6,37 @@ import {
   appendStreamPreviewChunk,
   buildConversationPromptText,
   buildLocalAttachmentPromptSupplement,
+  processMessage,
 } from '../lib/bridge/conversation-engine.js';
+import { sseEvent } from '../sse-utils.js';
+import {
+  initBridgeTestContext,
+  makeBridgeSettings,
+  resetBridgeTestState,
+} from './test-bridge-utils.js';
+import type { LLMProvider } from '../lib/bridge/host.js';
+
+function toolOnlyLlm(): LLMProvider {
+  return {
+    streamChat(): ReadableStream<string> {
+      return new ReadableStream({
+        start(controller) {
+          controller.enqueue(sseEvent('tool_use', {
+            id: 'tool-1',
+            name: 'Bash',
+            input: { command: 'pwd' },
+          }));
+          controller.enqueue(sseEvent('tool_result', {
+            tool_use_id: 'tool-1',
+            content: '/tmp/project',
+            is_error: false,
+          }));
+          controller.close();
+        },
+      });
+    },
+  };
+}
 
 describe('buildLocalAttachmentPromptSupplement', () => {
   it('returns an empty string when only images are present', () => {
@@ -76,5 +106,100 @@ describe('appendStreamPreviewChunk', () => {
   it('does not add an extra paragraph for continuous text chunks', () => {
     const result = appendStreamPreviewChunk('先检查', '文件', false);
     assert.equal(result, '先检查文件');
+  });
+});
+
+describe('processMessage tool expansion', () => {
+  it('can keep SDK tool calls out of persisted assistant content and stream preview', async () => {
+    resetBridgeTestState();
+    const store = initBridgeTestContext({
+      settings: makeBridgeSettings({
+        bridge_sdk_tool_call_details_in_text: 'false',
+      }),
+      llm: toolOnlyLlm(),
+    });
+    const session = store.createSession('tool-expansion-test', '', undefined, '', 'normal');
+    const binding = store.upsertChannelBinding({
+      channelType: 'feishu',
+      chatId: 'chat-tool-expansion',
+      codepilotSessionId: session.id,
+      workingDirectory: '',
+      model: '',
+      mode: 'normal',
+    });
+
+    const previews: string[] = [];
+    const result = await processMessage(
+      binding,
+      'run a tool',
+      undefined,
+      undefined,
+      undefined,
+      (text) => previews.push(text),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        expandToolCalls: false,
+        streamPreview: {
+          includeToolSnippets: true,
+        },
+      },
+    );
+
+    assert.equal(result.responseText, '');
+    assert.deepEqual(previews, []);
+
+    const { messages } = store.getMessages(session.id);
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0]?.role, 'user');
+  });
+
+  it('expands SDK tool calls by default', async () => {
+    resetBridgeTestState();
+    const store = initBridgeTestContext({
+      settings: makeBridgeSettings(),
+      llm: toolOnlyLlm(),
+    });
+    const session = store.createSession('tool-expansion-default-test', '', undefined, '', 'normal');
+    const binding = store.upsertChannelBinding({
+      channelType: 'feishu',
+      chatId: 'chat-tool-expansion-default',
+      codepilotSessionId: session.id,
+      workingDirectory: '',
+      model: '',
+      mode: 'normal',
+    });
+
+    const previews: string[] = [];
+    const result = await processMessage(
+      binding,
+      'run a tool',
+      undefined,
+      undefined,
+      undefined,
+      (text) => previews.push(text),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        streamPreview: {
+          includeToolSnippets: true,
+        },
+      },
+    );
+
+    assert.equal(result.responseText, '');
+    assert.match(previews.join('\n'), /Bash/);
+    assert.match(previews.join('\n'), /pwd/);
+    assert.match(previews.join('\n'), /\/tmp\/project/);
+
+    const { messages } = store.getMessages(session.id);
+    assert.equal(messages.length, 2);
+    assert.equal(messages[1]?.role, 'assistant');
+    assert.match(messages[1]?.content || '', /"type":"tool_use"/);
+    assert.match(messages[1]?.content || '', /"type":"tool_result"/);
   });
 });

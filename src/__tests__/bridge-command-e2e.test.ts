@@ -38,6 +38,15 @@ describe('bridge command e2e', () => {
     await _testOnly.handleMessage(adapter, inboundMessage(address, '/his limit 12', 'incoming-limit'));
     assert.equal(loadConfig().historyMessageLimit, 12);
 
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/ui detail off', 'incoming-ui-detail-off'));
+    assert.equal(loadConfig().sdkToolCallDetailsInText, false);
+    assert.match(adapter.sent.at(-1)?.text || '', /已更新 UI 显示设置/);
+    assert.match(adapter.sent.at(-1)?.text || '', /只显示正文/);
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/ui detail on', 'incoming-ui-detail-on'));
+    assert.equal(loadConfig().sdkToolCallDetailsInText, true);
+    assert.match(adapter.sent.at(-1)?.text || '', /显示执行细节/);
+
     await _testOnly.handleMessage(adapter, inboundMessage(address, '/his msg', 'incoming-history-msg'));
 
     const lastText = adapter.sent.at(-1)?.text || '';

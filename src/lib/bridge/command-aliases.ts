@@ -34,6 +34,11 @@ export function resolveCommandAlias(rawCommand: string, args: string): string {
       return '/sandbox';
     case '/net':
       return '/network';
+    case '/ui':
+      return '/ui';
+    case '/tool':
+    case '/tools':
+      return '/ui';
     case '/his':
       return '/history';
     default:

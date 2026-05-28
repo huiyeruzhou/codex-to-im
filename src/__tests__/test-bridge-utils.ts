@@ -53,6 +53,9 @@ export function resetBridgeTestState(options: { cleanCodexHome?: boolean } = {})
 export function initBridgeTestContext(options: {
   settings?: Map<string, string>;
   dynamicSettings?: boolean;
+  llm?: LLMProvider;
+  permissions?: PermissionGateway;
+  lifecycle?: LifecycleHooks;
 } = {}): JsonFileStore {
   const store = new JsonFileStore(
     options.settings || makeBridgeSettings(),
@@ -60,9 +63,9 @@ export function initBridgeTestContext(options: {
   );
   initBridgeContext({
     store,
-    llm: noopLlm,
-    permissions: noopPermissions,
-    lifecycle: noopLifecycle,
+    llm: options.llm || noopLlm,
+    permissions: options.permissions || noopPermissions,
+    lifecycle: options.lifecycle || noopLifecycle,
   });
   return store;
 }

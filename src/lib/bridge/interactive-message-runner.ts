@@ -175,6 +175,11 @@ function getStructuredStreamStatusConfig(): {
   };
 }
 
+function shouldWriteSdkToolDetailsInText(): boolean {
+  const { store } = getBridgeContext();
+  return store.getSetting('bridge_sdk_tool_call_details_in_text') !== 'false';
+}
+
 function flushPreview(
   adapter: BaseChannelAdapter,
   state: StreamingPreviewState,
@@ -779,6 +784,7 @@ export async function runInteractiveMessage(
         }
       },
       {
+        expandToolCalls: shouldWriteSdkToolDetailsInText(),
         streamPreview: {
           includeToolSnippets: !hasStreamingCards,
         },

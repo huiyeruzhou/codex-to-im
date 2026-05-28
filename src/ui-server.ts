@@ -791,6 +791,7 @@ function configToPayload(config: Config) {
     codexSandboxMode: config.codexSandboxMode || 'workspace-write',
     codexNetworkAccess: config.codexNetworkAccess !== false,
     codexReasoningEffort: config.codexReasoningEffort || 'medium',
+    sdkToolCallDetailsInText: config.sdkToolCallDetailsInText !== false,
     uiAllowLan: config.uiAllowLan === true,
     uiAccessToken: config.uiAccessToken || '',
     channels: (config.channels || [])
@@ -843,6 +844,7 @@ function mergeConfig(payload: Record<string, unknown>): Config {
       || payload.codexReasoningEffort === 'xhigh'
       ? payload.codexReasoningEffort
       : 'medium',
+    sdkToolCallDetailsInText: payload.sdkToolCallDetailsInText !== false,
     uiAllowLan,
     uiAccessToken,
     channels: current.channels,
@@ -1505,6 +1507,9 @@ function renderHtml(): string {
                 <label class="checkbox"><input id="codexSkipGitRepoCheck" type="checkbox" checked /> 允许在未信任 Git 目录运行 Codex <span class="help-tip" tabindex="0" data-tip="如果新建会话报 Not inside a trusted directory，可以打开这个选项；修改后需要重启 Bridge。">?</span></label>
               </div>
               <div class="checkbox-row" style="margin-top: 12px;">
+                <label class="checkbox"><input id="sdkToolCallDetailsInText" type="checkbox" checked /> 消息中显示 SDK 执行细节 <span class="help-tip" tabindex="0" data-tip="开启时，SDK 对话会把工具调用和结果写入文本预览/history；关闭时更接近 mirror 展示，只保留 Codex 正文。也可用 /ui detail on|off 修改。">?</span></label>
+              </div>
+              <div class="checkbox-row" style="margin-top: 12px;">
                 <label class="checkbox"><input id="uiAllowLan" type="checkbox" /> 允许局域网访问 Web 控制台 <span class="help-tip" tabindex="0" data-tip="默认仅允许本机访问当前工作台。开启后，局域网设备需要先输入访问 token。">?</span></label>
               </div>
               <div class="notice" id="uiAccessSummary">局域网访问未开启。</div>
@@ -1583,6 +1588,7 @@ function renderHtml(): string {
                   <div class="command-item"><div class="command-col-command"><code>/r</code></div><div class="command-col-original"><code>/reasoning</code></div><div class="command-col-desc">查看当前思考级别；可选 <code>1=minimal</code>、<code>2=low</code>、<code>3=medium</code>、<code>4=high</code>、<code>5=xhigh</code>。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/sb</code></div><div class="command-col-original"><code>/sandbox</code></div><div class="command-col-desc">查看或切换当前 IM 会话的 Codex 沙箱；可选 <code>read-only</code>、<code>workspace-write</code>、<code>danger-full-access</code>、<code>default</code>。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/net</code></div><div class="command-col-original"><code>/network</code></div><div class="command-col-desc">查看或切换当前 IM 会话的网络访问；可选 <code>on</code>、<code>off</code>、<code>default</code>。</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>/ui</code></div><div class="command-col-original">—</div><div class="command-col-desc">查看 UI 显示设置；用 <code>/ui detail on|off</code> 切换 SDK 执行细节是否写入消息文本。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/model [slug|default]</code></div><div class="command-col-original"><code>/model [slug|default]</code></div><div class="command-col-desc">查看或切换当前 IM 会话使用的模型；Desktop 不支持的模型会标注“仅 IM”，共享桌面线程只允许查看不允许切换。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/t 0</code></div><div class="command-col-original"><code>/thread 0</code></div><div class="command-col-desc">切换到当前聊天的临时草稿线程。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/t 0 reset</code></div><div class="command-col-original"><code>/thread 0 reset</code></div><div class="command-col-desc">丢弃当前草稿上下文并重建一条新的草稿线程。</div></div>
@@ -2068,6 +2074,7 @@ function renderHtml(): string {
           codexSandboxMode: document.getElementById('codexSandboxMode').value,
           codexNetworkAccess: document.getElementById('codexNetworkAccess').checked,
           codexReasoningEffort: document.getElementById('codexReasoningEffort').value,
+          sdkToolCallDetailsInText: document.getElementById('sdkToolCallDetailsInText').checked,
           uiAllowLan: document.getElementById('uiAllowLan').checked,
           uiAccessToken: document.getElementById('uiAccessToken').value,
         };
@@ -2360,6 +2367,7 @@ function renderHtml(): string {
         codexSandboxMode: 'Codex 文件系统权限',
         codexNetworkAccess: 'Codex 网络访问',
         codexReasoningEffort: 'Codex 思考级别',
+        sdkToolCallDetailsInText: '消息中显示 SDK 执行细节',
         uiAllowLan: '允许局域网访问 Web 控制台',
         uiAccessToken: '局域网访问 token',
       };
@@ -2381,6 +2389,7 @@ function renderHtml(): string {
         'codexSandboxMode',
         'codexNetworkAccess',
         'codexReasoningEffort',
+        'sdkToolCallDetailsInText',
         'uiAllowLan',
         'uiAccessToken',
       ]);
@@ -3109,6 +3118,7 @@ function renderHtml(): string {
         document.getElementById('codexSandboxMode').value = config.codexSandboxMode || 'workspace-write';
         document.getElementById('codexNetworkAccess').checked = config.codexNetworkAccess !== false;
         document.getElementById('codexReasoningEffort').value = config.codexReasoningEffort || 'medium';
+        document.getElementById('sdkToolCallDetailsInText').checked = config.sdkToolCallDetailsInText !== false;
         document.getElementById('uiAllowLan').checked = config.uiAllowLan === true;
         document.getElementById('uiAccessToken').value = config.uiAccessToken || '';
         renderUiAccess();
