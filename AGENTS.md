@@ -19,6 +19,14 @@ This approach:
 - Leverages the fact that users already have an AI coding assistant installed
 - Provides actionable next steps rather than just error explanations
 
+## Development Workflow
+
+Use Node.js 24 for development commands. In this repository, run `nvm use 24` before `npm run build`, `npm test`, `npm run typecheck`, or other Node-based commands unless the active shell is already using Node.js 24.
+
+Do not push commits or hot update/redeploy the bridge unless the user explicitly asks for that action. Code changes should still be committed locally when the work is complete.
+
+When the user adds follow-up requirements for the same functional change before the work is pushed, combine those updates into the same feature commit instead of creating a stack of incremental fix commits. Use a separate commit only for unrelated changes.
+
 ## Hot Updating the Local Bridge
 
 When the user asks to hot update or redeploy the local Codex-to-IM bridge, use the project script instead of running `codex-to-im stop` in the foreground. The foreground command can stop the bridge that is carrying the current Codex session and abort itself.
