@@ -185,6 +185,11 @@ You can also specify a directory explicitly:
 - `/new <path or project name>`: create a new thread under the specified directory.
 - `/mode <normal|yolo>`: change the runtime mode (`code` maps to `normal`; other legacy modes are no longer supported).
 - `/provider <sdk|tmux>`: change the Codex provider used by the current IM session.
+- `/tmux-switch`: list tmux sessions that can be attached.
+- `/tmux-attach <session>`: bind the current IM chat to a tmux session.
+- `/tmux-screen [lines] [seconds]s`: inspect the current bound tmux session screen; for example `/tmux-screen 5s` refreshes with the default line count, or `/tmux-screen 120 5s` temporarily shows 120 lines and refreshes every 5 seconds, with a 3-second minimum.
+- `/tmux-screen stop`: stop the current chat's periodic tmux screen refresh.
+- `/tmux ...`: send keys to the current bound tmux session and return the screen.
 - `/reasoning <1-5>`: change the reasoning effort.
 - `/ui`: inspect UI display settings; `/ui on|off` toggles whether SDK tool input/output details are shown.
 - `/model`: inspect the current model and available models.

@@ -2,6 +2,7 @@ import './test-setup.js';
 import { beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 import { CONFIG_PATH, CONFIG_V2_PATH, CTI_HOME } from '../config.js';
@@ -50,6 +51,44 @@ function readAuditSummaries(): string[] {
   if (!fs.existsSync(auditPath)) return [];
   const parsed = JSON.parse(fs.readFileSync(auditPath, 'utf-8')) as Array<{ summary?: string }>;
   return parsed.map((entry) => entry.summary || '');
+}
+
+function installFakeTmux(): { binDir: string; logPath: string } {
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-fake-tmux-'));
+  const logPath = path.join(binDir, 'tmux.log');
+  const tmuxPath = path.join(binDir, 'tmux');
+  fs.writeFileSync(tmuxPath, `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$TMUX_FAKE_LOG"
+case "$1" in
+  list-sessions)
+    printf 'alpha\\t1\\t0\\t0\\t0\\n'
+    printf 'beta\\t2\\t1\\t0\\t0\\n'
+    exit 0
+    ;;
+  has-session)
+    target="$3"
+    if [[ "$target" == "alpha" || "$target" == "beta" ]]; then
+      exit 0
+    fi
+    exit 1
+    ;;
+  new-session)
+    exit 0
+    ;;
+  send-keys)
+    exit 0
+    ;;
+  capture-pane)
+    printf 'alpha-screen\\n$ pwd\\n/repo\\n'
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+`, 'utf-8');
+  fs.chmodSync(tmuxPath, 0o755);
+  return { binDir, logPath };
 }
 
 describe('command-dispatch', () => {
@@ -575,5 +614,245 @@ describe('command-dispatch', () => {
 
     assert.ok(sent.some((m) => Array.isArray(m.attachments) && m.attachments.length === 1));
     assert.match(String(sent.at(-1)?.text || ''), /已发送文件/);
+  });
+
+  it('binds a tmux session, sends mixed literal and special keys, and returns a capture', async () => {
+    const store = initTestContext();
+    const fakeTmux = installFakeTmux();
+    const oldPath = process.env.PATH || '';
+    const oldFakeLog = process.env.TMUX_FAKE_LOG;
+    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${oldPath}`;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+
+    try {
+      const sent: string[] = [];
+      const adapter: any = {
+        channelType: 'feishu',
+        send: async (message: { text: string }) => {
+          sent.push(message.text);
+          return { ok: true, messageId: `reply-tmux-${sent.length}` };
+        },
+      };
+      const address = { channelType: 'feishu', chatId: 'chat-tmux' } as const;
+      const deps = {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      };
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/tmux-switch',
+          messageId: 'incoming-tmux-switch',
+        } as any,
+        '/tmux-switch',
+        deps,
+      );
+      assert.match(sent.at(-1) || '', /alpha/);
+      assert.match(sent.at(-1) || '', /\/tmux-attach <session>|\/tmux-attach &lt;session&gt;/);
+      assert.match(sent.at(-1) || '', /真实 tmux 底层命令/);
+      assert.match(sent.at(-1) || '', /tmux list-sessions -F/);
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/tmux-attach alpha',
+          messageId: 'incoming-tmux-attach',
+        } as any,
+        '/tmux-attach alpha',
+        deps,
+      );
+      const binding = store.getChannelBinding(address.channelType, address.chatId);
+      assert.ok(binding);
+      const session = binding ? store.getSession(binding.codepilotSessionId) : null;
+      assert.equal(session?.tmux_session_name, 'alpha');
+      assert.match(sent.at(-1) || '', /已绑定 tmux session/);
+      assert.match(sent.at(-1) || '', /```sh/);
+      assert.match(sent.at(-1) || '', /alpha-screen/);
+      assert.match(sent.at(-1) || '', /tmux has-session -t alpha/);
+      assert.match(sent.at(-1) || '', /tmux capture-pane -t alpha -p -S -80/);
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/tmux-set lines 120',
+          messageId: 'incoming-tmux-set',
+        } as any,
+        '/tmux-set lines 120',
+        deps,
+      );
+      const updatedSession = binding ? store.getSession(binding.codepilotSessionId) : null;
+      assert.equal(updatedSession?.tmux_capture_lines, 120);
+      assert.doesNotMatch(sent.at(-1) || '', /真实 tmux 底层命令/);
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/tmux-screen',
+          messageId: 'incoming-screen',
+        } as any,
+        '/tmux-screen',
+        deps,
+      );
+      const screenResponse = sent.at(-1) || '';
+      assert.match(screenResponse, /tmux 当前屏幕状态/);
+      assert.match(screenResponse, /```sh/);
+      assert.match(screenResponse, /alpha-screen/);
+      assert.match(screenResponse, /真实 tmux 底层命令/);
+      assert.match(screenResponse, /tmux capture-pane -t alpha -p -S -120/);
+      const screenLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      assert.match(screenLog, /capture-pane -t alpha -p -S -120/);
+      assert.doesNotMatch(screenLog, /send-keys/);
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/tmux-screen 42',
+          messageId: 'incoming-screen-lines',
+        } as any,
+        '/tmux-screen 42',
+        deps,
+      );
+      const tempLinesResponse = sent.at(-1) || '';
+      assert.match(tempLinesResponse, /展示行数.*42/s);
+      assert.match(tempLinesResponse, /tmux capture-pane -t alpha -p -S -42/);
+      const afterTempLinesSession = binding ? store.getSession(binding.codepilotSessionId) : null;
+      assert.equal(afterTempLinesSession?.tmux_capture_lines, 120);
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/tmux-screen 5s',
+          messageId: 'incoming-screen-watch-default-lines',
+        } as any,
+        '/tmux-screen 5s',
+        deps,
+      );
+      const defaultLinesWatchResponse = sent.at(-1) || '';
+      assert.match(defaultLinesWatchResponse, /展示行数.*120/s);
+      assert.match(defaultLinesWatchResponse, /定时刷新.*5s/s);
+      assert.match(defaultLinesWatchResponse, /tmux capture-pane -t alpha -p -S -120/);
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/tmux-screen 30 1s',
+          messageId: 'incoming-screen-watch',
+        } as any,
+        '/tmux-screen 30 1s',
+        deps,
+      );
+      const watchResponse = sent.at(-1) || '';
+      assert.match(watchResponse, /展示行数.*30/s);
+      assert.match(watchResponse, /定时刷新.*3s/s);
+      assert.match(watchResponse, /\/tmux-screen stop/);
+      assert.match(watchResponse, /tmux capture-pane -t alpha -p -S -30/);
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/tmux-screen lines 120 every 5s',
+          messageId: 'incoming-screen-invalid-legacy',
+        } as any,
+        '/tmux-screen lines 120 every 5s',
+        deps,
+      );
+      assert.match(sent.at(-1) || '', /tmux 屏幕用法/);
+      assert.doesNotMatch(sent.at(-1) || '', /lines 120 every/);
+      assert.doesNotMatch(sent.at(-1) || '', /真实 tmux 底层命令/);
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/tmux-screen stop',
+          messageId: 'incoming-screen-stop',
+        } as any,
+        '/tmux-screen stop',
+        deps,
+      );
+      assert.match(sent.at(-1) || '', /已停止 tmux 屏幕定时刷新/);
+      assert.doesNotMatch(sent.at(-1) || '', /真实 tmux 底层命令/);
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/tmux /goal 分析一下这个仓库<Enter>',
+          messageId: 'incoming-tmux-slash-send',
+        } as any,
+        '/tmux /goal 分析一下这个仓库<Enter>',
+        deps,
+      );
+
+      const slashResponse = sent.at(-1) || '';
+      assert.match(slashResponse, /真实 tmux 底层命令/);
+      assert.match(slashResponse, /tmux send-keys -t alpha -l '\/goal 分析一下这个仓库'/);
+      assert.match(slashResponse, /tmux send-keys -t alpha Enter/);
+      assert.doesNotMatch(slashResponse, /Option\/Alt/);
+
+      const slashCommandLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      assert.match(slashCommandLog, /send-keys -t alpha -l \/goal 分析一下这个仓库/);
+      assert.match(slashCommandLog, /send-keys -t alpha Enter/);
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/tmux <Cmd+Backspace>',
+          messageId: 'incoming-tmux-delete-line',
+        } as any,
+        '/tmux <Cmd+Backspace>',
+        deps,
+      );
+      const deleteLineResponse = sent.at(-1) || '';
+      assert.match(deleteLineResponse, /tmux send-keys -t alpha C-u/);
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/tmux pwd<Enter><Cmd+C>',
+          messageId: 'incoming-tmux-send',
+        } as any,
+        '/tmux pwd<Enter><Cmd+C>',
+        deps,
+      );
+
+      const response = sent.at(-1) || '';
+      assert.match(response, /```sh/);
+      assert.match(response, /alpha-screen/);
+      assert.match(response, /真实 tmux 底层命令/);
+      assert.match(response, /tmux send-keys -t alpha -l pwd/);
+      assert.match(response, /tmux send-keys -t alpha Enter/);
+      assert.match(response, /tmux send-keys -t alpha C-c/);
+      assert.doesNotMatch(response, /Option\/Alt/);
+
+      const log = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      assert.match(log, /send-keys -t alpha -l pwd/);
+      assert.match(log, /send-keys -t alpha Enter/);
+      assert.match(log, /send-keys -t alpha C-c/);
+      assert.match(log, /send-keys -t alpha C-u/);
+      assert.match(log, /capture-pane -t alpha -p -S -120/);
+      assert.match(log, /capture-pane -t alpha -p -S -42/);
+      assert.match(log, /capture-pane -t alpha -p -S -30/);
+    } finally {
+      process.env.PATH = oldPath;
+      if (oldFakeLog === undefined) {
+        delete process.env.TMUX_FAKE_LOG;
+      } else {
+        process.env.TMUX_FAKE_LOG = oldFakeLog;
+      }
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+    }
   });
 });

@@ -100,6 +100,9 @@ export interface BridgeSession {
   codex_provider?: 'sdk' | 'tmux';
   codex_sandbox_mode?: CodexSandboxMode;
   codex_network_access?: boolean;
+  /** IM-side remote tmux control state. Independent from codex_provider=tmux. */
+  tmux_session_name?: string;
+  tmux_capture_lines?: number;
   session_type?: 'normal' | 'draft';
   hidden?: boolean;
   parent_session_id?: string;

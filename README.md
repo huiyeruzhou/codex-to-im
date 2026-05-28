@@ -186,6 +186,11 @@ codex-to-im uninstall
 - `/new <路径或项目名>`：按指定目录新建线程。
 - `/mode <normal|yolo>`：切换运行模式（`code` 会映射为 `normal`，其它旧模式不再支持）。
 - `/provider <sdk|tmux>`：切换当前 IM 会话使用的 Codex Provider。
+- `/tmux-switch`：列出可绑定的 tmux sessions。
+- `/tmux-attach <session>`：绑定当前 IM 会话到指定 tmux session。
+- `/tmux-screen [lines] [seconds]s`：查看当前绑定 tmux session 的屏幕状态；例如 `/tmux-screen 5s` 使用默认行数定时刷新，或 `/tmux-screen 120 5s` 临时显示 120 行并每 5 秒刷新，最低 3 秒。
+- `/tmux-screen stop`：停止当前聊天的 tmux 屏幕定时刷新。
+- `/tmux ...`：向当前绑定 tmux session 发送按键并自动返回屏幕。
 - `/reasoning <1-5>`：切换思考级别。
 - `/ui`：查看 UI 显示设置；`/ui on|off` 可切换 SDK 工具输入输出显示。
 - `/model`：查看当前模型和可选模型。

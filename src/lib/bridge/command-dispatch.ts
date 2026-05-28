@@ -58,6 +58,7 @@ import {
 import { readDesktopSessionMessagesByFilePath } from '../../desktop-sessions.js';
 import { getCodexThreadId, getExplicitDesktopThreadId } from './turns/turn-classifier.js';
 import { buildFencedCodeBlock } from './markdown/fence.js';
+import { handleTmuxBridgeCommand } from './tmux-command.js';
 
 const MODE_OPTIONS_TEXT = '可选：`normal`（普通执行，默认） `yolo`（跳过审批和沙箱）。兼容：`code` 等同于 `normal`。';
 const CODEX_PROVIDER_OPTIONS_TEXT = '可选：`sdk`（默认 SDK 路径） `tmux`（Codex TUI/tmux 路径）';
@@ -283,12 +284,22 @@ export async function handleBridgeCommand(
 ): Promise<void> {
   const { store } = getBridgeContext();
 
-  const parts = text.split(/\s+/);
-  const rawCommand = parts[0].split('@')[0].toLowerCase();
-  const args = parts.slice(1).join(' ').trim();
+  const trimmedText = text.trim();
+  const commandToken = trimmedText.split(/\s+/)[0] || '';
+  const rawCommand = commandToken.split('@')[0].toLowerCase();
+  const args = trimmedText.slice(commandToken.length).trim();
   const command = resolveCommandAlias(rawCommand, args);
 
-  const dangerCheck = isDangerousInput(text);
+  const isTmuxKeystrokeCommand = command === '/tmux'
+    || command === '/tmux-switch'
+    || command === '/tmux-attach'
+    || command === '/tmux-new'
+    || command === '/tmux-status'
+    || command === '/tmux-screen'
+    || command === '/tmux-set';
+  const dangerCheck = isTmuxKeystrokeCommand
+    ? { dangerous: text.includes('\0') || text.length > 64_000, reason: text.includes('\0') ? 'null byte detected' : 'excessively long input' }
+    : isDangerousInput(text);
   if (dangerCheck.dangerous) {
     store.insertAuditLog({
       channelType: adapter.channelType,
@@ -572,6 +583,41 @@ export async function handleBridgeCommand(
         showAll,
         limit,
       );
+      break;
+    }
+
+    case '/tmux':
+    case '/tmux-switch':
+    case '/tmux-attach':
+    case '/tmux-new':
+    case '/tmux-status':
+    case '/tmux-screen':
+    case '/tmux-set': {
+      const binding = currentBinding || router.resolve(msg.address);
+      const session = store.getSession(binding.codepilotSessionId);
+      if (!session) {
+        response = '当前会话不存在，无法维护 tmux 状态。';
+        break;
+      }
+      response = await handleTmuxBridgeCommand({
+        command,
+        args,
+        store,
+        binding,
+        session,
+        markdown: responseParseMode === 'Markdown',
+        screenMonitor: command === '/tmux-screen'
+          ? {
+              key: `${msg.address.channelType}:${msg.address.chatId}:${binding.codepilotSessionId}`,
+              deliver: async (text) => {
+                await deliverBridgeNotice(adapter, msg.address, text, {
+                  sessionId: binding.codepilotSessionId,
+                  audit: true,
+                });
+              },
+            }
+          : undefined,
+      });
       break;
     }
 
@@ -1348,6 +1394,14 @@ export async function handleBridgeCommand(
         '- `/his msg` 最近消息卡片',
         '- `/his json` 直接发送原始 session JSONL 文件',
         '- `/his limit 12` 修改 `/his msg` 返回条数（1-20）',
+        '- `/tmux-switch` 列出 tmux sessions，类似 `Ctrl+b s`',
+        '- `/tmux-attach <session>` 绑定当前 IM 会话的远程 tmux session',
+        '- `/tmux-new [session]` 新建并绑定 tmux session；已存在则提示并直接绑定',
+        '- `/tmux-status` 查看当前绑定和截屏行数',
+        '- `/tmux-set lines 120` 设置 `/tmux` 自动截屏行数',
+        '- `/tmux-screen [lines] [seconds]s` 查看当前绑定 tmux session 的屏幕状态；例如 `/tmux-screen 5s` 或 `/tmux-screen 120 5s`，最低 3 秒',
+        '- `/tmux-screen stop` 停止当前聊天的 tmux 屏幕定时刷新',
+        '- `/tmux pwd<Enter>` 向当前 tmux session 发送按键并自动截屏返回',
         '',
         '**设置**',
         '- `/m` 查看模式；可用 `normal | yolo`（`code` 会映射为 `normal`）',
