@@ -21,8 +21,12 @@ type ThreadTableMessageStore = Record<string, ThreadTableMessageRecord>;
 
 const THREAD_TABLE_MESSAGES_PATH = path.join(CTI_HOME, 'data', 'thread-table-messages.json');
 
-function tableMessageKey(address: ChannelAddress): string {
+function legacyTableMessageKey(address: ChannelAddress): string {
   return `${address.channelType}:${address.chatId}`;
+}
+
+function tableMessageKey(address: ChannelAddress, scope: ThreadCardScope): string {
+  return `${legacyTableMessageKey(address)}:${scope}`;
 }
 
 function readThreadTableMessages(): ThreadTableMessageStore {
@@ -38,8 +42,25 @@ function writeThreadTableMessages(records: ThreadTableMessageStore): void {
   fs.writeFileSync(THREAD_TABLE_MESSAGES_PATH, JSON.stringify(records, null, 2));
 }
 
-export function getThreadTableMessageRecord(address: ChannelAddress): ThreadTableMessageRecord | null {
-  return readThreadTableMessages()[tableMessageKey(address)] || null;
+export function getThreadTableMessageRecord(
+  address: ChannelAddress,
+  scope?: ThreadCardScope,
+): ThreadTableMessageRecord | null {
+  const records = readThreadTableMessages();
+  if (scope) {
+    const scoped = records[tableMessageKey(address, scope)];
+    if (scoped) return scoped;
+    const legacy = records[legacyTableMessageKey(address)];
+    return legacy?.scope === scope ? legacy : null;
+  }
+
+  const candidates = [
+    records[legacyTableMessageKey(address)],
+    records[tableMessageKey(address, 'global')],
+    records[tableMessageKey(address, 'bound')],
+  ].filter((record): record is ThreadTableMessageRecord => Boolean(record));
+  if (candidates.length === 0) return null;
+  return candidates.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] || null;
 }
 
 export function saveThreadTableMessageRecord(
@@ -49,7 +70,7 @@ export function saveThreadTableMessageRecord(
   pinnedMessageId?: string,
 ): void {
   const records = readThreadTableMessages();
-  records[tableMessageKey(address)] = {
+  records[tableMessageKey(address, scope)] = {
     channelType: address.channelType,
     channelProvider: address.channelProvider,
     channelAlias: address.channelAlias,
@@ -59,6 +80,10 @@ export function saveThreadTableMessageRecord(
     pinnedMessageId,
     updatedAt: new Date().toISOString(),
   };
+  const legacyKey = legacyTableMessageKey(address);
+  if (records[legacyKey]?.scope === scope) {
+    delete records[legacyKey];
+  }
   writeThreadTableMessages(records);
 }
 
@@ -71,7 +96,7 @@ export async function persistAndPinLatestThreadTableMessage(
   const trimmedMessageId = messageId?.trim();
   if (!trimmedMessageId) return;
 
-  const previous = getThreadTableMessageRecord(address);
+  const previous = getThreadTableMessageRecord(address, scope);
   let pinnedMessageId = previous?.pinnedMessageId;
 
   if (adapter.pinMessage) {
