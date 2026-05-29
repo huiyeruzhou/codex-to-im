@@ -96,7 +96,9 @@ class FakeFeishuStreamingAdapter extends BaseChannelAdapter {
 function assertStreamMetadataHasBinding(adapter: FakeFeishuStreamingAdapter): void {
   const metadata = adapter.streamMetadata.at(-1);
   assert.ok(metadata?.title);
-  assert.match((metadata.tags || []).join(' '), /binding_id:/);
+  const tags = (metadata.tags || []).join(' ');
+  assert.match(tags, /binding_id:/);
+  assert.match(tags, /\bsdk\b/);
 }
 
 function createManualIntervalClock(start = 0) {
@@ -1460,7 +1462,9 @@ describe('interactive-message-runner', () => {
     assert.match(adapter.streamEnds[0]?.text || '', /bridge_session_id:/);
     assert.ok(!(adapter.streamEnds[0]?.text || '').includes('secret123456'));
     assert.deepEqual(deliveredTexts, []);
-    assert.doesNotMatch((adapter.streamMetadata.at(-1)?.tags || []).join(' '), /thread_id:/);
+    const tags = (adapter.streamMetadata.at(-1)?.tags || []).join(' ');
+    assert.match(tags, /\bsdk\b/);
+    assert.doesNotMatch(tags, /thread_id:/);
     assert.ok(errors.length >= 1);
   });
 });

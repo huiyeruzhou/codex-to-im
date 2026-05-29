@@ -125,6 +125,7 @@ export function createMirrorFeedbackController(
       tags: buildStreamContextTags({
         bindingId: subscription.bindingId,
         fallbackId: subscription.sessionId,
+        source: 'mirror',
       }),
     };
   }
@@ -133,6 +134,7 @@ export function createMirrorFeedbackController(
     const tags = buildStreamContextTags({
       bindingId: subscription.bindingId,
       fallbackId: subscription.sessionId,
+      source: 'mirror',
     });
     return tags.length > 0 ? `${baseTitle}  ${tags.join(' ')}` : baseTitle;
   }

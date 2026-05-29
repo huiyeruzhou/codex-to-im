@@ -218,6 +218,7 @@ function buildStreamCardMetadata(binding: ChannelBinding) {
     title: display.title,
     tags: buildStreamContextTags({
       bindingId: binding.id,
+      source: 'sdk',
     }),
   };
 }

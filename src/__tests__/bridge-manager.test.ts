@@ -936,7 +936,7 @@ describe('bridge-manager status formatting', () => {
 
       assert.equal(subscription.pendingTurn?.streamStarted, true);
       assert.deepEqual(streamEvents, [
-        'metadata:mirror:session-1:turn-1:桌面线程:binding_id:session-',
+        'metadata:mirror:session-1:turn-1:桌面线程:binding_id:session-,mirror',
         'start:mirror:session-1:turn-1',
         'text:mirror:session-1:turn-1:我: desktop prompt\n\ncodex:',
         'status:mirror:session-1:turn-1:处理中',
@@ -1001,7 +1001,7 @@ describe('bridge-manager status formatting', () => {
 
       assert.equal(subscription.pendingTurn?.userText, '（基于 Review findings）\nok,当前调整已经可以收尾了吗');
       assert.deepEqual(streamEvents, [
-        'metadata:mirror:session-1:turn-1:桌面线程:binding_id:session-',
+        'metadata:mirror:session-1:turn-1:桌面线程:binding_id:session-,mirror',
         'start:mirror:session-1:turn-1',
         'text:mirror:session-1:turn-1:我:\n（基于 Review findings）\nok,当前调整已经可以收尾了吗\n\ncodex:',
         'status:mirror:session-1:turn-1:处理中',

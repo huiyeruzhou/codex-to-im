@@ -16,6 +16,16 @@ export interface FeishuCardActionButton {
   disabled?: boolean;
 }
 
+function resolveTitleTagColor(
+  tag: string,
+  defaultColor: NonNullable<StructuredStreamingUiMetadata['tagColor']>,
+): NonNullable<StructuredStreamingUiMetadata['tagColor']> {
+  const normalized = tag.trim().toLowerCase();
+  if (normalized === 'sdk' || normalized === 'source:sdk') return 'green';
+  if (normalized === 'mirror' || normalized === 'source:mirror') return 'yellow';
+  return defaultColor;
+}
+
 export function buildCardTitleHeader(
   metadata: StructuredStreamingUiMetadata = {},
   options: { tagElementPrefix?: string } = {},
@@ -24,6 +34,7 @@ export function buildCardTitleHeader(
   const tags = (metadata.tags || []).map((tag) => tag.trim()).filter(Boolean).slice(0, 3);
   if (!title && tags.length === 0) return undefined;
   const tagElementPrefix = options.tagElementPrefix || 'title_tag';
+  const defaultTagColor = metadata.tagColor || 'blue';
   return {
     title: {
       tag: 'plain_text',
@@ -39,7 +50,7 @@ export function buildCardTitleHeader(
               tag: 'plain_text',
               content: tag,
             },
-            color: metadata.tagColor || 'blue',
+            color: resolveTitleTagColor(tag, defaultTagColor),
           })),
         }
       : {}),
