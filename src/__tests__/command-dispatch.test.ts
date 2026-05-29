@@ -579,11 +579,12 @@ describe('command-dispatch', () => {
       },
     );
     assert.match(sent.at(-1) || '', /当前聊天绑定/);
-    assert.match(sent.at(-1) || '', /标题\s+目录\s+上一次活动\(mm\/dd:hh:mm\)\s+binding_id\s+thread_id\s+source\s+命令/);
+    assert.match(sent.at(-1) || '', /#\s+标题\s+目录\s+上一次活动\s+binding_id\s+thread_id\s+source\s+命令/);
     assert.match(sent.at(-1) || '', /first/);
     assert.match(sent.at(-1) || '', /second/);
     assert.equal(richCards.at(-1)?.title, '当前聊天绑定（2）');
     assert.deepEqual(richCards.at(-1)?.table?.columns.map((column) => column.name), [
+      'index',
       'title',
       'cwd',
       'last_active',
@@ -596,6 +597,11 @@ describe('command-dispatch', () => {
       richCards.at(-1)?.actions?.flat().map((action) => action.text),
       ['解绑', '激活', '刷新'],
     );
+    assert.equal(richCards.at(-1)?.table?.columns[0]?.horizontalAlign, 'center');
+    assert.equal(richCards.at(-1)?.table?.rows[0]?.index, "<number_tag background_color='grey-500' font_color='white'>1</number_tag>");
+    assert.doesNotMatch(String(richCards.at(-1)?.table?.rows[0]?.title || ''), /^<font color=/);
+    assert.equal(richCards.at(-1)?.table?.rows[1]?.index, "**<number_tag background_color='green-350' font_color='white'>2</number_tag>**");
+    assert.match(String(richCards.at(-1)?.table?.rows[1]?.title || ''), /^\*\*.+\*\*$/);
     assert.deepEqual(pinned, ['reply-t-1']);
     assert.deepEqual(unpinned, []);
     assert.deepEqual(getThreadTableMessageRecord(address), {

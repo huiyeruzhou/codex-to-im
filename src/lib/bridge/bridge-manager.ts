@@ -901,7 +901,7 @@ async function handleMessage(
         adapter,
         { ...msg, text: commandText, callbackData: undefined },
         commandText,
-        { threadCardRefreshScope: threadAction.scope },
+        { threadCardRefreshScope: threadAction.scope, threadCardSelectedId: threadId },
       );
       ack();
       return;
@@ -929,6 +929,7 @@ async function handleMessage(
         {
           scopedBinding,
           threadCardRefreshScope: threadCardRefreshScopeForCommand(commandCallback.commandText),
+          threadCardSelectedId: getState().threadCardSelections.get(threadSelectionKey(msg)) || null,
         },
       );
       ack();
@@ -1167,7 +1168,7 @@ async function handleCommand(
   adapter: BaseChannelAdapter,
   msg: InboundMessage,
   text: string,
-  options: { scopedBinding?: ChannelBinding | null; threadCardRefreshScope?: 'global' | 'bound' | null } = {},
+  options: { scopedBinding?: ChannelBinding | null; threadCardRefreshScope?: 'global' | 'bound' | null; threadCardSelectedId?: string | null } = {},
 ): Promise<void> {
   await handleBridgeCommand(adapter, msg, text, {
     getActiveTask: (sessionId) => INTERACTIVE_RUNTIME.getActiveTask(sessionId),
@@ -1178,6 +1179,7 @@ async function handleCommand(
     diagnoseAllActiveSessions: () => SESSION_HEALTH_RUNTIME.diagnoseAllActiveSessions(),
     scopedBinding: options.scopedBinding,
     threadCardRefreshScope: options.threadCardRefreshScope,
+    threadCardSelectedId: options.threadCardSelectedId,
   });
 }
 

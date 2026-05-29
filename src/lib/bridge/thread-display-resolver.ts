@@ -76,6 +76,7 @@ export class ThreadDisplayService {
     limit: number,
     channelType: string,
     chatId: string,
+    selectedThreadId?: string | null,
   ) {
     if (!desktopSessions || desktopSessions.length === 0) return undefined;
     return buildDesktopThreadsCommandCard(
@@ -83,14 +84,14 @@ export class ThreadDisplayService {
       showAll,
       limit,
       this.desktopBindingStates(channelType, chatId),
-      { channelType, chatId },
+      { channelType, chatId, selectedThreadId },
     ) || undefined;
   }
 
-  refreshedBoundThreadsCard(channelType: string, chatId: string) {
+  refreshedBoundThreadsCard(channelType: string, chatId: string, selectedBindingId?: string | null) {
     return buildBoundThreadsCommandCard(
       this.boundThreadCardItems(channelType, chatId),
-      { channelType, chatId },
+      { channelType, chatId, selectedBindingId },
     ) || undefined;
   }
 

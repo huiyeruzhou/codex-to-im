@@ -475,15 +475,17 @@ export interface BridgeCommandDispatchDeps {
   diagnoseAllActiveSessions(): Promise<import('./session-health-runtime.js').SessionHealthDiagnosis[]>;
   scopedBinding?: ChannelBinding | null;
   threadCardRefreshScope?: ThreadCardScope | null;
+  threadCardSelectedId?: string | null;
 }
 
 function buildThreadCardRefresh(
   threadDisplay: ThreadDisplayService,
   scope: ThreadCardScope | null | undefined,
   address: InboundMessage['address'],
+  selectedId?: string | null,
 ): OutboundRichCard | undefined {
   if (scope === 'bound') {
-    return threadDisplay.refreshedBoundThreadsCard(address.channelType, address.chatId);
+    return threadDisplay.refreshedBoundThreadsCard(address.channelType, address.chatId, selectedId);
   }
   if (scope === 'global') {
     return threadDisplay.refreshedDesktopThreadsCard(
@@ -492,6 +494,7 @@ function buildThreadCardRefresh(
       DEFAULT_DESKTOP_THREAD_LIST_LIMIT,
       address.channelType,
       address.chatId,
+      selectedId,
     );
   }
   return undefined;
@@ -703,7 +706,7 @@ export async function handleBridgeCommand(
             : ['当前线程未改变。需要切换时发送 `/t use <序号|thread-id|binding-id|名称>`。'],
           responseParseMode === 'Markdown',
         );
-        responseRichCard = buildThreadCardRefresh(threadDisplay, deps.threadCardRefreshScope, msg.address);
+        responseRichCard = buildThreadCardRefresh(threadDisplay, deps.threadCardRefreshScope, msg.address, deps.threadCardSelectedId);
         if (responseRichCard && deps.threadCardRefreshScope) threadTableCardScope = deps.threadCardRefreshScope;
         break;
       }
@@ -747,7 +750,7 @@ export async function handleBridgeCommand(
           ['接下来直接发送文本即可继续。'],
           responseParseMode === 'Markdown',
         );
-        responseRichCard = buildThreadCardRefresh(threadDisplay, deps.threadCardRefreshScope, msg.address);
+        responseRichCard = buildThreadCardRefresh(threadDisplay, deps.threadCardRefreshScope, msg.address, deps.threadCardSelectedId);
         if (responseRichCard && deps.threadCardRefreshScope) threadTableCardScope = deps.threadCardRefreshScope;
         break;
       }
@@ -804,7 +807,7 @@ export async function handleBridgeCommand(
           responseParseMode === 'Markdown',
         );
         await reconcileMirrorSubscriptionsBestEffort(deps, 'binding remove');
-        responseRichCard = buildThreadCardRefresh(threadDisplay, deps.threadCardRefreshScope, msg.address);
+        responseRichCard = buildThreadCardRefresh(threadDisplay, deps.threadCardRefreshScope, msg.address, deps.threadCardSelectedId);
         if (responseRichCard && deps.threadCardRefreshScope) threadTableCardScope = deps.threadCardRefreshScope;
         break;
       }
@@ -989,7 +992,7 @@ export async function handleBridgeCommand(
           ['接下来直接发送文本即可继续。'],
           responseParseMode === 'Markdown',
         );
-        responseRichCard = buildThreadCardRefresh(threadDisplay, deps.threadCardRefreshScope, msg.address);
+        responseRichCard = buildThreadCardRefresh(threadDisplay, deps.threadCardRefreshScope, msg.address, deps.threadCardSelectedId);
         if (responseRichCard && deps.threadCardRefreshScope) threadTableCardScope = deps.threadCardRefreshScope;
         break;
       }
@@ -1021,7 +1024,7 @@ export async function handleBridgeCommand(
         ['接下来直接发送文本即可继续。'],
         responseParseMode === 'Markdown',
       );
-      responseRichCard = buildThreadCardRefresh(threadDisplay, deps.threadCardRefreshScope, msg.address);
+      responseRichCard = buildThreadCardRefresh(threadDisplay, deps.threadCardRefreshScope, msg.address, deps.threadCardSelectedId);
       if (responseRichCard && deps.threadCardRefreshScope) threadTableCardScope = deps.threadCardRefreshScope;
       break;
     }

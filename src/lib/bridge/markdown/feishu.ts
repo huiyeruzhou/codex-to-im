@@ -199,6 +199,8 @@ function buildRichCardSelectElement(
         value: option.value,
       };
     });
+  const selectedValue = String(select.selectedCallbackData || '').trim();
+  const hasSelectedValue = selectedValue && options.some((option) => option.value === selectedValue);
 
   if (options.length === 0) return null;
 
@@ -212,6 +214,7 @@ function buildRichCardSelectElement(
     type: 'default',
     width: 'fill',
     disabled: false,
+    ...(hasSelectedValue ? { initial_option: selectedValue } : {}),
     behaviors: [{
       type: 'callback',
       value: { select_id: normalizeSelectElementId(select.id, index), ...(chatId ? { chatId } : {}) },

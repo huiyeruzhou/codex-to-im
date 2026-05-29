@@ -35,6 +35,7 @@ export interface BoundThreadCardItem {
 export type ThreadCardScope = 'global' | 'bound';
 
 export interface ThreadCommandTableRow {
+  index: string;
   title: string;
   cwd: string;
   lastActiveAt: string;
@@ -43,9 +44,10 @@ export interface ThreadCommandTableRow {
   source: string;
   command: string;
   active?: boolean;
+  selected?: boolean;
 }
 
-type ThreadCommandTableColumnKey = Exclude<keyof ThreadCommandTableRow, 'active'>;
+type ThreadCommandTableColumnKey = Exclude<keyof ThreadCommandTableRow, 'active' | 'selected'>;
 
 interface ThreadCommandTableColumn {
   key: ThreadCommandTableColumnKey;
@@ -53,16 +55,18 @@ interface ThreadCommandTableColumn {
   displayName: string;
   width: string;
   dataType?: 'text' | 'lark_md' | 'markdown' | 'number';
+  horizontalAlign?: 'left' | 'center' | 'right';
 }
 
 const THREAD_COMMAND_TABLE_COLUMNS: ThreadCommandTableColumn[] = [
-  { key: 'title', name: 'title', displayName: '标题', width: '260px' },
-  { key: 'cwd', name: 'cwd', displayName: '目录', width: '340px' },
-  { key: 'lastActiveAt', name: 'last_active', displayName: '上一次活动(mm/dd:hh:mm)', width: '180px' },
-  { key: 'bindingId', name: 'binding_id', displayName: 'binding_id', width: '150px' },
-  { key: 'threadId', name: 'thread_id', displayName: 'thread_id', width: '260px' },
-  { key: 'source', name: 'source', displayName: 'source', width: '140px' },
-  { key: 'command', name: 'command', displayName: '命令', width: '180px' },
+  { key: 'index', name: 'index', displayName: '#', width: '90px', dataType: 'lark_md', horizontalAlign: 'center' },
+  { key: 'title', name: 'title', displayName: '标题', width: '260px', dataType: 'lark_md' },
+  { key: 'cwd', name: 'cwd', displayName: '目录', width: '340px', dataType: 'lark_md' },
+  { key: 'lastActiveAt', name: 'last_active', displayName: '上一次活动', width: '180px', dataType: 'lark_md' },
+  { key: 'bindingId', name: 'binding_id', displayName: 'binding_id', width: '150px', dataType: 'lark_md' },
+  { key: 'threadId', name: 'thread_id', displayName: 'thread_id', width: '260px', dataType: 'lark_md' },
+  { key: 'source', name: 'source', displayName: 'source', width: '140px', dataType: 'lark_md' },
+  { key: 'command', name: 'command', displayName: '命令', width: '180px', dataType: 'lark_md' },
 ];
 
 function buildThreadCardUpdateKey(scope: ThreadCardScope, channelType: string, chatId: string): string {
@@ -201,7 +205,7 @@ function formatThreadActivityTime(value: string | null | undefined): string {
   const date = new Date(trimmed);
   if (Number.isNaN(date.getTime())) return trimmed;
 
-  return `${pad2(date.getMonth() + 1)}/${pad2(date.getDate())}:${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
+  return `${pad2(date.getMonth() + 1)}/${pad2(date.getDate())} ${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
 }
 
 function normalizeThreadCommandTableCell(value: string): string {
@@ -212,10 +216,53 @@ function threadCommandTableRowValue(row: ThreadCommandTableRow, key: ThreadComma
   return normalizeThreadCommandTableCell(row[key]);
 }
 
+function formatBoundThreadIndex(index: number, active: boolean): string {
+  return active ? `* ${index} 当前` : `* ${index}`;
+}
+
+const ACTIVE_THREAD_CARD_NUMBER_COLOR = 'green-350';
+const INACTIVE_THREAD_CARD_COLOR = 'grey-500';
+const SELECTED_THREAD_CARD_NUMBER_COLOR = 'grey-500';
+
+function formatThreadCardNumberTag(index: string, kind: 'selected' | 'active'): string {
+  const backgroundColor = kind === 'active' ? ACTIVE_THREAD_CARD_NUMBER_COLOR : SELECTED_THREAD_CARD_NUMBER_COLOR;
+  return `<number_tag background_color='${backgroundColor}' font_color='white'>${index}</number_tag>`;
+}
+
+function formatInactiveThreadCardCell(value: string): string {
+  return `<font color='${INACTIVE_THREAD_CARD_COLOR}'>${value}</font>`;
+}
+
+function formatActiveThreadCardCellValue(value: string): string {
+  return `**${value}**`;
+}
+
+function formatActiveThreadCardCell(row: ThreadCommandTableRow, key: ThreadCommandTableColumnKey): string {
+  const value = threadCommandTableRowValue(row, key);
+  if (key === 'index') {
+    const index = value.match(/\d+/)?.[0] || value.trim() || '-';
+    return formatThreadCardNumberTag(index, 'active');
+  }
+  return value;
+}
+
+function formatSelectedThreadCardCell(row: ThreadCommandTableRow, key: ThreadCommandTableColumnKey): string {
+  const value = threadCommandTableRowValue(row, key);
+  if (key === 'index') {
+    const index = value.match(/\d+/)?.[0] || value.trim() || '-';
+    return formatThreadCardNumberTag(index, 'selected');
+  }
+  return value;
+}
+
 function buildThreadCommandTableCardRows(rows: ThreadCommandTableRow[]): Array<Record<string, string>> {
   return rows.map((row) => Object.fromEntries(THREAD_COMMAND_TABLE_COLUMNS.map((column) => [
     column.name,
-    threadCommandTableRowValue(row, column.key),
+    row.active
+      ? formatActiveThreadCardCellValue(formatActiveThreadCardCell(row, column.key))
+      : row.selected
+        ? formatSelectedThreadCardCell(row, column.key)
+        : formatInactiveThreadCardCell(threadCommandTableRowValue(row, column.key)),
   ])));
 }
 
@@ -264,6 +311,11 @@ export function buildDesktopThreadCommandTableRows(
   return desktopSessions.map((session, index) => {
     const binding = bindingByThreadId.get(session.threadId);
     return {
+      index: binding?.active
+        ? formatBoundThreadIndex(index + 1, true)
+        : binding
+          ? formatBoundThreadIndex(index + 1, false)
+          : `${index + 1}`,
       title: binding?.title || session.title || '未命名线程',
       cwd: formatCommandPath(session.cwd),
       lastActiveAt: formatThreadActivityTime(session.lastEventAt),
@@ -272,12 +324,14 @@ export function buildDesktopThreadCommandTableRows(
       source: session.source || session.originator || 'Codex Desktop',
       command: binding ? `/t use ${binding.bindingId.slice(0, 8)}` : `/t ${index + 1}`,
       active: binding?.active || false,
+      selected: Boolean(binding),
     };
   });
 }
 
 export function buildBoundThreadCommandTableRows(bindings: BoundThreadCardItem[]): ThreadCommandTableRow[] {
   return bindings.map((binding, index) => ({
+    index: formatBoundThreadIndex(index + 1, binding.active),
     title: binding.title || '未命名线程',
     cwd: formatCommandPath(binding.cwd),
     lastActiveAt: formatThreadActivityTime(binding.lastActiveAt),
@@ -286,6 +340,7 @@ export function buildBoundThreadCommandTableRows(bindings: BoundThreadCardItem[]
     source: binding.originator || '当前聊天',
     command: `/t use ${index + 1}`,
     active: binding.active,
+    selected: true,
   }));
 }
 
@@ -299,6 +354,7 @@ function buildThreadCommandCardTable(rows: ThreadCommandTableRow[]) {
       displayName: column.displayName,
       width: column.width,
       ...(column.dataType ? { dataType: column.dataType } : {}),
+      ...(column.horizontalAlign ? { horizontalAlign: column.horizontalAlign } : {}),
     })),
     rows: buildThreadCommandTableCardRows(rows),
   };
@@ -355,6 +411,7 @@ export function buildDesktopThreadsCommandCard(
   options: {
     channelType?: string;
     chatId?: string;
+    selectedThreadId?: string | null;
   } = {},
 ): OutboundRichCard | null {
   if (desktopSessions.length > DESKTOP_THREADS_CARD_MAX_ITEMS) return null;
@@ -362,6 +419,9 @@ export function buildDesktopThreadsCommandCard(
   const title = showAll
     ? `桌面会话（${actualCount}/${MAX_DESKTOP_THREAD_LIST_LIMIT}）`
     : `最近 ${actualCount} 条桌面会话`;
+  const selectedCallbackData = options.selectedThreadId
+    ? `${THREAD_SELECT_CALLBACK_PREFIX}${encodeURIComponent(options.selectedThreadId)}`
+    : undefined;
   const tableRows = buildDesktopThreadCommandTableRows(desktopSessions, bindingStates);
   const card: OutboundRichCard = {
     title,
@@ -372,6 +432,7 @@ export function buildDesktopThreadsCommandCard(
     selects: [{
       id: 'desktop_select',
       placeholder: '选择桌面会话',
+      selectedCallbackData,
       options: desktopSessions.map((session, index) => ({
         text: `${index + 1}. ${session.title || session.cwd || '未命名线程'}`,
         callbackData: `${THREAD_SELECT_CALLBACK_PREFIX}${encodeURIComponent(session.threadId)}`,
@@ -425,9 +486,13 @@ export function buildBoundThreadsCommandCard(
   options: {
     channelType?: string;
     chatId?: string;
+    selectedBindingId?: string | null;
   } = {},
 ): OutboundRichCard | null {
   if (bindings.length === 0 || bindings.length > DESKTOP_THREADS_CARD_MAX_ITEMS) return null;
+  const selectedCallbackData = options.selectedBindingId
+    ? `${THREAD_SELECT_CALLBACK_PREFIX}${encodeURIComponent(options.selectedBindingId)}`
+    : undefined;
   const card: OutboundRichCard = {
     title: `当前聊天绑定（${bindings.length}）`,
     subtitle: '这张表只显示当前聊天已绑定线程；命令列里的序号只用于 `/t use` 和 `/t rm`。',
@@ -437,6 +502,7 @@ export function buildBoundThreadsCommandCard(
     selects: [{
       id: 'bound_select',
       placeholder: '选择绑定线程',
+      selectedCallbackData,
       options: bindings.map((binding, index) => ({
         text: `${index + 1}. ${binding.title || binding.cwd || '未命名线程'}`,
         callbackData: `${THREAD_SELECT_CALLBACK_PREFIX}${encodeURIComponent(binding.bindingId)}`,

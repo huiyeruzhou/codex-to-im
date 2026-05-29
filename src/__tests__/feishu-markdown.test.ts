@@ -173,6 +173,7 @@ describe('buildRichCardContent', () => {
       selects: [{
         id: 'tmux_select',
         placeholder: '选择要绑定的 tmux session',
+        selectedCallbackData: 'cti-command::%2Ftmux-attach%20very-long-session-name',
         options: [{
           text: '1. very-long-session-name',
           callbackData: 'cti-command::%2Ftmux-attach%20very-long-session-name',
@@ -190,6 +191,7 @@ describe('buildRichCardContent', () => {
     assert.equal(table.rows[0].command, '/tmux-attach very-long-session-name');
     assert.equal(select.element_id, 'tmux_select');
     assert.equal(select.width, 'fill');
+    assert.equal(select.initial_option, 'cti-command::%2Ftmux-attach%20very-long-session-name');
     assert.equal(select.options[0].value, 'cti-command::%2Ftmux-attach%20very-long-session-name');
     assert.equal(select.behaviors[0].value.chatId, 'chat-1');
   });

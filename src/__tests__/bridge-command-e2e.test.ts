@@ -359,6 +359,7 @@ describe('bridge command e2e', () => {
     assert.match(adapter.sent.at(-1)?.richCard?.updateKey || '', /^thread-card:global:/);
     assert.equal(adapter.sent.at(-1)?.richCard?.updateTtlMs, null);
     assert.equal(adapter.sent.at(-1)?.richCardUpdateMessageId, 'reply-1');
+    assert.equal(adapter.sent.at(-1)?.richCard?.selects?.[0]?.selectedCallbackData, selectCallback);
   });
 
   it('keeps renamed thread titles identical in /current and /t dropdown surfaces', async () => {
@@ -399,7 +400,8 @@ describe('bridge command e2e', () => {
     const listMessage = adapter.sent.at(-1);
     assert.match(listMessage?.text || '', /统一后的标题/);
     assert.doesNotMatch(listMessage?.text || '', /原始桌面标题/);
-    assert.equal(listMessage?.richCard?.table?.rows?.[0]?.title, '统一后的标题');
+    assert.equal(listMessage?.richCard?.table?.rows?.[0]?.title, '**统一后的标题**');
+    assert.equal(String(listMessage?.richCard?.table?.rows?.[0]?.title || '').replace(/\*/g, ''), '统一后的标题');
     assert.equal(listMessage?.richCard?.selects?.[0]?.options?.[0]?.text, '1. 统一后的标题');
   });
 

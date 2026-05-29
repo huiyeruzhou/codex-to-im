@@ -107,6 +107,7 @@ export interface OutboundCardActionSelectOption {
 export interface OutboundCardActionSelect {
   id?: string;
   placeholder: string;
+  selectedCallbackData?: string;
   options: OutboundCardActionSelectOption[];
 }
 
