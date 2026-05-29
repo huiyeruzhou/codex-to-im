@@ -13,8 +13,8 @@ import { buildCommandFields } from './command-formatters.js';
 import { buildFencedCodeBlock } from './markdown/fence.js';
 import { sanitizeInput } from './security/validators.js';
 
-const DEFAULT_CAPTURE_LINES = 80;
-const MIN_CAPTURE_LINES = 1;
+const DEFAULT_CAPTURE_LINES = 0;
+const MIN_CAPTURE_LINES = 0;
 const MAX_CAPTURE_LINES = 500;
 const MIN_SCREEN_INTERVAL_SECONDS = 3;
 const SEND_ACTION_DELAY_MS = 200;
@@ -432,7 +432,7 @@ function tmuxCommandFamilyHelp(): string[] {
     '`/tmux-attach <session>`：把当前 IM 会话绑定到指定 tmux session。',
     '`/tmux-new [session]`：新建并绑定 tmux session；如果已存在，会提示并直接绑定。',
     '`/tmux-status`：查看当前绑定到哪个 tmux session，以及当前展示行数。',
-    '`/tmux-set lines <1-500>`：设置 `/tmux ...` 自动截屏返回的行数，默认 80。',
+    '`/tmux-set lines <0-500>`：设置 `/tmux ...` 自动截屏返回的行数，默认 0。',
     '`/tmux-set enter on|off`：设置 `/tmux ...` 每次发送后是否自动补一个 Enter。',
     '`/tmux-screen [lines] [seconds]s`：查看当前绑定 tmux session 的屏幕状态；`lines` 只对本次/本轮定时生效。',
     '`/tmux-screen 5s`：使用默认行数，并每 5 秒刷新一次。',
@@ -896,7 +896,7 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
       if (!parsed) {
         return buildCommandFields(
           'tmux 设置用法',
-          [['命令', '`/tmux-set lines <1-500>` 或 `/tmux-set enter on|off`']],
+          [['命令', '`/tmux-set lines <0-500>` 或 `/tmux-set enter on|off`']],
           [
             `当前展示行数：${getCaptureLines(session)}`,
             `当前自动回车：${formatOnOff(getAutoEnter(session))}`,

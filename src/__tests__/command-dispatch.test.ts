@@ -1015,7 +1015,7 @@ describe('command-dispatch', () => {
       assert.match(sent.at(-1) || '', /```sh/);
       assert.match(sent.at(-1) || '', /alpha-screen/);
       assert.match(sent.at(-1) || '', /tmux has-session -t alpha/);
-      assert.match(sent.at(-1) || '', /tmux capture-pane -t alpha -p -S -80/);
+      assert.match(sent.at(-1) || '', /tmux capture-pane -t alpha -p -S -0/);
 
       await handleBridgeCommand(
         adapter,
