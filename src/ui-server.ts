@@ -23,6 +23,7 @@ import {
   type WeixinChannelConfig,
 } from './config.js';
 import { normalizeChannelId } from './runtime-options.js';
+import { stripDesktopSessionPrefix } from './lib/bridge/command-formatters.js';
 import {
   archiveDesktopSession,
   getCodexSessionsRoot,
@@ -342,7 +343,7 @@ function uiDesktopHistoryMessages(threadId: string): UiSessionHistoryMessage[] {
 }
 
 function getBridgeSessionTitle(session: BridgeSession): string {
-  if (session.name?.trim()) return session.name.trim();
+  if (session.name?.trim()) return stripDesktopSessionPrefix(session.name);
   if (session.working_directory) {
     const parts = session.working_directory.split(/[\\/]+/).filter(Boolean);
     return parts[parts.length - 1] || session.id.slice(0, 8);
@@ -613,7 +614,7 @@ function sessionConfigPayload(session: BridgeSession) {
   return {
     id: session.id,
     targetKey: `session:${session.id}`,
-    name: session.name || '',
+    name: session.name ? stripDesktopSessionPrefix(session.name) : '',
     title: getBridgeSessionTitle(session),
     workingDirectory: session.working_directory || '',
     model: session.model || '',
@@ -1569,7 +1570,13 @@ function renderHtml(): string {
           <div class="command-item"><div class="command-col-command"><code>/t</code></div><div class="command-col-original"><code>/threads</code></div><div class="command-col-desc">列出最近 10 条桌面会话。</div></div>
           <div class="command-item"><div class="command-col-command"><code>/t all</code></div><div class="command-col-original"><code>/threads all</code></div><div class="command-col-desc">最多列出 200 条桌面会话。</div></div>
           <div class="command-item"><div class="command-col-command"><code>/t n 100</code></div><div class="command-col-original"><code>/threads n 100</code></div><div class="command-col-desc">列出最近 100 条桌面会话，最多 200 条。</div></div>
-              <div class="command-item"><div class="command-col-command"><code>/t &lt;序号|thread id&gt;</code></div><div class="command-col-original"><code>/thread &lt;序号|thread id&gt;</code></div><div class="command-col-desc">按序号、thread id 或可唯一匹配的前缀接管桌面会话。</div></div>
+              <div class="command-item"><div class="command-col-command"><code>/t &lt;序号|thread id|名称&gt;</code></div><div class="command-col-original"><code>/thread &lt;序号|thread id|名称&gt;</code></div><div class="command-col-desc">按序号、thread id 或唯一名称接管桌面会话，并设为当前线程。</div></div>
+              <div class="command-item"><div class="command-col-command"><code>/t ls</code></div><div class="command-col-original"><code>/t ls</code></div><div class="command-col-desc">查看当前聊天已绑定线程；<code>*</code> 标记已绑定，当前激活线程会加粗显示。</div></div>
+              <div class="command-item"><div class="command-col-command"><code>/t add &lt;序号|thread id|名称&gt;</code></div><div class="command-col-original"><code>/t add &lt;序号|thread id|名称&gt;</code></div><div class="command-col-desc">把桌面线程加入当前聊天，不一定切换当前线程。</div></div>
+              <div class="command-item"><div class="command-col-command"><code>/t use &lt;序号|thread id|binding id|名称&gt;</code></div><div class="command-col-original"><code>/t use &lt;序号|thread id|binding id|名称&gt;</code></div><div class="command-col-desc">切换当前聊天的激活线程；序号按 <code>/t ls</code> 的绑定顺序。</div></div>
+              <div class="command-item"><div class="command-col-command"><code>/t rm &lt;序号|thread id|binding id|名称&gt;</code></div><div class="command-col-original"><code>/t rm &lt;序号|thread id|binding id|名称&gt;</code></div><div class="command-col-desc">移除当前聊天的指定绑定线程；同名时需改用序号或 ID。</div></div>
+              <div class="command-item"><div class="command-col-command"><code>/t rename &lt;名称&gt;</code></div><div class="command-col-original"><code>/t rename &lt;名称&gt;</code></div><div class="command-col-desc">重命名当前线程；名称不能是纯数字或类似线程/绑定 ID。</div></div>
+              <div class="command-item"><div class="command-col-command"><code>/t 序号范围</code></div><div class="command-col-original"><code>/t</code> / <code>/t ls</code></div><div class="command-col-desc"><code>/t</code> 和 <code>/t add</code> 使用全局桌面会话列表序号；<code>/t use</code> 和 <code>/t rm</code> 使用 <code>/t ls</code> 当前聊天局部绑定列表序号。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/n [绝对路径 | 项目名]</code></div><div class="command-col-original"><code>/new [绝对路径 | 项目名]</code></div><div class="command-col-desc">不带参数时在当前正式会话目录下新建线程；相对项目名会在“默认工作空间”下创建目录；当前若是临时草稿线程则会报错。通过 IM 创建的新线程当前只保证在 IM 中可继续，不会自动出现在 Codex Desktop 会话列表中。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>直接发送文本</code></div><div class="command-col-original">—</div><div class="command-col-desc">继续当前已绑定会话；未绑定时会自动进入临时草稿线程，等同先使用 <code>/t 0</code>。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/his</code></div><div class="command-col-original"><code>/history</code></div><div class="command-col-desc">查看最近 N 条消息的解析纯文本视图；优先读取 Codex session JSONL，找不到再退回 Bridge 缓存。</div></div>
@@ -1602,7 +1609,6 @@ function renderHtml(): string {
                   <div class="command-item"><div class="command-col-command"><code>/tmux-set enter on</code></div><div class="command-col-original"><code>/tmux-set enter on|off</code></div><div class="command-col-desc">设置 <code>/tmux</code> 每次发送内容后是否自动补 Enter。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/t 0</code></div><div class="command-col-original"><code>/thread 0</code></div><div class="command-col-desc">切换到当前聊天的临时草稿线程。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/t 0 reset</code></div><div class="command-col-original"><code>/thread 0 reset</code></div><div class="command-col-desc">丢弃当前草稿上下文并重建一条新的草稿线程。</div></div>
-                  <div class="command-item"><div class="command-col-command"><code>/unbind</code></div><div class="command-col-original"><code>/unbind</code></div><div class="command-col-desc">解绑当前聊天，释放当前会话；之后再直接发文本会自动进入新的临时草稿线程。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/stop</code></div><div class="command-col-original"><code>/stop</code></div><div class="command-col-desc">停止当前任务。</div></div>
                 </div>
               </section>

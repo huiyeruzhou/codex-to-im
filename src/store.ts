@@ -115,8 +115,25 @@ function didBindingChange(before: ChannelBinding, after: ChannelBinding): boolea
   return before.channelType !== after.channelType
     || before.channelProvider !== after.channelProvider
     || before.channelAlias !== after.channelAlias
+    || before.id !== after.id
     || (before.active !== false) !== after.active
     || before.mode !== after.mode;
+}
+
+function bindingChatKey(binding: Pick<ChannelBinding, 'channelType' | 'chatId'>): string {
+  return `${binding.channelType}:${binding.chatId}`;
+}
+
+function bindingTargetMatches(binding: ChannelBinding, data: UpsertChannelBindingInput): boolean {
+  if (binding.channelType !== data.channelType || binding.chatId !== data.chatId) return false;
+  if (binding.codepilotSessionId === data.codepilotSessionId) return true;
+  return Boolean(data.sdkSessionId && binding.sdkSessionId === data.sdkSessionId);
+}
+
+function compareBindingUpdatedAtDesc(a: ChannelBinding, b: ChannelBinding): number {
+  const aTime = Date.parse(a.updatedAt || a.createdAt || '');
+  const bTime = Date.parse(b.updatedAt || b.createdAt || '');
+  return (Number.isFinite(bTime) ? bTime : 0) - (Number.isFinite(aTime) ? aTime : 0);
 }
 
 function normalizeChannelDefaultTarget(target: ChannelDefaultTarget): ChannelDefaultTarget {
@@ -240,13 +257,36 @@ export class JsonFileStore implements BridgeStore {
     const normalized = new Map<string, ChannelBinding>();
     let changed = false;
 
-    for (const binding of Object.values(bindings)) {
-      const normalizedBinding = upgradeLegacyBinding(binding);
-      if (didBindingChange(binding, normalizedBinding)) {
+    for (const [storedKey, binding] of Object.entries(bindings)) {
+      const normalizedBinding = upgradeLegacyBinding({
+        ...binding,
+        id: binding.id || uuid(),
+      });
+      if (storedKey !== normalizedBinding.id || didBindingChange(binding, normalizedBinding)) {
         changed = true;
       }
 
-      normalized.set(`${normalizedBinding.channelType}:${normalizedBinding.chatId}`, normalizedBinding);
+      normalized.set(normalizedBinding.id, normalizedBinding);
+    }
+
+    const byChat = new Map<string, ChannelBinding[]>();
+    for (const binding of normalized.values()) {
+      const key = bindingChatKey(binding);
+      byChat.set(key, [...(byChat.get(key) || []), binding]);
+    }
+    for (const chatBindings of byChat.values()) {
+      const activeBindings = chatBindings.filter((binding) => binding.active !== false);
+      const activeBinding = (activeBindings.length > 0 ? activeBindings : chatBindings)
+        .sort(compareBindingUpdatedAtDesc)[0];
+      if (!activeBinding) continue;
+
+      for (const binding of chatBindings) {
+        const shouldBeActive = binding.id === activeBinding.id;
+        if (binding.active !== shouldBeActive) {
+          normalized.set(binding.id, { ...binding, active: shouldBeActive });
+          changed = true;
+        }
+      }
     }
 
     this.bindings = normalized;
@@ -362,15 +402,45 @@ export class JsonFileStore implements BridgeStore {
 
   // ── Channel Bindings ──
 
+  private getBindingsForChat(channelType: string, chatId: string): ChannelBinding[] {
+    return Array.from(this.bindings.values()).filter((binding) => (
+      binding.channelType === channelType && binding.chatId === chatId
+    ));
+  }
+
+  private enforceChatActiveBinding(channelType: string, chatId: string, preferredActiveId?: string): void {
+    const chatBindings = this.getBindingsForChat(channelType, chatId);
+    if (chatBindings.length === 0) return;
+
+    const preferred = preferredActiveId
+      ? chatBindings.find((binding) => binding.id === preferredActiveId)
+      : undefined;
+    const currentActive = chatBindings
+      .filter((binding) => binding.active !== false)
+      .sort(compareBindingUpdatedAtDesc)[0];
+    const nextActive = preferred
+      || currentActive
+      || [...chatBindings].sort(compareBindingUpdatedAtDesc)[0];
+
+    for (const binding of chatBindings) {
+      this.bindings.set(binding.id, {
+        ...binding,
+        active: binding.id === nextActive.id,
+      });
+    }
+  }
+
   getChannelBinding(channelType: string, chatId: string): ChannelBinding | null {
     this.reloadBindings();
-    return this.bindings.get(`${channelType}:${chatId}`) ?? null;
+    return this.getBindingsForChat(channelType, chatId)
+      .filter((binding) => binding.active !== false)
+      .sort(compareBindingUpdatedAtDesc)[0] ?? null;
   }
 
   upsertChannelBinding(data: UpsertChannelBindingInput): ChannelBinding {
     this.reloadBindings();
-    const key = `${data.channelType}:${data.chatId}`;
-    const existing = this.bindings.get(key);
+    const shouldActivate = data.active !== false;
+    const existing = Array.from(this.bindings.values()).find((binding) => bindingTargetMatches(binding, data));
     if (existing) {
       const updated: ChannelBinding = {
         ...existing,
@@ -383,53 +453,55 @@ export class JsonFileStore implements BridgeStore {
         workingDirectory: data.workingDirectory,
         model: data.model,
         mode: data.mode === undefined ? existing.mode : normalizeStoredMode(data.mode),
+        active: shouldActivate ? true : existing.active,
         updatedAt: now(),
       };
-      this.bindings.set(key, updated);
+      this.bindings.set(updated.id, updated);
+      this.enforceChatActiveBinding(data.channelType, data.chatId, shouldActivate ? updated.id : undefined);
       this.persistBindings();
-      return updated;
+      return this.bindings.get(updated.id) || updated;
     }
-      const binding: ChannelBinding = {
-        id: uuid(),
-        channelType: data.channelType,
-        channelProvider: data.channelProvider,
-        channelAlias: data.channelAlias,
-        chatId: data.chatId,
-        chatUserId: data.chatUserId,
-        chatDisplayName: data.chatDisplayName,
-        codepilotSessionId: data.codepilotSessionId,
-        sdkSessionId: data.sdkSessionId ?? '',
-        workingDirectory: data.workingDirectory,
-        model: data.model,
-        mode: normalizeStoredMode(data.mode || this.getSetting('bridge_default_mode') || 'normal'),
-        active: true,
-        createdAt: now(),
-        updatedAt: now(),
-      };
-    this.bindings.set(key, binding);
+    const timestamp = now();
+    const binding: ChannelBinding = {
+      id: uuid(),
+      channelType: data.channelType,
+      channelProvider: data.channelProvider,
+      channelAlias: data.channelAlias,
+      chatId: data.chatId,
+      chatUserId: data.chatUserId,
+      chatDisplayName: data.chatDisplayName,
+      codepilotSessionId: data.codepilotSessionId,
+      sdkSessionId: data.sdkSessionId ?? '',
+      workingDirectory: data.workingDirectory,
+      model: data.model,
+      mode: normalizeStoredMode(data.mode || this.getSetting('bridge_default_mode') || 'normal'),
+      active: shouldActivate,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    this.bindings.set(binding.id, binding);
+    this.enforceChatActiveBinding(data.channelType, data.chatId, shouldActivate ? binding.id : undefined);
     this.persistBindings();
-    return binding;
+    return this.bindings.get(binding.id) || binding;
   }
 
   deleteChannelBinding(id: string): void {
     this.reloadBindings();
-    for (const [key, binding] of this.bindings) {
-      if (binding.id !== id) continue;
-      this.bindings.delete(key);
-      this.persistBindings();
-      return;
-    }
+    const binding = this.bindings.get(id);
+    if (!binding) return;
+    this.bindings.delete(id);
+    this.enforceChatActiveBinding(binding.channelType, binding.chatId);
+    this.persistBindings();
   }
 
   updateChannelBinding(id: string, updates: Partial<ChannelBinding>): void {
     this.reloadBindings();
-    for (const [key, b] of this.bindings) {
-      if (b.id === id) {
-        this.bindings.set(key, { ...b, ...updates, updatedAt: now() });
-        this.persistBindings();
-        break;
-      }
-    }
+    const binding = this.bindings.get(id);
+    if (!binding) return;
+    const updated = { ...binding, ...updates, id: binding.id, updatedAt: now() };
+    this.bindings.set(id, updated);
+    this.enforceChatActiveBinding(updated.channelType, updated.chatId, updates.active === true ? id : undefined);
+    this.persistBindings();
   }
 
   listChannelBindings(channelType?: ChannelType): ChannelBinding[] {

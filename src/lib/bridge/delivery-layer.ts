@@ -173,6 +173,7 @@ export async function deliver(
       // Only attach inline buttons to the last chunk
       inlineButtons: i === chunks.length - 1 ? message.inlineButtons : undefined,
       richCard: i === chunks.length - 1 ? message.richCard : undefined,
+      richCardUpdateMessageId: i === chunks.length - 1 ? message.richCardUpdateMessageId : undefined,
       // Pass through replyToMessageId for platforms that support threaded replies.
       replyToMessageId: message.replyToMessageId,
     };

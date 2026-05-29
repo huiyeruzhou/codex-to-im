@@ -36,6 +36,13 @@ export interface StructuredStreamingUiActionButton {
   disabled?: boolean;
 }
 
+export interface StructuredStreamingUiMetadata {
+  title?: string;
+  tags?: string[];
+  template?: 'blue' | 'green' | 'red' | 'yellow' | 'grey';
+  tagColor?: 'neutral' | 'blue' | 'green' | 'red' | 'yellow' | 'orange' | 'purple';
+}
+
 export abstract class BaseChannelAdapter {
   private inboundQueue: InboundMessage[] = [];
   private inboundWaiters: Array<(msg: InboundMessage | null) => void> = [];
@@ -139,6 +146,13 @@ export abstract class BaseChannelAdapter {
    * without mutating the main streamed content body.
    */
   onStreamStatus?(_chatId: string, _statusText: string, _streamKey?: string): void;
+
+  /**
+   * Update out-of-body metadata for a structured streaming UI.
+   * Adapters should render this as card chrome/header/tags rather than inside
+   * the streamed response text.
+   */
+  onStreamMetadata?(_chatId: string, _metadata: StructuredStreamingUiMetadata, _streamKey?: string): void;
 
   /**
    * Replace the action button rows attached to a structured streaming UI.

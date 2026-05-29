@@ -1,4 +1,3 @@
-import path from 'node:path';
 import type {
   ChannelBinding,
   InboundMessage,
@@ -21,12 +20,14 @@ import {
 } from './turns/response-assembler.js';
 import { buildInteractiveStreamKey } from './mirror-formatters.js';
 import {
+  pushStreamFeedbackMetadata,
   pushStreamFeedbackActions,
   pushStreamFeedbackStatus,
   pushStreamFeedbackTasks,
   pushStreamFeedbackText,
   pushStreamFeedbackTools,
 } from './stream-feedback-controller.js';
+import { buildStreamContextTags } from './streaming-metadata.js';
 import { buildCommandCallbackData } from './command-callbacks.js';
 import { getExplicitDesktopThreadId } from './turns/turn-classifier.js';
 import type { ActiveBridgeTurn } from './turns/turn-types.js';
@@ -47,6 +48,7 @@ import {
 } from './turns/stream-state.js';
 import { maskSecrets } from '../../logger.js';
 import { sanitizeInput } from './security/validators.js';
+import { ThreadDisplayService } from './thread-display-resolver.js';
 
 /** Generate a non-zero random 31-bit integer for use as draft_id. */
 function generateDraftId(): number {
@@ -201,21 +203,23 @@ function flushPreview(
   }).catch(() => {});
 }
 
-function pathBaseName(value: string): string {
-  return value.includes('\\') ? path.win32.basename(value) : path.basename(value);
-}
-
-function stripInternalSessionPrefix(value: string): string {
-  return value.replace(/^(Bridge|Desktop):\s*/i, '').trim() || value;
+function formatTaskDisplayInfo(binding: ChannelBinding) {
+  const { store } = getBridgeContext();
+  return new ThreadDisplayService(store).binding(binding, { stripInternalPrefix: true });
 }
 
 function formatTaskDisplayName(binding: ChannelBinding): string {
-  const { store } = getBridgeContext();
-  const session = store.getSession(binding.codepilotSessionId);
-  if (session?.name?.trim()) return stripInternalSessionPrefix(session.name.trim());
-  const cwd = session?.working_directory || binding.workingDirectory || '';
-  if (cwd) return pathBaseName(cwd) || cwd;
-  return binding.codepilotSessionId.slice(0, 8);
+  return formatTaskDisplayInfo(binding).title;
+}
+
+function buildStreamCardMetadata(binding: ChannelBinding) {
+  const display = formatTaskDisplayInfo(binding);
+  return {
+    title: display.title,
+    tags: buildStreamContextTags({
+      bindingId: binding.id,
+    }),
+  };
 }
 
 function buildStaleTaskCompletionNotice(
@@ -223,10 +227,14 @@ function buildStaleTaskCompletionNotice(
   binding: ChannelBinding,
 ): string | null {
   const { store } = getBridgeContext();
-  const current = store.getChannelBinding(address.channelType, address.chatId);
-  if (current?.codepilotSessionId === binding.codepilotSessionId) return null;
+  const stillBound = store.listChannelBindings(address.channelType).some((item) => (
+    item.chatId === address.chatId
+    && item.id === binding.id
+    && item.codepilotSessionId === binding.codepilotSessionId
+  ));
+  if (stillBound) return null;
   const taskName = formatTaskDisplayName(binding);
-  return `旧会话「${taskName}」任务已结束，但当前聊天已切换到其他会话，回复已跳过。`;
+  return `旧会话「${taskName}」任务已结束，但当前聊天已解绑该会话，回复已跳过。`;
 }
 
 export function formatInteractiveRuntimeStatus(
@@ -473,6 +481,7 @@ export async function runInteractiveMessage(
       ensureMessageStarted();
     },
   };
+  const cardMetadata = buildStreamCardMetadata(binding);
   const supportsPersistentStreamStatus = hasStreamingCards
     && adapter.provider === 'feishu'
     && typeof adapter.onStreamStatus === 'function';
@@ -519,6 +528,9 @@ export async function runInteractiveMessage(
     );
     syncStructuredStreamUiSnapshot();
   };
+  if (hasStreamingCards) {
+    pushStreamFeedbackMetadata(streamFeedbackTarget, cardMetadata);
+  }
   const markActivity = () => {
     const now = nowMs();
     recordStreamActivity(streamState, now);
@@ -874,6 +886,9 @@ export async function runInteractiveMessage(
 
     const result = raced.result;
     processResultSettled = true;
+    if (hasStreamingCards && result.sdkSessionId) {
+      pushStreamFeedbackMetadata(streamFeedbackTarget, buildStreamCardMetadata(binding));
+    }
 
     if (!deps.isCurrentInteractiveTask(binding.codepilotSessionId, taskId)) {
       shouldRecordHealthEnd = false;

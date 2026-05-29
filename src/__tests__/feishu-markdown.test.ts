@@ -74,6 +74,27 @@ describe('buildFinalCardJson', () => {
     assert.match(cardJson, /补测试（已结束）/);
     assert.match(cardJson, /`shell_command`/);
   });
+
+  it('renders title metadata as Feishu card header tags', () => {
+    const cardJson = buildFinalCardJson(
+      '最终回复',
+      [],
+      [],
+      null,
+      'completed',
+      [],
+      'chat-1',
+      { title: '当前线程', tags: ['binding_id:abc12345', 'thread_id:def67890'] },
+    );
+
+    const parsed = JSON.parse(cardJson) as any;
+    assert.equal(parsed.header.title.content, '当前线程');
+    assert.equal(parsed.header.template, 'blue');
+    assert.equal(parsed.header.text_tag_list[0].text.content, 'binding_id:abc12345');
+    assert.equal(parsed.header.text_tag_list[0].color, 'blue');
+    assert.equal(parsed.header.text_tag_list[1].text.content, 'thread_id:def67890');
+    assert.equal(parsed.header.text_tag_list[1].color, 'blue');
+  });
 });
 
 describe('buildRichCardContent', () => {

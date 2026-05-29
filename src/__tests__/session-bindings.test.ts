@@ -6,6 +6,7 @@ import path from 'node:path';
 
 import { CONFIG_V2_PATH, CTI_HOME } from '../config.js';
 import { bindStoreToSdkSession, bindStoreToSession } from '../session-bindings.js';
+import { ThreadDisplayService } from '../lib/bridge/thread-display-resolver.js';
 import { JsonFileStore } from '../store.js';
 
 const DATA_DIR = path.join(CTI_HOME, 'data');
@@ -115,6 +116,20 @@ describe('session-bindings uniqueness', () => {
     assert.equal(session?.codex_thread_id, 'thread-meta');
     assert.equal(session?.desktop_thread_id, 'thread-meta');
     assert.equal(session?.thread_origin, 'desktop');
+    assert.equal(session?.name, 'Desktop Thread');
+  });
+
+  it('strips legacy Desktop prefixes from displayed desktop binding titles', () => {
+    const store = new JsonFileStore(makeSettings());
+
+    const binding = bindStoreToSdkSession(store, 'feishu-default', 'oc_legacy', 'thread-legacy', {
+      workingDirectory: '/tmp/legacy',
+      displayName: 'Legacy Thread',
+    });
+    store.updateSession(binding.codepilotSessionId, { name: 'Desktop: Legacy Thread' });
+
+    const display = new ThreadDisplayService(store).binding(binding);
+    assert.equal(display.title, 'Legacy Thread');
   });
 
   it('keeps bridge SDK threads distinct from desktop threads when binding an existing session', () => {

@@ -6,8 +6,8 @@ import path from 'node:path';
 
 import { CTI_HOME } from '../config.js';
 import { JsonFileStore } from '../store.js';
-import { initBridgeContext } from '../lib/bridge/context.js';
-import { BaseChannelAdapter } from '../lib/bridge/channel-adapter.js';
+import { getBridgeContext, initBridgeContext } from '../lib/bridge/context.js';
+import { BaseChannelAdapter, type StructuredStreamingUiMetadata } from '../lib/bridge/channel-adapter.js';
 import type { InboundMessage, OutboundAttachment, OutboundMessage, SendResult, ToolCallInfo } from '../lib/bridge/types.js';
 import * as router from '../lib/bridge/channel-router.js';
 import { formatInteractiveRuntimeStatus, runInteractiveMessage, type InteractiveTaskState } from '../lib/bridge/interactive-message-runner.js';
@@ -30,6 +30,7 @@ class FakeFeishuStreamingAdapter extends BaseChannelAdapter {
   readonly streamedStatuses: string[] = [];
   readonly streamedTools: ToolCallInfo[][] = [];
   readonly streamEnds: Array<{ status: 'completed' | 'interrupted' | 'error'; text: string }> = [];
+  readonly streamMetadata: StructuredStreamingUiMetadata[] = [];
   readonly messageStarts: Array<{ chatId: string; streamKey?: string }> = [];
   readonly messageEnds: Array<{ chatId: string; streamKey?: string }> = [];
   readonly sentMessages: OutboundMessage[] = [];
@@ -73,6 +74,10 @@ class FakeFeishuStreamingAdapter extends BaseChannelAdapter {
     this.streamedStatuses.push(statusText);
   }
 
+  onStreamMetadata(_chatId: string, metadata: StructuredStreamingUiMetadata): void {
+    this.streamMetadata.push(metadata);
+  }
+
   onToolEvent(_chatId: string, tools: ToolCallInfo[]): void {
     this.streamUiActive = true;
     this.streamedTools.push(tools.map((tool) => ({ ...tool })));
@@ -86,6 +91,12 @@ class FakeFeishuStreamingAdapter extends BaseChannelAdapter {
     this.streamEnds.push({ status, text: responseText });
     return this.streamEndResult;
   }
+}
+
+function assertStreamMetadataHasBinding(adapter: FakeFeishuStreamingAdapter): void {
+  const metadata = adapter.streamMetadata.at(-1);
+  assert.ok(metadata?.title);
+  assert.match((metadata.tags || []).join(' '), /binding_id:/);
 }
 
 function createManualIntervalClock(start = 0) {
@@ -343,7 +354,8 @@ describe('interactive-message-runner', () => {
     assert.deepEqual(deliveredTexts, []);
     assert.equal(adapter.streamEnds.length, 1);
     assert.equal(adapter.streamEnds[0]?.status, 'completed');
-    assert.equal(adapter.streamEnds[0]?.text, '最终回复');
+    assertStreamMetadataHasBinding(adapter);
+    assert.match(adapter.streamEnds[0]?.text || '', /最终回复/);
     assert.equal(clock.activeCount(), 0);
 
     const statusCountAfterFinish = adapter.streamedStatuses.length;
@@ -619,7 +631,9 @@ describe('interactive-message-runner', () => {
     await runPromise;
 
     assert.equal(finalized, false);
-    assert.deepEqual(adapter.streamEnds, [{ status: 'completed', text: '桌面最终回复' }]);
+    assert.equal(adapter.streamEnds[0]?.status, 'completed');
+    assertStreamMetadataHasBinding(adapter);
+    assert.match(adapter.streamEnds[0]?.text || '', /桌面最终回复/);
     assert.deepEqual(deliveredTexts, []);
     assert.deepEqual(healthEnds, [{
       outcome: 'completed',
@@ -730,7 +744,9 @@ describe('interactive-message-runner', () => {
     await runPromise;
 
     assert.equal(finalized, true);
-    assert.deepEqual(adapter.streamEnds, [{ status: 'completed', text: '桌面最终回复' }]);
+    assert.equal(adapter.streamEnds[0]?.status, 'completed');
+    assertStreamMetadataHasBinding(adapter);
+    assert.match(adapter.streamEnds[0]?.text || '', /桌面最终回复/);
     assert.deepEqual(delivered, [{
       text: '',
       attachments: [{
@@ -850,7 +866,9 @@ describe('interactive-message-runner', () => {
 
     assert.equal(await terminalFinalizeResult.promise, true);
     assert.equal(capturedAbortSignal?.aborted, false);
-    assert.deepEqual(adapter.streamEnds, [{ status: 'completed', text: '桌面最终回复' }]);
+    assert.equal(adapter.streamEnds[0]?.status, 'completed');
+    assertStreamMetadataHasBinding(adapter);
+    assert.match(adapter.streamEnds[0]?.text || '', /桌面最终回复/);
     assert.deepEqual(delivered, [{
       text: '',
       attachments: [{
@@ -1106,7 +1124,9 @@ describe('interactive-message-runner', () => {
 
     assert.deepEqual(deliveredTexts, []);
     assert.equal(adapter.streamEnds.length, 1);
-    assert.deepEqual(adapter.streamEnds[0], { status: 'completed', text: '最终回复' });
+    assert.equal(adapter.streamEnds[0]?.status, 'completed');
+    assertStreamMetadataHasBinding(adapter);
+    assert.match(adapter.streamEnds[0]?.text || '', /最终回复/);
   });
 
   it('finalizes a stopped structured stream as interrupted without sending an error reply', async () => {
@@ -1186,11 +1206,12 @@ describe('interactive-message-runner', () => {
       },
     );
 
-    assert.deepEqual(adapter.streamEnds, [{ status: 'interrupted', text: '' }]);
+    assert.equal(adapter.streamEnds[0]?.status, 'interrupted');
+    assertStreamMetadataHasBinding(adapter);
     assert.deepEqual(deliveredTexts, []);
   });
 
-  it('sends a stale task notice instead of the old reply when the chat binding has switched', async () => {
+  it('sends a stale task notice instead of the old reply when the chat binding has been removed', async () => {
     const adapter = new FakeFeishuStreamingAdapter();
     const address = {
       channelType: 'feishu-default',
@@ -1200,7 +1221,7 @@ describe('interactive-message-runner', () => {
       userId: 'user-stale-task',
       displayName: '旧任务',
     } as const;
-    router.createBinding(address, 'D:\\workspace\\old-task');
+    const binding = router.createBinding(address, 'D:\\workspace\\old-task');
 
     const taskStateMap = new Map<string, InteractiveTaskState>();
     const deliveredTexts: string[] = [];
@@ -1246,7 +1267,7 @@ describe('interactive-message-runner', () => {
         persistSdkSessionUpdate() {},
         processMessageImpl: async (_binding, _text, _onPermission, _abortSignal, _files, onPartialText) => {
           onPartialText?.('旧会话流式内容');
-          router.createBinding(address, 'D:\\workspace\\new-task');
+          getBridgeContext().store.deleteChannelBinding(binding.id);
           return {
             responseText: '旧会话最终回复',
             outboundAttachments: [],
@@ -1435,10 +1456,11 @@ describe('interactive-message-runner', () => {
 
     assert.equal(adapter.streamEnds.length, 1);
     assert.equal(adapter.streamEnds[0]?.status, 'error');
-    assert.match(adapter.streamEnds[0]?.text || '', /^Error\b/);
+    assert.match(adapter.streamEnds[0]?.text || '', /Error\b/);
     assert.match(adapter.streamEnds[0]?.text || '', /bridge_session_id:/);
     assert.ok(!(adapter.streamEnds[0]?.text || '').includes('secret123456'));
     assert.deepEqual(deliveredTexts, []);
+    assert.doesNotMatch((adapter.streamMetadata.at(-1)?.tags || []).join(' '), /thread_id:/);
     assert.ok(errors.length >= 1);
   });
 });

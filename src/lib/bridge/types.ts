@@ -72,6 +72,8 @@ export interface OutboundMessage {
   inlineButtons?: InlineButton[][];
   /** Optional rich command/result card. Unsupported channels should ignore it and send text. */
   richCard?: OutboundRichCard;
+  /** Existing platform message whose rich card should be updated in-place. */
+  richCardUpdateMessageId?: string;
   /** If replying to a specific message */
   replyToMessageId?: string;
 }
@@ -147,6 +149,13 @@ export interface OutboundRichCard {
   template?: 'blue' | 'green' | 'red' | 'yellow' | 'grey';
   /** Maximum number of sections to render in rich IM cards before folding the rest into a summary. */
   maxSections?: number;
+  /**
+   * Stable key used by adapters that can update an existing rich card in-place.
+   * If omitted, adapters should send a new card message.
+   */
+  updateKey?: string;
+  /** Local adapter cache TTL for in-place updates; null disables local expiry. */
+  updateTtlMs?: number | null;
 }
 
 /** Result of sending a message via an adapter */

@@ -22,6 +22,7 @@ const CAPTURE_AFTER_SEND_DELAY_MS = 250;
 
 function buildTmuxSwitchSelect(
   sessions: TmuxSessionInfo[],
+  scopeSessionId: string,
 ): NonNullable<OutboundRichCard['selects']> {
   return [{
     id: 'tmux_select',
@@ -30,7 +31,7 @@ function buildTmuxSwitchSelect(
       const command = `/tmux-attach ${session.name}`;
       return {
         text: session.name,
-        callbackData: buildCommandCallbackData(command),
+        callbackData: buildCommandCallbackData(command, scopeSessionId),
       };
     }),
   }];
@@ -372,6 +373,7 @@ function buildTmuxSwitchResponse(
 
 function buildTmuxSwitchCommandCard(
   sessions: TmuxSessionInfo[],
+  scopeSessionId: string,
 ): OutboundRichCard {
   if (sessions.length === 0) {
     return {
@@ -406,7 +408,7 @@ function buildTmuxSwitchCommandCard(
       })),
     },
     sections: [],
-    selects: buildTmuxSwitchSelect(sessions),
+    selects: buildTmuxSwitchSelect(sessions, scopeSessionId),
     footer: [
       '纯文本命令：`/tmux-attach <session>` 绑定指定 session。',
       '表格横向可滚动；长 session 名和命令会省略，可悬浮或点击查看。',
@@ -804,7 +806,7 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
   try {
     if (command === '/tmux-switch') {
       const sessions = await listTmuxSessions();
-      params.richCard?.(buildTmuxSwitchCommandCard(sessions));
+      params.richCard?.(buildTmuxSwitchCommandCard(sessions, params.binding.codepilotSessionId));
       return appendTmuxCommandPreview(
         buildTmuxSwitchResponse(sessions, session.tmux_session_name, markdown),
         [tmuxCommandPreview([

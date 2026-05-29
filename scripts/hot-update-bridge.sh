@@ -8,24 +8,29 @@ BRIDGE_LOG="$LOG_DIR/bridge.log"
 
 usage() {
   cat <<'USAGE'
-Usage: bash scripts/hot-update-bridge.sh [--pull] [--run]
+Usage: bash scripts/hot-update-bridge.sh [--pull] [--skip-tests] [--run]
 
 Dispatch a detached Codex-to-IM hot update so the current bridge-hosted
 Codex session can survive the bridge stop/start sequence.
 
 Options:
-  --pull   Run git pull before build/test/restart.
-  --run    Internal worker mode. Do not call directly from a bridge session.
+  --pull         Run git pull before build/test/restart.
+  --skip-tests   Skip npm test during this hot update.
+  --run          Internal worker mode. Do not call directly from a bridge session.
 USAGE
 }
 
 USE_PULL=0
+SKIP_TESTS=0
 RUN_WORKER=0
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --pull)
       USE_PULL=1
+      ;;
+    --skip-tests)
+      SKIP_TESTS=1
       ;;
     --run)
       RUN_WORKER=1
@@ -105,7 +110,11 @@ run_worker() {
   fi
 
   run_logged npm run build
-  run_logged npm test
+  if [ "$SKIP_TESTS" = "1" ]; then
+    echo "[hot-update] npm test: skipped by --skip-tests"
+  else
+    run_logged npm test
+  fi
 
   if [ "$proxy_supported" = "1" ]; then
     echo "[hot-update] restart command: NODE_OPTIONS=--use-env-proxy LITELLM_KEY=sk-local-dev codex-to-im stop && npm run build && NODE_OPTIONS=--use-env-proxy LITELLM_KEY=sk-local-dev codex-to-im start"
@@ -136,6 +145,9 @@ dispatch_worker() {
   if [ "$USE_PULL" = "1" ]; then
     args+=(--pull)
   fi
+  if [ "$SKIP_TESTS" = "1" ]; then
+    args+=(--skip-tests)
+  fi
 
   if command -v setsid >/dev/null 2>&1; then
     nohup setsid bash "$0" "${args[@]}" >"$log_file" 2>&1 </dev/null &
@@ -148,6 +160,7 @@ dispatch_worker() {
   echo "Hot update log: $log_file"
   echo "Bridge log: $BRIDGE_LOG"
   echo "Pull requested: $([ "$USE_PULL" = "1" ] && echo yes || echo no)"
+  echo "Tests skipped: $([ "$SKIP_TESTS" = "1" ] && echo yes || echo no)"
 }
 
 if [ "$RUN_WORKER" = "1" ]; then

@@ -1,5 +1,5 @@
 import type { BaseChannelAdapter } from './channel-adapter.js';
-import type { StructuredStreamingUiActionButton } from './channel-adapter.js';
+import type { StructuredStreamingUiActionButton, StructuredStreamingUiMetadata } from './channel-adapter.js';
 import type { TaskProgressInfo, ToolCallInfo } from './types.js';
 import { renderFeedbackTextForChannel } from './bridge-channel-runtime.js';
 
@@ -65,6 +65,20 @@ export function pushStreamFeedbackStatus(
     return true;
   } catch {
     // Streaming UI updates are best effort only.
+    return false;
+  }
+}
+
+export function pushStreamFeedbackMetadata(
+  target: StreamFeedbackTarget,
+  metadata: StructuredStreamingUiMetadata,
+): boolean {
+  if (typeof target.adapter.onStreamMetadata !== 'function') return false;
+  try {
+    target.adapter.onStreamMetadata(target.chatId, metadata, target.streamKey);
+    target.ensureStarted?.();
+    return true;
+  } catch {
     return false;
   }
 }

@@ -76,6 +76,7 @@ export function formatMirrorMessage(
   assistantText: string | null | undefined,
   markdown = false,
   forceAssistantLabel = false,
+  includeTitle = true,
 ): string {
   const sections: string[] = [];
   const userBlock = formatMirrorSpeakerBlock('我', userText, markdown);
@@ -94,7 +95,9 @@ export function formatMirrorMessage(
   if (sections.length === 0) {
     return '';
   }
-  sections.unshift(buildMirrorTitle(threadTitle, markdown));
+  if (includeTitle) {
+    sections.unshift(buildMirrorTitle(threadTitle, markdown));
+  }
   return sections.join('\n\n').trim();
 }
 

@@ -10,6 +10,7 @@
 import type {
   ChannelAddress,
   BridgeStatus,
+  ChannelBinding,
   InboundMessage,
 } from './types.js';
 import type { BaseChannelAdapter } from './channel-adapter.js';
@@ -32,6 +33,8 @@ import {
   normalizeReasoningEffort,
   parseDesktopThreadListArgs,
   resolveCommandAlias,
+  THREAD_SELECT_ACTION_CALLBACK_PREFIX,
+  THREAD_SELECT_CALLBACK_PREFIX,
   isBridgeCommandText,
   toModelPromptText,
   toUserVisibleBindingError,
@@ -77,12 +80,12 @@ import { parseCommandCallbackData } from './command-callbacks.js';
 import {
   formatDisplayedModel,
   getDesktopSessionByThreadIdSafe,
-  getDesktopThreadTitle,
   resolveDisplayedModel,
   resolveNewWorkingDirectory,
   resolveNewSessionWorkingDirectory,
 } from './bridge-session-support.js';
 import { buildGlobalStatusResponse, handleBridgeCommand } from './command-dispatch.js';
+import { ThreadDisplayService } from './thread-display-resolver.js';
 import {
   runInteractiveMessage,
 } from './interactive-message-runner.js';
@@ -204,6 +207,7 @@ interface BridgeManagerState extends BridgeAdapterRuntimeState, BridgeInteractiv
   mirrorSyncInFlight: boolean;
   mirrorSuppressUntil: Map<string, MirrorSuppressionState[]>;
   mirrorIgnoredTurnIds: Map<string, Map<string, number>>;
+  threadCardSelections: Map<string, string>;
   autoStartChecked: boolean;
 }
 
@@ -225,6 +229,7 @@ function getState(): BridgeManagerState {
       mirrorSyncInFlight: false,
       mirrorSuppressUntil: new Map(),
       mirrorIgnoredTurnIds: new Map(),
+      threadCardSelections: new Map(),
       queuedCounts: new Map(),
       sessionLocks: new Map(),
       autoStartChecked: false,
@@ -248,6 +253,9 @@ function getState(): BridgeManagerState {
   }
   if (!g[GLOBAL_KEY].mirrorIgnoredTurnIds) {
     g[GLOBAL_KEY].mirrorIgnoredTurnIds = new Map();
+  }
+  if (!g[GLOBAL_KEY].threadCardSelections) {
+    g[GLOBAL_KEY].threadCardSelections = new Map();
   }
   if (!Object.prototype.hasOwnProperty.call(g[GLOBAL_KEY], 'mirrorSyncInFlight')) {
     g[GLOBAL_KEY].mirrorSyncInFlight = false;
@@ -408,9 +416,17 @@ function getMirrorStructuredStreamStatusConfig(): {
   };
 }
 
+function getMirrorThreadTitle(threadId: string, sessionId?: string): string | null {
+  const { store } = getBridgeContext();
+  const session = sessionId ? store.getSession(sessionId) : null;
+  const desktop = getDesktopSessionByThreadIdSafe(threadId, 'mirror title');
+  if (!session && !desktop) return null;
+  return new ThreadDisplayService(store).thread(threadId, sessionId, { stripInternalPrefix: true }).title;
+}
+
 const MIRROR_FEEDBACK = createMirrorFeedbackController({
   getAdapter: (channelType) => getState().adapters.get(channelType) || null,
-  getThreadTitle: (threadId) => getDesktopThreadTitle(threadId),
+  getThreadTitle: getMirrorThreadTitle,
   getStructuredStreamStatusConfig: getMirrorStructuredStreamStatusConfig,
   nowIso,
   eventBatchLimit: MIRROR_EVENT_BATCH_LIMIT,
@@ -765,6 +781,62 @@ function parseTmuxScreenStopCallback(callbackData: string): string | null | unde
   }
 }
 
+function findBindingForCallbackSession(
+  channelType: string,
+  chatId: string,
+  sessionId: string,
+): ChannelBinding | null {
+  const { store } = getBridgeContext();
+  return store.listChannelBindings(channelType).find((binding) => (
+    binding.chatId === chatId && binding.codepilotSessionId === sessionId
+  )) || null;
+}
+
+function threadSelectionKey(msg: InboundMessage): string {
+  return [
+    msg.address.channelType,
+    msg.address.chatId,
+    msg.address.userId || '',
+    msg.callbackMessageId || msg.messageId || '',
+  ].join(':');
+}
+
+function parseThreadSelectCallback(callbackData: string): string | null | undefined {
+  if (!callbackData.startsWith(THREAD_SELECT_CALLBACK_PREFIX)) return undefined;
+  try {
+    return decodeURIComponent(callbackData.slice(THREAD_SELECT_CALLBACK_PREFIX.length)).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function parseThreadSelectActionCallback(callbackData: string): {
+  scope: 'global' | 'bound';
+  action: 'bind' | 'rm' | 'use';
+} | null | undefined {
+  if (!callbackData.startsWith(THREAD_SELECT_ACTION_CALLBACK_PREFIX)) return undefined;
+  const raw = callbackData.slice(THREAD_SELECT_ACTION_CALLBACK_PREFIX.length).trim();
+  const parts = raw.split(':').filter(Boolean);
+  const scope = parts.length === 2 ? parts[0] : 'global';
+  const action = parts.length === 2 ? parts[1] : parts[0];
+  if ((scope !== 'global' && scope !== 'bound') || (action !== 'bind' && action !== 'rm' && action !== 'use')) {
+    return null;
+  }
+  return { scope, action };
+}
+
+function threadCardRefreshScopeForCommand(commandText: string): 'global' | 'bound' | null {
+  const trimmed = commandText.trim();
+  const commandToken = trimmed.split(/\s+/)[0] || '';
+  const rawCommand = commandToken.split('@')[0].toLowerCase();
+  const args = trimmed.slice(commandToken.length).trim();
+  const resolvedCommand = resolveCommandAlias(rawCommand, args);
+  if (resolvedCommand === '/threads' || resolvedCommand === '/thread') return 'global';
+  if (resolvedCommand !== '/t') return null;
+  const subcommand = args.split(/\s+/).filter(Boolean)[0]?.toLowerCase();
+  return subcommand === 'ls' ? 'bound' : null;
+}
+
 /**
  * Handle a single inbound message.
  */
@@ -791,6 +863,50 @@ async function handleMessage(
 
   // Handle callback queries (permission buttons and interactive command cards)
   if (msg.callbackData) {
+    const selectedThreadId = parseThreadSelectCallback(msg.callbackData);
+    if (selectedThreadId !== undefined) {
+      if (!selectedThreadId) {
+        await deliverBridgeNotice(adapter, msg.address, '这个下拉选项无效，请刷新后重试。');
+      } else {
+        getState().threadCardSelections.set(threadSelectionKey(msg), selectedThreadId);
+        await adapter.answerCallback?.(msg.messageId, '已选择');
+      }
+      ack();
+      return;
+    }
+
+    const threadAction = parseThreadSelectActionCallback(msg.callbackData);
+    if (threadAction !== undefined) {
+      if (!threadAction) {
+        await deliverBridgeNotice(adapter, msg.address, '这个按钮的操作无效，请刷新后重试。');
+        ack();
+        return;
+      }
+      const threadId = getState().threadCardSelections.get(threadSelectionKey(msg));
+      if (!threadId) {
+        await deliverBridgeNotice(adapter, msg.address, '请先在下拉列表中选择一个桌面会话，再点击绑定、解绑或激活。');
+        ack();
+        return;
+      }
+      const commandText = threadAction.scope === 'global'
+        ? threadAction.action === 'bind'
+          ? `/t add ${threadId}`
+          : threadAction.action === 'rm'
+            ? `/t rm ${threadId}`
+            : `/t ${threadId}`
+        : threadAction.action === 'rm'
+          ? `/t rm ${threadId}`
+          : `/t use ${threadId}`;
+      await handleCommand(
+        adapter,
+        { ...msg, text: commandText, callbackData: undefined },
+        commandText,
+        { threadCardRefreshScope: threadAction.scope },
+      );
+      ack();
+      return;
+    }
+
     const commandCallback = parseCommandCallbackData(msg.callbackData);
     if (commandCallback !== undefined) {
       if (!commandCallback) {
@@ -798,26 +914,41 @@ async function handleMessage(
         ack();
         return;
       }
-      const binding = store.getChannelBinding(msg.address.channelType, msg.address.chatId);
-      if (commandCallback.scopeSessionId && binding?.codepilotSessionId !== commandCallback.scopeSessionId) {
-        await deliverBridgeNotice(adapter, msg.address, '这个按钮对应的会话已不是当前聊天绑定会话，请改用纯文本命令确认当前状态。');
+      const scopedBinding = commandCallback.scopeSessionId
+        ? findBindingForCallbackSession(msg.address.channelType, msg.address.chatId, commandCallback.scopeSessionId)
+        : null;
+      if (commandCallback.scopeSessionId && !scopedBinding) {
+        await deliverBridgeNotice(adapter, msg.address, '这个按钮对应的会话已不再绑定到当前聊天，请改用纯文本命令确认当前状态。');
         ack();
         return;
       }
-      await handleCommand(adapter, { ...msg, text: commandCallback.commandText, callbackData: undefined }, commandCallback.commandText);
+      await handleCommand(
+        adapter,
+        { ...msg, text: commandCallback.commandText, callbackData: undefined },
+        commandCallback.commandText,
+        {
+          scopedBinding,
+          threadCardRefreshScope: threadCardRefreshScopeForCommand(commandCallback.commandText),
+        },
+      );
       ack();
       return;
     }
 
     const tmuxScreenSessionId = parseTmuxScreenStopCallback(msg.callbackData);
     if (tmuxScreenSessionId !== undefined) {
-      const binding = store.getChannelBinding(msg.address.channelType, msg.address.chatId);
+      const binding = tmuxScreenSessionId
+        ? findBindingForCallbackSession(msg.address.channelType, msg.address.chatId, tmuxScreenSessionId)
+        : store.getChannelBinding(msg.address.channelType, msg.address.chatId);
       if (!binding) {
-        await deliverBridgeNotice(adapter, msg.address, '当前聊天没有绑定会话，无法停止 tmux 屏幕定时刷新。');
-      } else if (tmuxScreenSessionId && binding.codepilotSessionId !== tmuxScreenSessionId) {
-        await deliverBridgeNotice(adapter, msg.address, '这个停止按钮对应的会话已不是当前聊天绑定会话。请发送 `/tmux-screen stop` 检查当前状态。');
+        await deliverBridgeNotice(adapter, msg.address, '这个停止按钮对应的会话已不再绑定到当前聊天，无法停止 tmux 屏幕定时刷新。');
       } else {
-        await handleCommand(adapter, { ...msg, text: '/tmux-screen stop', callbackData: undefined }, '/tmux-screen stop');
+        await handleCommand(
+          adapter,
+          { ...msg, text: '/tmux-screen stop', callbackData: undefined },
+          '/tmux-screen stop',
+          { scopedBinding: binding },
+        );
       }
       ack();
       return;
@@ -1036,6 +1167,7 @@ async function handleCommand(
   adapter: BaseChannelAdapter,
   msg: InboundMessage,
   text: string,
+  options: { scopedBinding?: ChannelBinding | null; threadCardRefreshScope?: 'global' | 'bound' | null } = {},
 ): Promise<void> {
   await handleBridgeCommand(adapter, msg, text, {
     getActiveTask: (sessionId) => INTERACTIVE_RUNTIME.getActiveTask(sessionId),
@@ -1044,6 +1176,8 @@ async function handleCommand(
     reconcileMirrorSubscriptions,
     diagnoseSessionHealth: (sessionId) => SESSION_HEALTH_RUNTIME.diagnoseSessionHealth(sessionId),
     diagnoseAllActiveSessions: () => SESSION_HEALTH_RUNTIME.diagnoseAllActiveSessions(),
+    scopedBinding: options.scopedBinding,
+    threadCardRefreshScope: options.threadCardRefreshScope,
   });
 }
 
@@ -1107,7 +1241,7 @@ function resetStateForTests(): void {
   ADAPTER_RUNTIME.clearWarningCache();
   state.loopAborts.clear();
   state.activeTasks.clear();
-  state.mirrorSubscriptions.clear();
+  clearMirrorSubscriptions();
   state.mirrorSuppressUntil.clear();
   state.mirrorIgnoredTurnIds.clear();
   state.queuedCounts.clear();

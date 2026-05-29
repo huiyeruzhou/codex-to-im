@@ -7,7 +7,7 @@ import path from 'node:path';
 
 import { CTI_HOME } from '../config.js';
 import { JsonFileStore } from '../store.js';
-import { initBridgeContext } from '../lib/bridge/context.js';
+import { getBridgeContext, initBridgeContext } from '../lib/bridge/context.js';
 import { _testOnly, start, stop } from '../lib/bridge/bridge-manager.js';
 import { BaseChannelAdapter, registerAdapterFactory } from '../lib/bridge/channel-adapter.js';
 import { buildCommandCallbackData } from '../lib/bridge/command-callbacks.js';
@@ -15,7 +15,7 @@ import { buildDesktopThreadsCommandCard } from '../lib/bridge/command-formatters
 import { createMirrorSubscription } from '../lib/bridge/mirror-subscription-state.js';
 import * as router from '../lib/bridge/channel-router.js';
 import type { LifecycleHooks, LLMProvider, PermissionGateway, StreamChatParams } from '../lib/bridge/host.js';
-import type { OutboundMessage, SendResult } from '../lib/bridge/types.js';
+import type { OutboundMessage, OutboundRichCard, SendResult } from '../lib/bridge/types.js';
 
 const DATA_DIR = path.join(CTI_HOME, 'data');
 
@@ -42,6 +42,42 @@ const noopPermissions: PermissionGateway = {
 };
 
 const noopLifecycle: LifecycleHooks = {};
+
+function installFakeTmux(): { binDir: string; logPath: string } {
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-bridge-manager-fake-tmux-'));
+  const logPath = path.join(binDir, 'tmux.log');
+  const tmuxPath = path.join(binDir, 'tmux');
+  fs.writeFileSync(logPath, '', 'utf-8');
+  fs.writeFileSync(tmuxPath, `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$TMUX_FAKE_LOG"
+case "$1" in
+  list-sessions)
+    printf 'alpha\\t1\\t0\\t0\\t0\\n'
+    printf 'beta\\t2\\t1\\t0\\t0\\n'
+    exit 0
+    ;;
+  has-session)
+    target="$3"
+    if [[ "$target" == "alpha" || "$target" == "beta" ]]; then
+      exit 0
+    fi
+    exit 1
+    ;;
+  capture-pane)
+    printf 'fake tmux screen\\n'
+    exit 0
+    ;;
+  send-keys)
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+`, 'utf-8');
+  fs.chmodSync(tmuxPath, 0o755);
+  return { binDir, logPath };
+}
 
 class InvalidConfigAdapter extends BaseChannelAdapter {
   readonly channelType: string;
@@ -371,6 +407,12 @@ describe('bridge-manager resolveCommandAlias', () => {
     const card = buildDesktopThreadsCommandCard(sessions.slice(0, 20), false);
     assert.equal(card?.table?.rows.length, 20);
     assert.equal(card?.selects?.[0]?.options.length, 20);
+    const activeCard = buildDesktopThreadsCommandCard(sessions.slice(0, 2), false, undefined, [{
+      threadId: 'thread-1',
+      bindingId: 'binding-1',
+      active: true,
+    }]);
+    assert.equal(activeCard?.table?.rows?.[0]?.index, '* **1**');
   });
 
   it('maps numeric reasoning aliases to supported effort levels', () => {
@@ -832,6 +874,9 @@ describe('bridge-manager status formatting', () => {
       onMirrorStreamStart: (_chatId: string, streamKey: string) => {
         streamEvents.push(`start:${streamKey}`);
       },
+      onStreamMetadata: (_chatId: string, metadata: any, streamKey: string) => {
+        streamEvents.push(`metadata:${streamKey}:${metadata.title}:${(metadata.tags || []).join(',')}`);
+      },
       onStreamText: (_chatId: string, text: string, streamKey: string) => {
         streamEvents.push(`text:${streamKey}:${text}`);
       },
@@ -878,8 +923,9 @@ describe('bridge-manager status formatting', () => {
 
       assert.equal(subscription.pendingTurn?.streamStarted, true);
       assert.deepEqual(streamEvents, [
+        'metadata:mirror:session-1:turn-1:桌面线程:binding_id:session-',
         'start:mirror:session-1:turn-1',
-        'text:mirror:session-1:turn-1:<桌面线程>\n\n我: desktop prompt\n\ncodex:',
+        'text:mirror:session-1:turn-1:我: desktop prompt\n\ncodex:',
         'status:mirror:session-1:turn-1:处理中',
       ]);
     } finally {
@@ -897,6 +943,9 @@ describe('bridge-manager status formatting', () => {
       isRunning: () => true,
       onMirrorStreamStart: (_chatId: string, streamKey: string) => {
         streamEvents.push(`start:${streamKey}`);
+      },
+      onStreamMetadata: (_chatId: string, metadata: any, streamKey: string) => {
+        streamEvents.push(`metadata:${streamKey}:${metadata.title}:${(metadata.tags || []).join(',')}`);
       },
       onStreamText: (_chatId: string, text: string, streamKey: string) => {
         streamEvents.push(`text:${streamKey}:${text}`);
@@ -939,8 +988,9 @@ describe('bridge-manager status formatting', () => {
 
       assert.equal(subscription.pendingTurn?.userText, '（基于 Review findings）\nok,当前调整已经可以收尾了吗');
       assert.deepEqual(streamEvents, [
+        'metadata:mirror:session-1:turn-1:桌面线程:binding_id:session-',
         'start:mirror:session-1:turn-1',
-        'text:mirror:session-1:turn-1:<桌面线程>\n\n我:\n（基于 Review findings）\nok,当前调整已经可以收尾了吗\n\ncodex:',
+        'text:mirror:session-1:turn-1:我:\n（基于 Review findings）\nok,当前调整已经可以收尾了吗\n\ncodex:',
         'status:mirror:session-1:turn-1:处理中',
       ]);
     } finally {
@@ -1826,7 +1876,10 @@ describe('bridge-manager stop handling', () => {
     assert.match(sent[0] || '', /旧会话「Bridge: chat-stop」任务已停止/);
   });
 
-  it('routes tmux screen card stop callbacks to /tmux-screen stop', async () => {
+  it('routes tmux screen card stop callbacks to the scoped inactive binding', async () => {
+    const fakeTmux = installFakeTmux();
+    const oldPath = process.env.PATH || '';
+    const oldFakeLog = process.env.TMUX_FAKE_LOG;
     const sent: string[] = [];
     const adapter: any = {
       channelType: 'feishu',
@@ -1837,20 +1890,62 @@ describe('bridge-manager stop handling', () => {
       },
     };
     const address = { channelType: 'feishu', chatId: 'chat-tmux-screen-callback' } as const;
-    const binding = router.createBinding(address, '/tmp/cti-tmux-screen-callback');
+    const store = getBridgeContext().store;
+    const bindingA = router.createBinding(address, '/tmp/cti-tmux-screen-callback-a');
+    store.updateSession(bindingA.codepilotSessionId, { tmux_session_name: 'alpha' });
+    let bindingB: ReturnType<typeof router.createBinding> | null = null;
 
-    await _testOnly.handleMessage(adapter, {
-      messageId: 'incoming-tmux-screen-callback',
-      address,
-      text: '',
-      timestamp: Date.now(),
-      callbackData: `tmux-screen:stop:${encodeURIComponent(binding.codepilotSessionId)}`,
-    });
+    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${oldPath}`;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
 
-    assert.match(sent[0] || '', /当前聊天没有正在运行的 tmux 屏幕定时刷新/);
+    try {
+      await _testOnly.handleMessage(adapter, {
+        messageId: 'incoming-tmux-screen-start-a',
+        address,
+        text: '/tmux-screen 999s',
+        timestamp: Date.now(),
+      });
+      assert.match(sent.at(-1) || '', /已开启定时刷新/);
+
+      bindingB = router.createBinding(address, '/tmp/cti-tmux-screen-callback-b');
+      assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, bindingB.id);
+
+      await _testOnly.handleMessage(adapter, {
+        messageId: 'incoming-tmux-screen-callback',
+        address,
+        text: '',
+        timestamp: Date.now(),
+        callbackData: `tmux-screen:stop:${encodeURIComponent(bindingA.codepilotSessionId)}`,
+      });
+
+      assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, bindingB.id);
+      assert.match(sent.at(-1) || '', /已停止 tmux 屏幕定时刷新/);
+    } finally {
+      if (bindingB) {
+        await _testOnly.handleMessage(adapter, {
+          messageId: 'incoming-tmux-screen-cleanup-use-a',
+          address,
+          text: '/t use 1',
+          timestamp: Date.now(),
+        });
+      }
+      await _testOnly.handleMessage(adapter, {
+        messageId: 'incoming-tmux-screen-cleanup-stop-a',
+        address,
+        text: '/tmux-screen stop',
+        timestamp: Date.now(),
+      });
+      process.env.PATH = oldPath;
+      if (oldFakeLog === undefined) {
+        delete process.env.TMUX_FAKE_LOG;
+      } else {
+        process.env.TMUX_FAKE_LOG = oldFakeLog;
+      }
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+    }
   });
 
-  it('routes scoped command card callbacks to slash commands', async () => {
+  it('routes scoped SDK stop card callbacks to inactive bindings', async () => {
     const sent: string[] = [];
     const adapter: any = {
       channelType: 'feishu',
@@ -1861,17 +1956,32 @@ describe('bridge-manager stop handling', () => {
       },
     };
     const address = { channelType: 'feishu', chatId: 'chat-command-callback' } as const;
-    const binding = router.createBinding(address, '/tmp/cti-command-callback');
+    const bindingA = router.createBinding(address, '/tmp/cti-command-callback-a');
+    const bindingB = router.createBinding(address, '/tmp/cti-command-callback-b');
 
     const state = (globalThis as unknown as Record<string, any>).__bridge_manager__;
-    const abortController = new AbortController();
-    state.activeTasks.set(binding.codepilotSessionId, {
+    const abortA = new AbortController();
+    const abortB = new AbortController();
+    state.activeTasks.set(bindingA.codepilotSessionId, {
       id: 'task-command-stop',
-      abortController,
+      abortController: abortA,
       adapter,
       address,
       streamKey: 'stream-command-stop',
-      sessionId: binding.codepilotSessionId,
+      sessionId: bindingA.codepilotSessionId,
+      hasStreamingCards: true,
+      structuredStreamUiActive: true,
+      streamFinalized: false,
+      uiEnded: false,
+      mirrorSuppressionId: null,
+    });
+    state.activeTasks.set(bindingB.codepilotSessionId, {
+      id: 'task-command-stop-active',
+      abortController: abortB,
+      adapter,
+      address,
+      streamKey: 'stream-command-stop-active',
+      sessionId: bindingB.codepilotSessionId,
       hasStreamingCards: true,
       structuredStreamUiActive: true,
       streamFinalized: false,
@@ -1879,16 +1989,80 @@ describe('bridge-manager stop handling', () => {
       mirrorSuppressionId: null,
     });
 
+    assert.equal(getBridgeContext().store.getChannelBinding(address.channelType, address.chatId)?.id, bindingB.id);
+
     await _testOnly.handleMessage(adapter, {
       messageId: 'incoming-command-stop',
       address,
       text: '',
       timestamp: Date.now(),
-      callbackData: buildCommandCallbackData('/stop', binding.codepilotSessionId),
+      callbackData: buildCommandCallbackData('/stop', bindingA.codepilotSessionId),
     });
 
-    assert.equal(abortController.signal.aborted, true);
+    assert.equal(abortA.signal.aborted, true);
+    assert.equal(abortB.signal.aborted, false);
+    assert.equal(getBridgeContext().store.getChannelBinding(address.channelType, address.chatId)?.id, bindingB.id);
     assert.match(sent[0] || '', /任务已停止/);
+  });
+
+  it('routes scoped tmux command card callbacks to inactive bindings', async () => {
+    const fakeTmux = installFakeTmux();
+    const oldPath = process.env.PATH || '';
+    const oldFakeLog = process.env.TMUX_FAKE_LOG;
+    const sent: Array<{ text: string; richCard?: OutboundRichCard }> = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      send: async (message: { text: string; richCard?: OutboundRichCard }) => {
+        sent.push({ text: message.text, richCard: message.richCard });
+        return { ok: true, messageId: `msg-tmux-switch-${sent.length}` };
+      },
+    };
+    const address = { channelType: 'feishu', chatId: 'chat-tmux-switch-callback' } as const;
+    const bindingA = router.createBinding(address, '/tmp/cti-tmux-switch-callback-a');
+    const bindingB = router.createBinding(address, '/tmp/cti-tmux-switch-callback-b');
+
+    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${oldPath}`;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+
+    try {
+      await _testOnly.handleMessage(adapter, {
+        messageId: 'incoming-tmux-switch-a',
+        address,
+        text: '/tmux-switch',
+        timestamp: Date.now(),
+      });
+      const callbackData = sent.at(-1)?.richCard?.selects?.[0]?.options?.[0]?.callbackData;
+      assert.equal(callbackData, buildCommandCallbackData('/tmux-attach alpha', bindingB.codepilotSessionId));
+
+      await _testOnly.handleMessage(adapter, {
+        messageId: 'incoming-use-binding-a',
+        address,
+        text: '/t use 1',
+        timestamp: Date.now(),
+      });
+      assert.equal(getBridgeContext().store.getChannelBinding(address.channelType, address.chatId)?.id, bindingA.id);
+
+      await _testOnly.handleMessage(adapter, {
+        messageId: 'incoming-tmux-switch-callback',
+        address,
+        text: '',
+        timestamp: Date.now(),
+        callbackData,
+      });
+
+      assert.equal(getBridgeContext().store.getSession(bindingB.codepilotSessionId)?.tmux_session_name, 'alpha');
+      assert.equal(getBridgeContext().store.getSession(bindingA.codepilotSessionId)?.tmux_session_name, undefined);
+      assert.equal(getBridgeContext().store.getChannelBinding(address.channelType, address.chatId)?.id, bindingA.id);
+    } finally {
+      process.env.PATH = oldPath;
+      if (oldFakeLog === undefined) {
+        delete process.env.TMUX_FAKE_LOG;
+      } else {
+        process.env.TMUX_FAKE_LOG = oldFakeLog;
+      }
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -2123,6 +2297,50 @@ describe('bridge-manager mirror subscription recovery', () => {
     assert.equal(state.mirrorSubscriptions.get(binding.id)?.consecutiveFailures, 3);
   });
 
+  it('keeps mirror subscriptions for inactive bindings until they are removed', async () => {
+    const store = new JsonFileStore(makeSettings());
+    initBridgeContext({
+      store,
+      llm: noopLlm,
+      permissions: noopPermissions,
+      lifecycle: noopLifecycle,
+    });
+    _testOnly.resetStateForTests();
+
+    const address = { channelType: 'feishu-default', chatId: 'chat-mirror-multi' } as const;
+    const bindingA = router.bindToSdkSession(address, 'thread-mirror-a', {
+      workingDirectory: 'D:\\workspace\\mirror-a',
+      displayName: 'mirror-a',
+    });
+    const bindingB = router.bindToSdkSession(address, 'thread-mirror-b', {
+      workingDirectory: 'D:\\workspace\\mirror-b',
+      displayName: 'mirror-b',
+    });
+
+    assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, bindingB.id);
+    assert.equal(store.listChannelBindings().find((binding) => binding.id === bindingA.id)?.active, false);
+
+    const state = (globalThis as unknown as Record<string, any>).__bridge_manager__;
+    state.running = true;
+    state.adapters.set(address.channelType, {
+      channelType: address.channelType,
+      provider: 'feishu',
+      isRunning: () => true,
+    });
+
+    await _testOnly.reconcileMirrorSubscriptions();
+
+    assert.deepEqual(
+      Array.from(state.mirrorSubscriptions.keys()).sort(),
+      [bindingA.id, bindingB.id].sort(),
+    );
+
+    store.deleteChannelBinding(bindingA.id);
+    await _testOnly.reconcileMirrorSubscriptions();
+
+    assert.deepEqual(Array.from(state.mirrorSubscriptions.keys()), [bindingB.id]);
+  });
+
   it('clears mirrorSyncInFlight even when subscription set planning throws', async () => {
     const store = new JsonFileStore(makeSettings());
     initBridgeContext({
@@ -2335,7 +2553,7 @@ describe('bridge-manager new session handling', () => {
     const newBinding = router.createBinding(address, path.join(os.tmpdir(), 'cti-new-binding'));
     const newSessionId = newBinding.codepilotSessionId;
 
-    assert.equal(newBinding.id, oldBinding.id);
+    assert.notEqual(newBinding.id, oldBinding.id);
     assert.notEqual(newSessionId, oldSessionId);
 
     _testOnly.persistSdkSessionUpdate(oldSessionId, 'thread-old', false);
@@ -2345,6 +2563,7 @@ describe('bridge-manager new session handling', () => {
     assert.equal(store.getSession(newSessionId)?.sdk_session_id || '', '');
     assert.equal(currentBinding?.codepilotSessionId, newSessionId);
     assert.equal(currentBinding?.sdkSessionId || '', '');
+    assert.equal(store.listChannelBindings().find((item) => item.id === oldBinding.id)?.active, false);
   });
 
   it('keeps the current Codex thread after a transient resume process-exit error', () => {

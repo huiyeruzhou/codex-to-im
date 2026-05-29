@@ -40,13 +40,24 @@ class InMemoryStore implements BridgeStore {
   getSetting(key: string) { return this.settings.get(key) ?? null; }
 
   getChannelBinding(channelType: string, chatId: string) {
-    return this.bindings.get(`${channelType}:${chatId}`) ?? null;
+    return Array.from(this.bindings.values()).find((binding) => (
+      binding.channelType === channelType
+      && binding.chatId === chatId
+      && binding.active !== false
+    )) ?? null;
   }
 
-  upsertChannelBinding(data: { channelType: string; chatId: string; codepilotSessionId: string; sdkSessionId?: string; workingDirectory: string; model: string; mode?: string }) {
-    const key = `${data.channelType}:${data.chatId}`;
-    const existing = this.bindings.get(key);
+  upsertChannelBinding(data: { channelType: string; chatId: string; codepilotSessionId: string; sdkSessionId?: string; workingDirectory: string; model: string; mode?: string; active?: boolean }) {
+    const existing = Array.from(this.bindings.values()).find((binding) => (
+      binding.channelType === data.channelType
+      && binding.chatId === data.chatId
+      && (
+        binding.codepilotSessionId === data.codepilotSessionId
+        || Boolean(data.sdkSessionId && binding.sdkSessionId === data.sdkSessionId)
+      )
+    ));
     const id = existing?.id || `binding-${this.nextId++}`;
+    const shouldActivate = data.active !== false;
     const binding: ChannelBinding = {
       id,
       channelType: data.channelType,
@@ -56,26 +67,44 @@ class InMemoryStore implements BridgeStore {
       workingDirectory: data.workingDirectory ?? existing?.workingDirectory ?? '',
       model: data.model ?? existing?.model ?? '',
       mode: (data.mode as ChannelBinding['mode']) ?? existing?.mode ?? 'code',
-      active: existing?.active ?? true,
+      active: shouldActivate ? true : existing?.active ?? false,
       createdAt: existing?.createdAt ?? new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
-    this.bindings.set(key, binding);
+    this.bindings.set(id, binding);
+    const siblings = Array.from(this.bindings.values()).filter((item) => (
+      item.channelType === data.channelType && item.chatId === data.chatId
+    ));
+    const active = shouldActivate
+      ? binding
+      : siblings.find((item) => item.active !== false) || binding;
+    for (const sibling of siblings) {
+      this.bindings.set(sibling.id, { ...sibling, active: sibling.id === active.id });
+    }
     return binding;
   }
 
   deleteChannelBinding(id: string) {
-    for (const [key, binding] of this.bindings) {
-      if (binding.id === id) {
-        this.bindings.delete(key);
-        break;
-      }
-    }
+    const binding = this.bindings.get(id);
+    if (!binding) return;
+    this.bindings.delete(id);
+    const next = Array.from(this.bindings.values()).find((item) => (
+      item.channelType === binding.channelType && item.chatId === binding.chatId
+    ));
+    if (next) this.bindings.set(next.id, { ...next, active: true });
   }
 
   updateChannelBinding(id: string, updates: Partial<ChannelBinding>) {
-    for (const [key, b] of this.bindings) {
-      if (b.id === id) { this.bindings.set(key, { ...b, ...updates }); break; }
+    const existing = this.bindings.get(id);
+    if (!existing) return;
+    const updated = { ...existing, ...updates };
+    this.bindings.set(id, updated);
+    if (updates.active === true) {
+      for (const binding of this.bindings.values()) {
+        if (binding.channelType === updated.channelType && binding.chatId === updated.chatId && binding.id !== id) {
+          this.bindings.set(binding.id, { ...binding, active: false });
+        }
+      }
     }
   }
 

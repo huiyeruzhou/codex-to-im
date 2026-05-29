@@ -26,6 +26,7 @@ import {
   pushStreamFeedbackText,
   pushStreamFeedbackTools,
 } from './stream-feedback-controller.js';
+import { buildStreamContextTags } from './streaming-metadata.js';
 import {
   assembleDesktopFinalResponse,
 } from './turns/response-assembler.js';
@@ -47,7 +48,7 @@ export interface MirrorStructuredStreamStatusConfig {
 
 export interface MirrorFeedbackControllerDeps {
   getAdapter(channelType: string): BaseChannelAdapter | null | undefined;
-  getThreadTitle(threadId: string): string | null | undefined;
+  getThreadTitle(threadId: string, sessionId?: string, bindingId?: string): string | null | undefined;
   getStructuredStreamStatusConfig?(): MirrorStructuredStreamStatusConfig;
   nowIso(): string;
   eventBatchLimit: number;
@@ -105,16 +106,35 @@ export function createMirrorFeedbackController(
     subscription: DesktopMirrorSubscription,
     turnState: DesktopMirrorTurnState,
   ): string {
-    const title = deps.getThreadTitle(subscription.threadId)?.trim() || '桌面线程';
+    const baseTitle = deps.getThreadTitle(subscription.threadId, subscription.sessionId, subscription.bindingId)?.trim() || '桌面线程';
     const markdown = getFeedbackParseMode(subscription.channelType) === 'Markdown';
     const rendered = formatMirrorMessage(
-      title,
+      baseTitle,
       turnState.userText,
       stripOutboundArtifactBlocksForStreaming(turnState.streamedText),
       markdown,
       true,
+      false,
     );
-    return rendered || buildMirrorTitle(title, markdown);
+    return rendered || buildMirrorTitle(baseTitle, markdown);
+  }
+
+  function getMirrorStreamMetadata(subscription: DesktopMirrorSubscription) {
+    return {
+      title: deps.getThreadTitle(subscription.threadId, subscription.sessionId, subscription.bindingId)?.trim() || '桌面线程',
+      tags: buildStreamContextTags({
+        bindingId: subscription.bindingId,
+        fallbackId: subscription.sessionId,
+      }),
+    };
+  }
+
+  function getMirrorPlainTextTitle(subscription: DesktopMirrorSubscription, baseTitle: string): string {
+    const tags = buildStreamContextTags({
+      bindingId: subscription.bindingId,
+      fallbackId: subscription.sessionId,
+    });
+    return tags.length > 0 ? `${baseTitle}  ${tags.join(' ')}` : baseTitle;
   }
 
   function startMirrorStreaming(
@@ -125,6 +145,7 @@ export function createMirrorFeedbackController(
     if (!adapter || turnState.streamStarted) return;
 
     try {
+      adapter.onStreamMetadata?.(subscription.chatId, getMirrorStreamMetadata(subscription), turnState.streamKey);
       adapter.onMirrorStreamStart?.(subscription.chatId, turnState.streamKey);
       if (!adapter.onMirrorStreamStart) {
         adapter.onStreamText?.(subscription.chatId, '', turnState.streamKey);
@@ -294,23 +315,24 @@ export function createMirrorFeedbackController(
     const adapter = deps.getAdapter(subscription.channelType);
     if (!adapter || !adapter.isRunning()) return;
 
-    const title = deps.getThreadTitle(subscription.threadId)?.trim() || '桌面线程';
+    const baseTitle = deps.getThreadTitle(subscription.threadId, subscription.sessionId, subscription.bindingId)?.trim() || '桌面线程';
+    const plainTextTitle = getMirrorPlainTextTitle(subscription, baseTitle);
     const responseParseMode = getFeedbackParseMode(subscription.channelType);
     const markdown = responseParseMode === 'Markdown';
     const rawFinalResponse = assembleDesktopFinalResponse({ text: turn.text });
     const attachments = rawFinalResponse.attachments;
     const cleanTurnText = rawFinalResponse.text;
-    const renderedTextBase = formatMirrorMessage(title, turn.userText, cleanTurnText, markdown);
-    const renderedStreamTextBase = formatMirrorMessage(title, turn.userText, cleanTurnText, markdown, true);
+    const renderedTextBase = formatMirrorMessage(plainTextTitle, turn.userText, cleanTurnText, markdown);
+    const renderedStreamTextBase = formatMirrorMessage(baseTitle, turn.userText, cleanTurnText, markdown, true, false);
     const renderedText = turn.timedOut
-      ? appendMirrorTimeoutNotice(renderedTextBase || buildMirrorTitle(title, markdown), markdown)
+      ? appendMirrorTimeoutNotice(renderedTextBase || buildMirrorTitle(plainTextTitle, markdown), markdown)
       : renderedTextBase;
     const renderedStreamText = turn.timedOut
-      ? appendMirrorTimeoutNotice(renderedStreamTextBase || buildMirrorTitle(title, markdown), markdown)
+      ? appendMirrorTimeoutNotice(renderedStreamTextBase || buildMirrorTitle(baseTitle, markdown), markdown)
       : renderedStreamTextBase;
     const text = renderedText ? renderFeedbackText(renderedText, responseParseMode) : '';
     const streamText = renderFeedbackText(
-      renderedStreamText || buildMirrorTitle(title, markdown),
+      renderedStreamText || buildMirrorTitle(baseTitle, markdown),
       responseParseMode,
     );
     const address = {

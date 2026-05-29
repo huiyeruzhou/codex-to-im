@@ -181,6 +181,12 @@ You can also specify a directory explicitly:
 - `/t all`: list up to 200 desktop threads.
 - `/t n 100`: list the latest 100 desktop threads, capped at 200.
 - `/t 1`: switch to desktop thread 1.
+- `/t ls`: list threads bound to the current chat; `*` marks the active thread.
+- `/t add <index|thread-id|name>`: add a desktop thread to the current chat without necessarily activating it.
+- `/t use <index|thread-id|binding-id|name>`: activate one of the current chat's bound threads.
+- `/t rm <index|thread-id|binding-id|name>`: remove a specific bound thread from the current chat.
+- `/t rename <name>`: rename the current thread; names cannot be pure numbers or look like thread/binding IDs.
+- Index scope: `/t 1` and `/t add 1` use the global desktop-thread list from `/t`; `/t use 1` and `/t rm 1` use the current chat's local binding list from `/t ls`.
 - `/t 0`: switch to the temporary thread for the current chat.
 - `/new`: create a new thread under the current formal session directory.
 - `/new <path or project name>`: create a new thread under the specified directory.
@@ -201,7 +207,6 @@ You can also specify a directory explicitly:
 - `/his json`: send the original Codex session JSONL file directly, without repackaging or post-processing.
 - `/his limit <1-20>`: change the `/his msg` message limit.
 - `/stop`: stop the current task.
-- `/unbind`: remove the binding between the current chat and the session.
 
 ## Key Settings
 

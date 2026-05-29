@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { buildMirrorSubscriptionRegistryPlan } from '../lib/bridge/mirror-subscription-registry.js';
 
 describe('mirror-subscription-registry', () => {
-  it('keeps only bindings that are active, have a running channel, and resolve to a desktop thread', () => {
+  it('keeps bindings that have a running channel and resolve to a desktop thread even when inactive', () => {
     const bindings = [
       {
         id: 'ignore-bridge-sdk-thread',
@@ -50,6 +50,9 @@ describe('mirror-subscription-registry', () => {
         if (sessionId === 'session-2') {
           return { sdk_session_id: 'thread-2', desktop_thread_id: 'thread-2', thread_origin: 'desktop' };
         }
+        if (sessionId === 'session-3') {
+          return { sdk_session_id: 'thread-3', desktop_thread_id: 'thread-3', thread_origin: 'desktop' };
+        }
         if (sessionId === 'session-5') {
           return { sdk_session_id: '' };
         }
@@ -59,7 +62,7 @@ describe('mirror-subscription-registry', () => {
 
     assert.deepEqual(
       plan.upsertBindings.map((binding) => binding.id),
-      ['keep-from-session'],
+      ['keep-from-session', 'inactive'],
     );
     assert.deepEqual(plan.removeBindingIds, []);
   });

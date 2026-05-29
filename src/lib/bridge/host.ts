@@ -204,6 +204,7 @@ export interface UpsertChannelBindingInput {
   workingDirectory: string;
   model: string;
   mode?: string;
+  active?: boolean;
 }
 
 /** Input for upserting a channel default target. */

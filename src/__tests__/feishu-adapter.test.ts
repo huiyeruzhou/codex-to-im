@@ -155,6 +155,7 @@ describe('feishu-adapter structured streaming regions', () => {
       },
       im: {
         message: {
+          create: async () => ({ data: { message_id: 'card-message-1' } }),
           reply: async () => ({ data: { message_id: 'card-message-1' } }),
         },
         messageReaction: {
@@ -209,6 +210,7 @@ describe('feishu-adapter structured streaming regions', () => {
       },
       im: {
         message: {
+          create: async () => ({ data: { message_id: 'card-message-1' } }),
           reply: async () => ({ data: { message_id: 'card-message-1' } }),
         },
         messageReaction: {
@@ -259,6 +261,7 @@ describe('feishu-adapter structured streaming regions', () => {
       },
       im: {
         message: {
+          create: async () => ({ data: { message_id: 'card-message-1' } }),
           reply: async () => ({ data: { message_id: 'card-message-1' } }),
         },
         messageReaction: {
@@ -282,6 +285,8 @@ describe('feishu-adapter structured streaming regions', () => {
 
   it('creates the streaming card with dedicated content, tasks, tools, and status elements', async () => {
     const createdCards: Array<Record<string, any>> = [];
+    const createCalls: Array<Record<string, any>> = [];
+    const replyCalls: Array<Record<string, any>> = [];
     const adapter = new FeishuAdapter({
       id: 'feishu-default',
       provider: 'feishu',
@@ -313,14 +318,23 @@ describe('feishu-adapter structured streaming regions', () => {
       },
       im: {
         message: {
-          create: async () => ({ data: { message_id: 'msg-1' } }),
-          reply: async () => ({ data: { message_id: 'msg-1' } }),
+          create: async (payload: Record<string, any>) => {
+            createCalls.push(payload);
+            return { data: { message_id: 'msg-1' } };
+          },
+          reply: async (payload: Record<string, any>) => {
+            replyCalls.push(payload);
+            return { data: { message_id: 'msg-1' } };
+          },
         },
       },
     };
 
     const created = await (adapter as any).createStreamingCard('chat-1', 'reply-1', 'stream-1');
     assert.equal(created, true);
+    assert.equal(createCalls.length, 0);
+    assert.equal(replyCalls.length, 1);
+    assert.deepEqual(replyCalls[0]?.path, { message_id: 'reply-1' });
 
     const elements = createdCards[0]?.body?.elements || [];
     assert.equal(elements.length, 4);
@@ -386,6 +400,7 @@ describe('feishu-adapter structured streaming regions', () => {
   it('periodically refreshes the whole streaming card without sending a new message', async () => {
     const elementUpdates: Array<Record<string, any>> = [];
     const cardUpdateCalls: Array<Record<string, any>> = [];
+    const createCalls: Array<Record<string, any>> = [];
     const replyCalls: Array<Record<string, any>> = [];
     const adapter = new FeishuAdapter({
       id: 'feishu-default',
@@ -421,7 +436,10 @@ describe('feishu-adapter structured streaming regions', () => {
       },
       im: {
         message: {
-          create: async () => ({ data: { message_id: 'msg-1' } }),
+          create: async (payload: Record<string, any>) => {
+            createCalls.push(payload);
+            return { data: { message_id: 'msg-1' } };
+          },
           reply: async (payload: Record<string, any>) => {
             replyCalls.push(payload);
             return { data: { message_id: 'msg-1' } };
@@ -437,6 +455,7 @@ describe('feishu-adapter structured streaming regions', () => {
     adapter.onStreamStatus('chat-1', '已运行 5分，上次响应距今 2分', 'stream-1');
     await new Promise((resolve) => setTimeout(resolve, 20));
 
+    assert.equal(createCalls.length, 0);
     assert.equal(replyCalls.length, 1);
     assert.equal(cardUpdateCalls.length, 1);
     assert.equal(elementUpdates.length, 0);
@@ -1052,6 +1071,270 @@ describe('feishu-adapter structured streaming regions', () => {
     assert.equal((adapter as any).activeCards.has('stream-1'), true);
 
     blocked.resolve({});
+  });
+
+  it('sends the first updatable rich command card as a reply', async () => {
+    const cardCreateCalls: Array<Record<string, any>> = [];
+    const messageCreateCalls: Array<Record<string, any>> = [];
+    const messageReplyCalls: Array<Record<string, any>> = [];
+    const adapter = new FeishuAdapter({
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      alias: '飞书',
+      config: {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+      },
+    });
+
+    (adapter as any).restClient = {
+      cardkit: {
+        v1: {
+          card: {
+            create: async (payload: Record<string, any>) => {
+              cardCreateCalls.push(payload);
+              return { data: { card_id: 'card-rich-1' } };
+            },
+            update: async () => ({}),
+          },
+        },
+      },
+      im: {
+        message: {
+          create: async (payload: Record<string, any>) => {
+            messageCreateCalls.push(payload);
+            return { data: { message_id: 'msg-rich-create' } };
+          },
+          reply: async (payload: Record<string, any>) => {
+            messageReplyCalls.push(payload);
+            return { data: { message_id: 'msg-rich-reply' } };
+          },
+        },
+      },
+    };
+
+    const result = await adapter.send({
+      address: { channelType: 'feishu', chatId: 'chat-1' },
+      text: '最近桌面会话',
+      parseMode: 'Markdown',
+      replyToMessageId: 'incoming-1',
+      richCard: {
+        title: '最近 1 条桌面会话',
+        sections: [],
+        updateKey: 'thread-card:global:feishu:chat-1',
+        updateTtlMs: null,
+      },
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(cardCreateCalls.length, 1);
+    assert.equal(messageCreateCalls.length, 0);
+    assert.equal(messageReplyCalls.length, 1);
+    assert.deepEqual(messageReplyCalls[0]?.path, { message_id: 'incoming-1' });
+    assert.equal(messageReplyCalls[0]?.data?.msg_type, 'interactive');
+  });
+
+  it('recovers an updatable rich command card by callback message id before updating it', async () => {
+    const idConvertCalls: Array<Record<string, any>> = [];
+    const cardUpdateCalls: Array<Record<string, any>> = [];
+    const messageCreateCalls: Array<Record<string, any>> = [];
+    const messageReplyCalls: Array<Record<string, any>> = [];
+    const adapter = new FeishuAdapter({
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      alias: '飞书',
+      config: {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+      },
+    });
+
+    (adapter as any).restClient = {
+      cardkit: {
+        v1: {
+          card: {
+            idConvert: async (payload: Record<string, any>) => {
+              idConvertCalls.push(payload);
+              return { data: { card_id: 'card-recovered' } };
+            },
+            create: async () => {
+              throw new Error('should not create a new card');
+            },
+            update: async (payload: Record<string, any>) => {
+              cardUpdateCalls.push(payload);
+              return {};
+            },
+          },
+        },
+      },
+      im: {
+        message: {
+          create: async (payload: Record<string, any>) => {
+            messageCreateCalls.push(payload);
+            return { data: { message_id: 'msg-create' } };
+          },
+          reply: async (payload: Record<string, any>) => {
+            messageReplyCalls.push(payload);
+            return { data: { message_id: 'msg-reply' } };
+          },
+        },
+      },
+    };
+
+    const result = await adapter.send({
+      address: { channelType: 'feishu', chatId: 'chat-1' },
+      text: '当前线程已切换',
+      parseMode: 'Markdown',
+      replyToMessageId: 'card-message-1',
+      richCardUpdateMessageId: 'card-message-1',
+      richCard: {
+        title: '当前聊天绑定（1）',
+        sections: [],
+        updateKey: 'thread-card:bound:feishu:chat-1',
+        updateTtlMs: null,
+      },
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.messageId, 'card-message-1');
+    assert.deepEqual(idConvertCalls[0]?.data, { message_id: 'card-message-1' });
+    assert.equal(cardUpdateCalls.length, 1);
+    assert.deepEqual(cardUpdateCalls[0]?.path, { card_id: 'card-recovered' });
+    assert.equal(messageCreateCalls.length, 0);
+    assert.equal(messageReplyCalls.length, 0);
+  });
+
+  it('keeps /t rich card update state eligible when local TTL is disabled', async () => {
+    const idConvertCalls: Array<Record<string, any>> = [];
+    const cardUpdateCalls: Array<Record<string, any>> = [];
+    const adapter = new FeishuAdapter({
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      alias: '飞书',
+      config: {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+      },
+    });
+    (adapter as any).richCardUpdates.set('thread-card:bound:feishu:chat-1', {
+      cardId: 'card-old',
+      messageId: 'card-message-1',
+      lastInteractionAt: Date.now() - 24 * 60 * 60_000,
+      sequence: 3,
+    });
+
+    (adapter as any).restClient = {
+      cardkit: {
+        v1: {
+          card: {
+            idConvert: async (payload: Record<string, any>) => {
+              idConvertCalls.push(payload);
+              return { data: { card_id: 'card-recovered' } };
+            },
+            create: async () => {
+              throw new Error('should not create a new card');
+            },
+            update: async (payload: Record<string, any>) => {
+              cardUpdateCalls.push(payload);
+              return {};
+            },
+          },
+        },
+      },
+      im: {
+        message: {
+          create: async () => ({ data: { message_id: 'msg-create' } }),
+          reply: async () => ({ data: { message_id: 'msg-reply' } }),
+        },
+      },
+    };
+
+    const result = await adapter.send({
+      address: { channelType: 'feishu', chatId: 'chat-1' },
+      text: '当前线程已切换',
+      parseMode: 'Markdown',
+      replyToMessageId: 'card-message-1',
+      richCardUpdateMessageId: 'card-message-1',
+      richCard: {
+        title: '当前聊天绑定（1）',
+        sections: [],
+        updateKey: 'thread-card:bound:feishu:chat-1',
+        updateTtlMs: null,
+      },
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.messageId, 'card-message-1');
+    assert.equal(idConvertCalls.length, 0);
+    assert.equal(cardUpdateCalls.length, 1);
+    assert.deepEqual(cardUpdateCalls[0]?.path, { card_id: 'card-old' });
+  });
+
+  it('does not create a replacement /t rich card when callback card recovery fails', async () => {
+    const cardCreateCalls: Array<Record<string, any>> = [];
+    const messageCreateCalls: Array<Record<string, any>> = [];
+    const messageReplyCalls: Array<Record<string, any>> = [];
+    const adapter = new FeishuAdapter({
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      alias: '飞书',
+      config: {
+        appId: 'app-id',
+        appSecret: 'app-secret',
+      },
+    });
+
+    (adapter as any).restClient = {
+      cardkit: {
+        v1: {
+          card: {
+            idConvert: async () => ({ data: {} }),
+            create: async (payload: Record<string, any>) => {
+              cardCreateCalls.push(payload);
+              return { data: { card_id: 'new-card' } };
+            },
+            update: async () => ({}),
+          },
+        },
+      },
+      im: {
+        message: {
+          create: async (payload: Record<string, any>) => {
+            messageCreateCalls.push(payload);
+            return { data: { message_id: 'msg-create' } };
+          },
+          reply: async (payload: Record<string, any>) => {
+            messageReplyCalls.push(payload);
+            return { data: { message_id: 'msg-reply' } };
+          },
+        },
+      },
+    };
+
+    const result = await adapter.send({
+      address: { channelType: 'feishu', chatId: 'chat-1' },
+      text: '当前线程已切换',
+      parseMode: 'Markdown',
+      replyToMessageId: 'card-message-1',
+      richCardUpdateMessageId: 'card-message-1',
+      richCard: {
+        title: '当前聊天绑定（1）',
+        sections: [],
+        updateKey: 'thread-card:bound:feishu:chat-1',
+        updateTtlMs: null,
+      },
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(cardCreateCalls.length, 0);
+    assert.equal(messageCreateCalls.length, 0);
+    assert.equal(messageReplyCalls.length, 1);
+    assert.equal(messageReplyCalls[0]?.data?.msg_type, 'post');
+    assert.deepEqual(messageReplyCalls[0]?.path, { message_id: 'card-message-1' });
   });
 
   it('returns an error instead of hanging forever when plain text sending times out', async () => {

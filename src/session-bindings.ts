@@ -14,6 +14,7 @@ import {
   getCodexThreadId,
   getExplicitDesktopThreadId,
 } from './lib/bridge/turns/turn-classifier.js';
+import { stripDesktopSessionPrefix } from './lib/bridge/command-formatters.js';
 
 export interface BindingTargetOption {
   key: string;
@@ -65,6 +66,15 @@ export interface ChannelDefaultTargetSummary {
 interface BindingChatMeta {
   chatUserId?: string;
   chatDisplayName?: string;
+  active?: boolean;
+}
+
+function compareBindingsForChatList(a: ChannelBinding, b: ChannelBinding): number {
+  const aCreated = Date.parse(a.createdAt || '');
+  const bCreated = Date.parse(b.createdAt || '');
+  const createdDiff = (Number.isFinite(aCreated) ? aCreated : 0) - (Number.isFinite(bCreated) ? bCreated : 0);
+  if (createdDiff !== 0) return createdDiff;
+  return 0;
 }
 
 function asChannelProvider(value: string | undefined): ChannelProvider | undefined {
@@ -181,7 +191,7 @@ function assertTargetAvailableForDefaultRouting(
 
 function getSessionName(session: BridgeSession): string {
   if (session.session_type === 'draft') return '临时草稿线程';
-  if (session.name?.trim()) return session.name.trim();
+  if (session.name?.trim()) return stripDesktopSessionPrefix(session.name);
   if (session.working_directory) return path.basename(session.working_directory);
   return session.id.slice(0, 8);
 }
@@ -277,6 +287,7 @@ export function bindStoreToSession(
     workingDirectory: session.working_directory,
     model: session.model,
     mode: getSessionMode(store, session),
+    active: chatMeta?.active,
   });
 }
 
@@ -285,7 +296,7 @@ export function bindStoreToSdkSession(
   channelType: string,
   chatId: string,
   sdkSessionId: string,
-  opts?: { workingDirectory?: string; model?: string; displayName?: string; chatUserId?: string; chatDisplayName?: string },
+  opts?: { workingDirectory?: string; model?: string; displayName?: string; chatUserId?: string; chatDisplayName?: string; active?: boolean },
 ): ChannelBinding {
   assertBindingTargetAvailable(
     store,
@@ -309,6 +320,7 @@ export function bindStoreToSdkSession(
         workingDirectory: opts?.workingDirectory || existing.working_directory,
         model: opts?.model || existing.model,
         mode: getSessionMode(store, existing),
+        active: opts?.active,
       });
   }
 
@@ -319,7 +331,7 @@ export function bindStoreToSdkSession(
     || (workingDirectory ? path.basename(workingDirectory) : sdkSessionId.slice(0, 8));
 
   const session = store.createSession(
-    `Desktop: ${baseName}`,
+    baseName,
     model,
     undefined,
     workingDirectory,
@@ -339,6 +351,7 @@ export function bindStoreToSdkSession(
     workingDirectory: workingDirectory || session.working_directory,
     model: model || session.model,
     mode: getSessionMode(store, session),
+    active: opts?.active,
   });
 }
 
@@ -346,6 +359,7 @@ export function bindAddressToTarget(
   store: BridgeStore,
   address: Pick<ChannelAddress, 'channelType' | 'chatId' | 'userId' | 'displayName'>,
   targetKey: string,
+  opts?: { active?: boolean },
 ): ChannelBinding {
   if (targetKey.startsWith('desktop:')) {
     const threadId = targetKey.slice('desktop:'.length);
@@ -355,9 +369,11 @@ export function bindAddressToTarget(
       displayName: desktop.title,
       chatUserId: address.userId,
       chatDisplayName: address.displayName,
+      active: opts?.active,
     } : {
       chatUserId: address.userId,
       chatDisplayName: address.displayName,
+      active: opts?.active,
     });
   }
 
@@ -366,6 +382,7 @@ export function bindAddressToTarget(
     const binding = bindStoreToSession(store, address.channelType, address.chatId, sessionId, {
       chatUserId: address.userId,
       chatDisplayName: address.displayName,
+      active: opts?.active,
     });
     if (!binding) {
       throw new Error('Session not found.');
@@ -374,6 +391,29 @@ export function bindAddressToTarget(
   }
 
   throw new Error('Unsupported target.');
+}
+
+export function listBindingsForChat(
+  store: BridgeStore,
+  channelType: string,
+  chatId: string,
+): ChannelBinding[] {
+  return store.listChannelBindings(channelType)
+    .filter((binding) => binding.chatId === chatId)
+    .sort(compareBindingsForChatList);
+}
+
+export function setActiveBindingForChat(
+  store: BridgeStore,
+  bindingId: string,
+): ChannelBinding {
+  const binding = store.listChannelBindings().find((item) => item.id === bindingId);
+  if (!binding) {
+    throw new Error('Binding not found.');
+  }
+  store.updateChannelBinding(binding.id, { active: true });
+  const updated = store.listChannelBindings().find((item) => item.id === binding.id);
+  return updated || { ...binding, active: true };
 }
 
 export function listBindingTargetOptions(

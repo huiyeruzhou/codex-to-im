@@ -11,6 +11,34 @@ import {
 } from './command-aliases.js';
 
 const DESKTOP_THREADS_CARD_MAX_ITEMS = 20;
+export const THREAD_SELECT_CALLBACK_PREFIX = 'cti-thread-select:';
+export const THREAD_SELECT_ACTION_CALLBACK_PREFIX = 'cti-thread-action:';
+
+export interface DesktopThreadCardBindingState {
+  threadId: string;
+  bindingId: string;
+  active: boolean;
+  title?: string;
+}
+
+export interface BoundThreadCardItem {
+  title: string;
+  cwd: string;
+  threadId: string;
+  bindingId: string;
+  active: boolean;
+  originator?: string;
+}
+
+export type ThreadCardScope = 'global' | 'bound';
+
+function buildThreadCardUpdateKey(scope: ThreadCardScope, channelType: string, chatId: string): string {
+  return `thread-card:${scope}:${channelType}:${chatId}`;
+}
+
+function buildThreadActionCallbackData(scope: ThreadCardScope, action: 'bind' | 'rm' | 'use'): string {
+  return `${THREAD_SELECT_ACTION_CALLBACK_PREFIX}${scope}:${action}`;
+}
 
 export function resolveByIndexOrPrefix<T>(
   raw: string,
@@ -57,11 +85,16 @@ export function formatReasoningEffort(reasoning: string): string {
 }
 
 export function getSessionDisplayName(session: BridgeSession | null | undefined, fallbackDirectory?: string): string {
-  if (session?.name?.trim()) return session.name.trim();
+  if (session?.name?.trim()) return stripDesktopSessionPrefix(session.name);
   const cwd = session?.working_directory || fallbackDirectory || '';
   if (cwd) return path.basename(cwd) || cwd;
   if (session?.id) return session.id.slice(0, 8);
   return '未命名会话';
+}
+
+export function stripDesktopSessionPrefix(value: string): string {
+  const trimmed = value.trim();
+  return trimmed.replace(/^Desktop:\s*/i, '').trim() || trimmed;
 }
 
 export function buildCommandFields(
@@ -165,55 +198,174 @@ export function buildDesktopThreadsCommandCard(
   desktopSessions: DesktopSessionSummary[],
   showAll: boolean,
   _limit = DEFAULT_DESKTOP_THREAD_LIST_LIMIT,
+  bindingStates: DesktopThreadCardBindingState[] = [],
+  options: {
+    channelType?: string;
+    chatId?: string;
+  } = {},
 ): OutboundRichCard | null {
   if (desktopSessions.length > DESKTOP_THREADS_CARD_MAX_ITEMS) return null;
   const actualCount = desktopSessions.length;
   const title = showAll
     ? `桌面会话（${actualCount}/${MAX_DESKTOP_THREAD_LIST_LIMIT}）`
     : `最近 ${actualCount} 条桌面会话`;
-
-  return {
+  const bindingByThreadId = new Map(bindingStates.map((state) => [state.threadId, state]));
+  const card: OutboundRichCard = {
     title,
-    subtitle: '点击“接管”会执行对应命令；也可以继续发送纯文本命令。',
+    subtitle: '第一列 `*` 表示已绑定；当前激活线程显示为 `* **序号**`。点击按钮会执行对应命令，也可以继续发送纯文本命令。',
     template: 'blue',
     table: {
       pageSize: 10,
       rowHeight: 'low',
       freezeFirstColumn: true,
       columns: [
-        { name: 'index', displayName: '#', width: '80px', horizontalAlign: 'center' },
+        { name: 'index', displayName: '#', width: '90px', horizontalAlign: 'center', dataType: 'lark_md' },
         { name: 'title', displayName: '标题', width: '260px' },
         { name: 'cwd', displayName: '目录', width: '340px' },
+        { name: 'binding', displayName: 'binding', width: '120px' },
         { name: 'originator', displayName: '来源', width: '140px' },
-        { name: 'command', displayName: '命令', width: '88px' },
+        { name: 'command', displayName: '命令', width: '180px' },
       ],
-      rows: desktopSessions.map((session, index) => ({
-        index: index + 1,
-        title: session.title || '未命名线程',
-        cwd: formatCommandPath(session.cwd),
-        originator: session.originator || 'Codex Desktop',
-        command: `/t ${index + 1}`,
-      })),
+      rows: desktopSessions.map((session, index) => {
+        const binding = bindingByThreadId.get(session.threadId);
+        const marker = binding?.active
+          ? `* **${index + 1}**`
+          : binding
+            ? `* ${index + 1}`
+            : `${index + 1}`;
+        return {
+          index: marker,
+          title: binding?.title || session.title || '未命名线程',
+          cwd: formatCommandPath(session.cwd),
+          binding: binding ? binding.bindingId.slice(0, 8) : '-',
+          originator: session.originator || 'Codex Desktop',
+          command: binding ? `/t use ${binding.bindingId.slice(0, 8)}` : `/t ${index + 1}`,
+        };
+      }),
     },
     sections: [],
     selects: [{
       id: 'desktop_select',
-      placeholder: '选择要接管的桌面会话',
+      placeholder: '选择桌面会话',
       options: desktopSessions.map((session, index) => ({
         text: `${index + 1}. ${session.title || session.cwd || '未命名线程'}`,
-        callbackData: buildCommandCallbackData(`/t ${index + 1}`),
+        callbackData: `${THREAD_SELECT_CALLBACK_PREFIX}${encodeURIComponent(session.threadId)}`,
       })),
     }],
+    actions: [
+      [
+        {
+          text: '绑定',
+          callbackData: buildThreadActionCallbackData('global', 'bind'),
+          type: 'primary',
+        },
+        {
+          text: '解绑',
+          callbackData: buildThreadActionCallbackData('global', 'rm'),
+          type: 'danger',
+        },
+        {
+          text: '激活',
+          callbackData: buildThreadActionCallbackData('global', 'use'),
+          type: 'default',
+        },
+      ],
+      [{
+        text: '刷新',
+        callbackData: buildCommandCallbackData(showAll ? '/t all' : '/t'),
+        type: 'default',
+      }],
+    ],
     footer: showAll
       ? [
-          '纯文本命令：`/t 1` 接管第 1 条，`/t` 返回最近列表。',
+          '纯文本命令：`/t 1` 接管第 1 条，`/t add 1` 添加但不激活，`/t` 返回最近列表。',
+          '`/t` 和 `/t add` 的序号来自这张全局桌面会话表；`/t use` 和 `/t rm` 的序号来自 `/t ls` 的局部绑定表。',
           `超过 ${DESKTOP_THREADS_CARD_MAX_ITEMS} 条时只发送文本列表，避免卡片过长。`,
         ]
       : [
-          '纯文本命令：`/t 1` 接管第 1 条。',
+          '纯文本命令：`/t 1` 接管第 1 条，`/t add 1` 添加但不激活。',
+          '`/t` 和 `/t add` 的序号来自这张全局桌面会话表；`/t use` 和 `/t rm` 的序号来自 `/t ls` 的局部绑定表。',
           `更多：\`/t all\` 最多 ${MAX_DESKTOP_THREAD_LIST_LIMIT} 条，\`/t n 100\` 查看最近 100 条。`,
         ],
   };
+  if (options.channelType && options.chatId) {
+    card.updateKey = buildThreadCardUpdateKey('global', options.channelType, options.chatId);
+    card.updateTtlMs = null;
+  }
+  return card;
+}
+
+export function buildBoundThreadsCommandCard(
+  bindings: BoundThreadCardItem[],
+  options: {
+    channelType?: string;
+    chatId?: string;
+  } = {},
+): OutboundRichCard | null {
+  if (bindings.length === 0 || bindings.length > DESKTOP_THREADS_CARD_MAX_ITEMS) return null;
+  const card: OutboundRichCard = {
+    title: `当前聊天绑定（${bindings.length}）`,
+    subtitle: '第一列 `*` 表示已绑定；当前激活线程显示为 `* **序号**`。这张表的序号只用于 `/t use` 和 `/t rm`。',
+    template: 'blue',
+    table: {
+      pageSize: 10,
+      rowHeight: 'low',
+      freezeFirstColumn: true,
+      columns: [
+        { name: 'index', displayName: '#', width: '90px', horizontalAlign: 'center', dataType: 'lark_md' },
+        { name: 'title', displayName: '标题', width: '260px' },
+        { name: 'cwd', displayName: '目录', width: '340px' },
+        { name: 'binding', displayName: 'binding', width: '120px' },
+        { name: 'originator', displayName: '来源', width: '140px' },
+        { name: 'command', displayName: '命令', width: '180px' },
+      ],
+      rows: bindings.map((binding, index) => ({
+        index: binding.active ? `* **${index + 1}**` : `* ${index + 1}`,
+        title: binding.title || '未命名线程',
+        cwd: formatCommandPath(binding.cwd),
+        binding: binding.bindingId.slice(0, 8),
+        originator: binding.originator || '当前聊天',
+        command: binding.active ? `/t use ${index + 1}` : `/t use ${index + 1}`,
+      })),
+    },
+    sections: [],
+    selects: [{
+      id: 'bound_select',
+      placeholder: '选择绑定线程',
+      options: bindings.map((binding, index) => ({
+        text: `${index + 1}. ${binding.title || binding.cwd || '未命名线程'}`,
+        callbackData: `${THREAD_SELECT_CALLBACK_PREFIX}${encodeURIComponent(binding.bindingId)}`,
+      })),
+    }],
+    actions: [
+      [
+        {
+          text: '解绑',
+          callbackData: buildThreadActionCallbackData('bound', 'rm'),
+          type: 'danger',
+        },
+        {
+          text: '激活',
+          callbackData: buildThreadActionCallbackData('bound', 'use'),
+          type: 'primary',
+        },
+      ],
+      [{
+        text: '刷新',
+        callbackData: buildCommandCallbackData('/t ls'),
+        type: 'default',
+      }],
+    ],
+    footer: [
+      '纯文本命令：`/t use 1` 激活第 1 个绑定线程，`/t rm 1` 移除第 1 个绑定线程。',
+      '`/t use` 和 `/t rm` 的序号来自这张局部绑定表；`/t` 和 `/t add` 的序号来自全局桌面会话表。',
+    ],
+  };
+  if (options.channelType && options.chatId) {
+    card.updateKey = buildThreadCardUpdateKey('bound', options.channelType, options.chatId);
+    card.updateTtlMs = null;
+  }
+  return card;
 }
 
 export function toUserVisibleBindingError(error: unknown, fallback: string): string {

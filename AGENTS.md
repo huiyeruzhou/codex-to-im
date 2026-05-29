@@ -33,7 +33,8 @@ When the user asks to hot update or redeploy the local Codex-to-IM bridge, use t
 
 1. Confirm the current working directory is the `codex-to-im` project directory.
 2. If and only if the user explicitly asks to pull latest changes, pass `--pull`; otherwise omit it.
-3. Dispatch the detached updater from the project root:
+3. If a full `npm test` was just run successfully for the same local changes, pass `--skip-tests` to avoid rerunning the full test suite during the detached hot update. Otherwise omit it.
+4. Dispatch the detached updater from the project root:
 
    ```bash
    bash scripts/hot-update-bridge.sh
@@ -44,6 +45,13 @@ When the user asks to hot update or redeploy the local Codex-to-IM bridge, use t
    ```bash
    bash scripts/hot-update-bridge.sh --pull
    ```
-4. Tell the user exactly which command was dispatched, whether `--pull` was requested, where the hot update log is, and where the bridge log is.
 
-The script is responsible for using Node.js 24, detecting `--use-env-proxy`, running build and tests, and restarting the bridge from a detached worker. The default bridge log path is `~/.codex-to-im/logs/bridge.log`.
+   Skipping tests after a just-completed full test run:
+
+   ```bash
+   bash scripts/hot-update-bridge.sh --skip-tests
+   ```
+
+5. Tell the user exactly which command was dispatched, whether `--pull` was requested, whether tests were skipped, where the hot update log is, and where the bridge log is.
+
+The script is responsible for using Node.js 24, detecting `--use-env-proxy`, running build and tests unless `--skip-tests` is passed, and restarting the bridge from a detached worker. The default bridge log path is `~/.codex-to-im/logs/bridge.log`.

@@ -19,7 +19,9 @@ export function resolveCommandAlias(rawCommand: string, args: string): string {
     case '/h':
       return '/help';
     case '/t':
-      return !args
+      return /^(ls|add|use|rm|remove|rename)\b/i.test(args.trim())
+        ? '/t'
+        : !args
         ? '/threads'
         : /^(all|n\b)/i.test(args.trim())
           ? '/threads'
@@ -51,6 +53,7 @@ const KNOWN_BRIDGE_COMMANDS = new Set([
   '/new',
   '/thread',
   '/threads',
+  '/t',
   '/tmux',
   '/tmux-switch',
   '/tmux-attach',
@@ -74,7 +77,6 @@ const KNOWN_BRIDGE_COMMANDS = new Set([
   '/file',
   '/stop',
   '/perm',
-  '/unbind',
   '/help',
 ]);
 

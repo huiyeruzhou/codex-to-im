@@ -1,12 +1,13 @@
 import './test-setup.js';
-import { beforeEach, describe, it } from 'node:test';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 
 import fs from 'node:fs';
 import { loadConfig } from '../config.js';
-import { _testOnly } from '../lib/bridge/bridge-manager.js';
+import { _testOnly, registerAdapter } from '../lib/bridge/bridge-manager.js';
+import type { LLMProvider, StreamChatParams } from '../lib/bridge/host.js';
 import {
   initBridgeTestContext,
   inboundMessage,
@@ -15,6 +16,120 @@ import {
   resetBridgeTestState,
   writeDesktopSessionJsonlFixture,
 } from './test-bridge-utils.js';
+
+interface RecordedLlmCall {
+  sessionId: string;
+  sdkSessionId: string;
+  prompt: string;
+}
+
+interface ControlledLlmCall extends RecordedLlmCall {
+  controller: ReadableStreamDefaultController<string>;
+}
+
+function waitForCondition(condition: () => boolean, timeoutMs = 1000): Promise<void> {
+  const startedAt = Date.now();
+  return new Promise((resolve, reject) => {
+    const poll = () => {
+      if (condition()) {
+        resolve();
+        return;
+      }
+      if (Date.now() - startedAt > timeoutMs) {
+        reject(new Error('Timed out waiting for condition.'));
+        return;
+      }
+      setTimeout(poll, 5);
+    };
+    poll();
+  });
+}
+
+function createRecordingLlm(calls: RecordedLlmCall[]): LLMProvider {
+  return {
+    streamChat(params: StreamChatParams): ReadableStream<string> {
+      calls.push({
+        sessionId: params.sessionId,
+        sdkSessionId: params.sdkSessionId || '',
+        prompt: params.prompt,
+      });
+      return new ReadableStream({
+        start(controller) {
+          controller.enqueue(`data: ${JSON.stringify({ type: 'text', data: `回复：${params.prompt}` })}\n`);
+          controller.enqueue(`data: ${JSON.stringify({ type: 'result', data: JSON.stringify({ usage: { input_tokens: 1, output_tokens: 1 } }) })}\n`);
+          controller.close();
+        },
+      });
+    },
+  };
+}
+
+function createControlledLlm(calls: ControlledLlmCall[]): LLMProvider {
+  return {
+    streamChat(params: StreamChatParams): ReadableStream<string> {
+      return new ReadableStream({
+        start(controller) {
+          calls.push({
+            sessionId: params.sessionId,
+            sdkSessionId: params.sdkSessionId || '',
+            prompt: params.prompt,
+            controller,
+          });
+        },
+      });
+    },
+  };
+}
+
+function finishControlledCall(call: ControlledLlmCall, responseText: string): void {
+  call.controller.enqueue(`data: ${JSON.stringify({ type: 'text', data: responseText })}\n`);
+  call.controller.enqueue(`data: ${JSON.stringify({ type: 'result', data: JSON.stringify({ usage: { input_tokens: 1, output_tokens: 1 } }) })}\n`);
+  call.controller.close();
+}
+
+function appendDesktopMirrorTurn(filePath: string, params: {
+  timestampPrefix: string;
+  turnId: string;
+  userText: string;
+  assistantText: string;
+}): void {
+  fs.appendFileSync(filePath, [
+    {
+      timestamp: `${params.timestampPrefix}:01.000Z`,
+      type: 'event_msg',
+      payload: {
+        type: 'task_started',
+        turn_id: params.turnId,
+      },
+    },
+    {
+      timestamp: `${params.timestampPrefix}:02.000Z`,
+      type: 'event_msg',
+      payload: {
+        type: 'user_message',
+        message: params.userText,
+      },
+    },
+    {
+      timestamp: `${params.timestampPrefix}:03.000Z`,
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: params.assistantText }],
+      },
+    },
+    {
+      timestamp: `${params.timestampPrefix}:04.000Z`,
+      type: 'event_msg',
+      payload: {
+        type: 'task_complete',
+        turn_id: params.turnId,
+        last_agent_message: params.assistantText,
+      },
+    },
+  ].map((line) => JSON.stringify(line)).join('\n') + '\n', 'utf-8');
+}
 
 function installFakeTmux(): { binDir: string; logPath: string; statePath: string } {
   const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-e2e-fake-tmux-'));
@@ -84,6 +199,10 @@ describe('bridge command e2e', () => {
     _testOnly.resetStateForTests();
   });
 
+  afterEach(() => {
+    _testOnly.resetStateForTests();
+  });
+
   it('handles /new, /his limit, and /his msg through the bridge manager entrypoint', async () => {
     const store = initBridgeTestContext({ dynamicSettings: true });
     const adapter = new RecordingAdapter();
@@ -117,6 +236,296 @@ describe('bridge command e2e', () => {
     assert.match(lastText, /返回条数.*2 \/ 配置 12/s);
     assert.match(lastText, /端到端用户消息/);
     assert.match(lastText, /端到端助手回复/);
+  });
+
+  it('routes normal messages to the active binding across a user multi-binding flow', async () => {
+    const llmCalls: RecordedLlmCall[] = [];
+    const store = initBridgeTestContext({
+      dynamicSettings: true,
+      llm: createRecordingLlm(llmCalls),
+    });
+    const adapter = new RecordingAdapter();
+    const address = { channelType: 'feishu', chatId: 'chat-multi-binding-e2e' } as const;
+    const workDirA = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-multi-a-'));
+    const workDirB = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-multi-b-'));
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/new ${workDirA}`, 'incoming-new-a'));
+    const bindingA = store.getChannelBinding(address.channelType, address.chatId);
+    assert.ok(bindingA);
+    assert.equal(bindingA.workingDirectory, workDirA);
+    assert.match(adapter.sent.at(-1)?.text || '', /已新建会话/);
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, 'A 的第一条普通消息', 'incoming-a-1'));
+    assert.equal(llmCalls.length, 1);
+    assert.equal(llmCalls[0].sessionId, bindingA.codepilotSessionId);
+    assert.equal(llmCalls[0].prompt, 'A 的第一条普通消息');
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/new ${workDirB}`, 'incoming-new-b'));
+    const bindingB = store.getChannelBinding(address.channelType, address.chatId);
+    assert.ok(bindingB);
+    assert.notEqual(bindingB.id, bindingA.id);
+    assert.equal(bindingB.workingDirectory, workDirB);
+    assert.match(adapter.sent.at(-1)?.text || '', /已新建会话/);
+
+    const afterNewBindings = store.listChannelBindings().filter((binding) => (
+      binding.channelType === address.channelType && binding.chatId === address.chatId
+    ));
+    assert.equal(afterNewBindings.length, 2);
+    assert.equal(afterNewBindings.find((binding) => binding.id === bindingA.id)?.active, false);
+    assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, bindingB.id);
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, 'B 的第一条普通消息', 'incoming-b-1'));
+    assert.equal(llmCalls.length, 2);
+    assert.equal(llmCalls[1].sessionId, bindingB.codepilotSessionId);
+    assert.equal(llmCalls[1].prompt, 'B 的第一条普通消息');
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t ls', 'incoming-ls'));
+    const listText = adapter.sent.at(-1)?.text || '';
+    assert.match(listText, /当前聊天绑定/);
+    assert.match(listText, new RegExp(bindingA.id.slice(0, 8)));
+    assert.match(listText, new RegExp(bindingB.id.slice(0, 8)));
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t use 1', 'incoming-use-a'));
+    const activeBindingA = store.getChannelBinding(address.channelType, address.chatId);
+    assert.equal(activeBindingA?.id, bindingA.id);
+    assert.match(adapter.sent.at(-1)?.text || '', /当前线程已切换/);
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '切回 A 后的普通消息', 'incoming-a-2'));
+    assert.equal(llmCalls.length, 3);
+    assert.equal(llmCalls[2].sessionId, bindingA.codepilotSessionId);
+    assert.equal(llmCalls[2].prompt, '切回 A 后的普通消息');
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t use 2', 'incoming-use-b'));
+    assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, bindingB.id);
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '再切回 B 后的普通消息', 'incoming-b-2'));
+    assert.equal(llmCalls.length, 4);
+    assert.equal(llmCalls[3].sessionId, bindingB.codepilotSessionId);
+    assert.equal(llmCalls[3].prompt, '再切回 B 后的普通消息');
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t rm 2', 'incoming-rm-b'));
+    assert.equal(store.listChannelBindings().filter((binding) => binding.chatId === address.chatId).length, 1);
+    assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, bindingA.id);
+    assert.match(adapter.sent.at(-1)?.text || '', /已移除绑定线程/);
+  });
+
+  it('applies desktop thread card buttons to the currently selected dropdown option', async () => {
+    const store = initBridgeTestContext({ dynamicSettings: true });
+    const adapter = new RecordingAdapter();
+    const address = { channelType: 'feishu', chatId: 'chat-thread-card-actions' } as const;
+    const threadId = '33333333-3333-4333-8333-333333333333';
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-thread-card-'));
+    writeDesktopSessionJsonlFixture({
+      threadId,
+      workDir,
+      lines: [{
+        timestamp: '2026-05-28T00:00:00.000Z',
+        type: 'session_meta',
+        payload: {
+          id: threadId,
+          timestamp: '2026-05-28T00:00:00.000Z',
+          cwd: workDir,
+          originator: 'Codex CLI',
+        },
+      }],
+    });
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t', 'incoming-thread-card-list'));
+    const card = adapter.sent.at(-1)?.richCard;
+    assert.ok(card);
+    assert.match(card.updateKey || '', /^thread-card:global:/);
+    assert.equal(card.updateTtlMs, null);
+    const selectCallback = card.selects?.[0]?.options?.[0]?.callbackData;
+    const bindCallback = card.actions?.[0]?.[0]?.callbackData;
+    assert.ok(selectCallback);
+    assert.ok(bindCallback);
+
+    await _testOnly.handleMessage(adapter, {
+      ...inboundMessage(address, '', 'reply-1'),
+      callbackData: selectCallback,
+      callbackMessageId: 'reply-1',
+    });
+    await _testOnly.handleMessage(adapter, {
+      ...inboundMessage(address, '', 'reply-1'),
+      callbackData: bindCallback,
+      callbackMessageId: 'reply-1',
+    });
+
+    const binding = store.getChannelBinding(address.channelType, address.chatId);
+    assert.ok(binding);
+    assert.equal(binding.sdkSessionId, threadId);
+    assert.match(adapter.sent.at(-1)?.text || '', /已添加并激活线程/);
+    assert.ok(adapter.sent.at(-1)?.richCard);
+    assert.match(adapter.sent.at(-1)?.richCard?.updateKey || '', /^thread-card:global:/);
+    assert.equal(adapter.sent.at(-1)?.richCard?.updateTtlMs, null);
+    assert.equal(adapter.sent.at(-1)?.richCardUpdateMessageId, 'reply-1');
+  });
+
+  it('keeps renamed thread titles identical in /current and /t dropdown surfaces', async () => {
+    initBridgeTestContext({ dynamicSettings: true });
+    const adapter = new RecordingAdapter();
+    const address = { channelType: 'feishu', chatId: 'chat-thread-title-sync' } as const;
+    const threadId = '44444444-4444-4444-8444-444444444444';
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-title-sync-'));
+    writeDesktopSessionJsonlFixture({
+      threadId,
+      workDir,
+      lines: [
+        {
+          timestamp: '2026-05-28T00:00:00.000Z',
+          type: 'session_meta',
+          payload: {
+            id: threadId,
+            timestamp: '2026-05-28T00:00:00.000Z',
+            cwd: workDir,
+            originator: 'Codex CLI',
+          },
+        },
+        {
+          timestamp: '2026-05-28T00:00:01.000Z',
+          type: 'event_msg',
+          payload: { type: 'user_message', message: '原始桌面标题' },
+        },
+      ],
+    });
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t 1', 'incoming-title-bind'));
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t rename 统一后的标题', 'incoming-title-rename'));
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/', 'incoming-title-current'));
+
+    assert.match(adapter.sent.at(-1)?.text || '', /标题.*统一后的标题/s);
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t', 'incoming-title-list'));
+    const listMessage = adapter.sent.at(-1);
+    assert.match(listMessage?.text || '', /统一后的标题/);
+    assert.doesNotMatch(listMessage?.text || '', /原始桌面标题/);
+    assert.equal(listMessage?.richCard?.table?.rows?.[0]?.title, '统一后的标题');
+    assert.equal(listMessage?.richCard?.selects?.[0]?.options?.[0]?.text, '1. 统一后的标题');
+  });
+
+  it('keeps SDK output from an inactive binding alive after /t use switches away', async () => {
+    const llmCalls: ControlledLlmCall[] = [];
+    const store = initBridgeTestContext({
+      dynamicSettings: true,
+      llm: createControlledLlm(llmCalls),
+    });
+    const adapter = new RecordingAdapter();
+    const address = { channelType: 'feishu', chatId: 'chat-concurrent-sdk-e2e' } as const;
+    const workDirA = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-concurrent-a-'));
+    const workDirB = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-concurrent-b-'));
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/new ${workDirA}`, 'incoming-concurrent-new-a'));
+    const bindingA = store.getChannelBinding(address.channelType, address.chatId);
+    assert.ok(bindingA);
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/new ${workDirB}`, 'incoming-concurrent-new-b'));
+    const bindingB = store.getChannelBinding(address.channelType, address.chatId);
+    assert.ok(bindingB);
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t use 1', 'incoming-concurrent-use-a'));
+    assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, bindingA.id);
+
+    const firstTurn = _testOnly.handleMessage(adapter, inboundMessage(address, 'A 长任务', 'incoming-concurrent-a'));
+    await waitForCondition(() => llmCalls.length === 1);
+    assert.equal(llmCalls[0].sessionId, bindingA.codepilotSessionId);
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t use 2', 'incoming-concurrent-use-b'));
+    assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, bindingB.id);
+    assert.doesNotMatch(adapter.sent.at(-1)?.text || '', /当前会话仍在运行/);
+
+    const secondTurn = _testOnly.handleMessage(adapter, inboundMessage(address, 'B 长任务', 'incoming-concurrent-b'));
+    await waitForCondition(() => llmCalls.length === 2);
+    assert.equal(llmCalls[1].sessionId, bindingB.codepilotSessionId);
+
+    finishControlledCall(llmCalls[0], 'A 完成');
+    finishControlledCall(llmCalls[1], 'B 完成');
+    await Promise.all([firstTurn, secondTurn]);
+
+    const sentText = adapter.sent.map((message) => message.text).join('\n\n');
+    assert.match(sentText, /A 完成/);
+    assert.match(sentText, /B 完成/);
+    assert.doesNotMatch(sentText, /回复已跳过/);
+  });
+
+  it('keeps Feishu mirror output active for multiple bound desktop threads after /t use switches away', async () => {
+    const store = initBridgeTestContext({ dynamicSettings: true });
+    const adapter = new RecordingAdapter();
+    registerAdapter(adapter);
+    const bridgeState = (globalThis as unknown as Record<string, any>).__bridge_manager__;
+    bridgeState.running = true;
+    const address = { channelType: 'feishu', chatId: 'chat-concurrent-mirror-e2e' } as const;
+    const threadA = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    const threadB = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+    const workDirA = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-mirror-a-'));
+    const workDirB = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-mirror-b-'));
+    const fixtureA = writeDesktopSessionJsonlFixture({
+      threadId: threadA,
+      workDir: workDirA,
+      lines: [{
+        timestamp: '2026-05-28T00:00:00.000Z',
+        type: 'session_meta',
+        payload: {
+          id: threadA,
+          timestamp: '2026-05-28T00:00:00.000Z',
+          cwd: workDirA,
+          originator: 'Codex CLI',
+        },
+      }],
+    });
+    const fixtureB = writeDesktopSessionJsonlFixture({
+      threadId: threadB,
+      workDir: workDirB,
+      lines: [{
+        timestamp: '2026-05-28T00:00:00.000Z',
+        type: 'session_meta',
+        payload: {
+          id: threadB,
+          timestamp: '2026-05-28T00:00:00.000Z',
+          cwd: workDirB,
+          originator: 'Codex CLI',
+        },
+      }],
+    });
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/t ${threadA}`, 'incoming-mirror-bind-a'));
+    const bindingA = store.getChannelBinding(address.channelType, address.chatId);
+    assert.ok(bindingA);
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/t add ${threadB}`, 'incoming-mirror-add-b'));
+    const bindingsAfterAdd = store.listChannelBindings().filter((binding) => binding.chatId === address.chatId);
+    const bindingB = bindingsAfterAdd.find((binding) => binding.sdkSessionId === threadB);
+    assert.ok(bindingB);
+    assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, bindingA.id);
+    assert.equal(bindingB.active, false);
+
+    await _testOnly.reconcileMirrorSubscriptions();
+    assert.deepEqual(
+      Array.from(bridgeState.mirrorSubscriptions.keys()).sort(),
+      [bindingA.id, bindingB.id].sort(),
+    );
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t use 2', 'incoming-mirror-use-b'));
+    assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, bindingB.id);
+
+    appendDesktopMirrorTurn(fixtureA.sessionPath, {
+      timestampPrefix: '2026-05-28T00:01',
+      turnId: 'turn-mirror-a',
+      userText: 'A 桌面问题',
+      assistantText: 'A mirror final',
+    });
+    appendDesktopMirrorTurn(fixtureB.sessionPath, {
+      timestampPrefix: '2026-05-28T00:02',
+      turnId: 'turn-mirror-b',
+      userText: 'B 桌面问题',
+      assistantText: 'B mirror final',
+    });
+
+    await _testOnly.reconcileMirrorSubscriptions();
+
+    const sentText = adapter.sent.map((message) => message.text).join('\n\n');
+    assert.match(sentText, /A 桌面问题/);
+    assert.match(sentText, /A mirror final/);
+    assert.match(sentText, /B 桌面问题/);
+    assert.match(sentText, /B mirror final/);
   });
 
   it('starts tmux provider with current permissions and routes tmux-provider messages through the bridge entrypoint', async () => {
@@ -269,7 +678,7 @@ describe('bridge command e2e', () => {
     const store = initBridgeTestContext({ dynamicSettings: true });
     const adapter = new RecordingAdapter();
     const address = { channelType: 'feishu', chatId: 'chat-history-desktop-msg-e2e' } as const;
-    const threadId = '11111111111111111111111111111111';
+    const threadId = '11111111-1111-4111-8111-111111111111';
     const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-desktop-msg-e2e-'));
     writeDesktopSessionJsonlFixture({
       threadId,
@@ -327,7 +736,7 @@ describe('bridge command e2e', () => {
     initBridgeTestContext({ dynamicSettings: true });
     const adapter = new RecordingAdapter();
     const address = { channelType: 'feishu', chatId: 'chat-history-task-complete-e2e' } as const;
-    const threadId = '22222222222222222222222222222222';
+    const threadId = '22222222-2222-4222-8222-222222222222';
     const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-task-complete-e2e-'));
     writeDesktopSessionJsonlFixture({
       threadId,

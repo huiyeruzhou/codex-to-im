@@ -25,7 +25,6 @@ export function buildMirrorSubscriptionRegistryPlan<TBinding extends MirrorRegis
 ): MirrorSubscriptionRegistryPlan<TBinding> {
   const activeChannels = new Set(activeChannelTypes);
   const upsertBindings = bindings.filter((binding) => {
-    if (binding.active === false) return false;
     if (!activeChannels.has(binding.channelType)) return false;
     const session = getSession(binding.codepilotSessionId);
     return Boolean(session?.desktop_thread_id || (

@@ -8,7 +8,6 @@ import {
   buildHealthCommandResponse,
   buildHealthListResponse,
   buildCommandFields,
-  buildDesktopThreadsCommandCard,
   buildDesktopThreadsCommandResponse,
   DEFAULT_DESKTOP_THREAD_LIST_LIMIT,
   formatCommandDateTime,
@@ -22,7 +21,6 @@ import {
   MAX_DESKTOP_THREAD_LIST_LIMIT,
   normalizeReasoningEffort,
   parseDesktopThreadListArgs,
-  resolveByIndexOrPrefix,
   resolveCommandAlias,
   toUserVisibleBindingError,
   truncateHistoryContent,
@@ -42,7 +40,6 @@ import {
   formatDisplayedModel,
   getAvailableModelChoicesText,
   getDesktopSessionByThreadIdSafe,
-  getDesktopThreadTitle,
   getDisplayedDesktopThreads,
   getHistoryMessageLimit,
   getSelectableCodexModel,
@@ -54,12 +51,12 @@ import {
   resolveNewSessionWorkingDirectory,
 } from './bridge-session-support.js';
 import {
-  formatBindingChatLabel,
   getFeedbackParseMode,
 } from './bridge-channel-runtime.js';
-import { readDesktopSessionMessagesByFilePath } from '../../desktop-sessions.js';
+import { readDesktopSessionMessagesByFilePath, type DesktopSessionSummary } from '../../desktop-sessions.js';
 import { getCodexThreadId, getExplicitDesktopThreadId } from './turns/turn-classifier.js';
 import { buildFencedCodeBlock } from './markdown/fence.js';
+import { ThreadDisplayService } from './thread-display-resolver.js';
 import {
   codexTmuxSessionName,
   handleTmuxBridgeCommand,
@@ -73,6 +70,11 @@ import {
   pushStreamFeedbackText,
   type StreamFeedbackTarget,
 } from './stream-feedback-controller.js';
+import {
+  listBindingsForChat,
+  setActiveBindingForChat,
+} from '../../session-bindings.js';
+import type { ThreadCardScope } from './command-formatters.js';
 
 const MODE_OPTIONS_TEXT = '可选：`normal`（普通执行，默认） `yolo`（跳过审批和沙箱）。兼容：`code` 等同于 `normal`。';
 const CODEX_PROVIDER_OPTIONS_TEXT = '可选：`sdk`（默认 SDK 路径） `tmux`（Codex TUI/tmux 路径）';
@@ -150,6 +152,9 @@ export function buildGlobalStatusResponse(
   const adapters = bridgeStatus.adapters || [];
   const enabledChannels = (config.channels || []).filter((channel) => channel.enabled !== false);
   const uiUrl = getCurrentUiServerUrl();
+  const currentChatBindingCount = currentBinding
+    ? bindings.filter((binding) => binding.channelType === currentBinding.channelType && binding.chatId === currentBinding.chatId).length
+    : 0;
 
   const channelLines = (config.channels || []).map((channel) => {
     const adapter = adapters.find((item) => item.channelType === channel.id);
@@ -188,7 +193,7 @@ export function buildGlobalStatusResponse(
       ['Adapter', `${adapters.filter((adapter) => adapter.running).length}/${adapters.length} running`],
       ['绑定', `${activeBindings.length}/${bindings.length} active`],
       ['会话', `${sessions.length} total, ${runningSessions.length} running/queued`],
-      ['当前聊天绑定', currentBinding ? `${currentBinding.channelType}:${currentBinding.chatId} -> ${currentBinding.codepilotSessionId.slice(0, 8)}` : '未绑定'],
+      ['当前聊天绑定', currentBinding ? `${currentBinding.channelType}:${currentBinding.chatId} -> ${currentBinding.codepilotSessionId.slice(0, 8)} (${currentChatBindingCount} bound, active=${currentBinding.id.slice(0, 8)})` : '未绑定'],
     ],
     [
       '发送 `/` 查看当前聊天/当前会话诊断；发送 `/check` 查看当前会话健康检查。',
@@ -373,11 +378,11 @@ function buildActiveTaskSwitchBlockedResponse(
   binding: ChannelBinding,
   markdown: boolean,
 ): string {
-  const session = store.getSession(binding.codepilotSessionId);
+  const threadDisplay = new ThreadDisplayService(store);
   return buildCommandFields(
     '当前会话仍在运行',
     [
-      ['标题', getSessionDisplayName(session, binding.workingDirectory)],
+      ['标题', threadDisplay.binding(binding).title],
       ['Session', binding.codepilotSessionId],
     ],
     [
@@ -399,6 +404,47 @@ function guardBindingChangeWhileRunning(
   return deps.getActiveTask(binding.codepilotSessionId)
     ? buildActiveTaskSwitchBlockedResponse(store, binding, markdown)
     : null;
+}
+
+function isReservedThreadName(name: string): boolean {
+  const trimmed = name.trim();
+  return /^\d+$/.test(trimmed)
+    || /^[0-9a-f]{8,}$/i.test(trimmed)
+    || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed);
+}
+
+function validateThreadName(raw: string): { ok: true; name: string } | { ok: false; message: string } {
+  const name = raw.trim();
+  if (!name) return { ok: false, message: '用法：/t rename <新名称>。' };
+  if (name.length > 80) return { ok: false, message: '名称过长，请控制在 80 个字符以内。' };
+  if (/[\x00-\x1f\x7f]/.test(name)) return { ok: false, message: '名称不能包含控制字符。' };
+  if (isReservedThreadName(name)) {
+    return { ok: false, message: '名称不能是纯数字，也不能长得像 binding id 或 thread id。' };
+  }
+  return { ok: true, name };
+}
+
+function selectDesktopThreadForCommand(
+  threadDisplay: ThreadDisplayService,
+  raw: string,
+  displayedThreads: DesktopSessionSummary[],
+): {
+  thread?: DesktopSessionSummary;
+  threadId?: string;
+  ambiguous?: boolean;
+  index?: number;
+} {
+  const selected = threadDisplay.selectDesktopThread(raw, displayedThreads);
+  if (selected.threadId || selected.ambiguous || selected.index !== undefined) {
+    return selected;
+  }
+  const token = raw.trim();
+  if (!validateSessionId(token)) return {};
+  const desktop = getDesktopSessionByThreadIdSafe(token, 'thread bind');
+  return {
+    thread: desktop ? { ...desktop, title: threadDisplay.desktop(desktop).title } : undefined,
+    threadId: token,
+  };
 }
 
 function auditCommandBindingChange(
@@ -426,6 +472,28 @@ export interface BridgeCommandDispatchDeps {
   reconcileMirrorSubscriptions?(): Promise<void>;
   diagnoseSessionHealth(sessionId: string): Promise<import('./session-health-runtime.js').SessionHealthDiagnosis | null>;
   diagnoseAllActiveSessions(): Promise<import('./session-health-runtime.js').SessionHealthDiagnosis[]>;
+  scopedBinding?: ChannelBinding | null;
+  threadCardRefreshScope?: ThreadCardScope | null;
+}
+
+function buildThreadCardRefresh(
+  threadDisplay: ThreadDisplayService,
+  scope: ThreadCardScope | null | undefined,
+  address: InboundMessage['address'],
+): OutboundRichCard | undefined {
+  if (scope === 'bound') {
+    return threadDisplay.refreshedBoundThreadsCard(address.channelType, address.chatId);
+  }
+  if (scope === 'global') {
+    return threadDisplay.refreshedDesktopThreadsCard(
+      getDisplayedDesktopThreads(DEFAULT_DESKTOP_THREAD_LIST_LIMIT),
+      false,
+      DEFAULT_DESKTOP_THREAD_LIST_LIMIT,
+      address.channelType,
+      address.chatId,
+    );
+  }
+  return undefined;
 }
 
 async function reconcileMirrorSubscriptionsBestEffort(deps: BridgeCommandDispatchDeps, context: string): Promise<void> {
@@ -444,6 +512,7 @@ export async function handleBridgeCommand(
   deps: BridgeCommandDispatchDeps,
 ): Promise<void> {
   const { store } = getBridgeContext();
+  const threadDisplay = new ThreadDisplayService(store);
 
   const trimmedText = text.trim();
   const commandToken = trimmedText.split(/\s+/)[0] || '';
@@ -480,8 +549,9 @@ export async function handleBridgeCommand(
   let responseRichCard: OutboundRichCard | undefined;
   let responseParseMode: 'Markdown' | 'plain' = getFeedbackParseMode(adapter.channelType);
   let auditResponse = true;
-  const currentBinding = store.getChannelBinding(msg.address.channelType, msg.address.chatId);
-  const commandBinding = command === '/status'
+  const currentBinding = deps.scopedBinding || store.getChannelBinding(msg.address.channelType, msg.address.chatId);
+  const shouldApplyDefaultTargetForCommand = !new Set(['/status', '/threads', '/t']).has(command);
+  const commandBinding = !shouldApplyDefaultTargetForCommand
     ? currentBinding
     : currentBinding || (store.getChannelDefaultTarget(msg.address.channelType) ? router.resolve(msg.address) : null);
 
@@ -494,8 +564,9 @@ export async function handleBridgeCommand(
         '',
         '常用流程',
         '1. /t 查看最近桌面会话',
-        '2. /t 1 接管第 1 条桌面会话',
-        '3. 之后直接发消息即可继续这条会话',
+        '2. /t 1 接管第 1 条桌面会话并设为当前线程',
+        '3. /t add 2 可把更多桌面会话加入当前聊天',
+        '4. /t ls 查看绑定，/t use 1 切换当前线程',
         '',
         '发送 /h 查看完整说明。',
       ].join('\n');
@@ -544,7 +615,7 @@ export async function handleBridgeCommand(
       response = buildCommandFields(
         '已新建会话',
         [
-          ['标题', getSessionDisplayName(session, binding.workingDirectory)],
+          ['标题', threadDisplay.binding(binding).title],
           ['目录', formatCommandPath(binding.workingDirectory)],
           ['模式', formatSessionMode(binding, session)],
           ['Provider', formatSessionCodexProvider(session)],
@@ -552,6 +623,215 @@ export async function handleBridgeCommand(
         notes,
         responseParseMode === 'Markdown',
       );
+      break;
+    }
+
+    case '/t': {
+      const parts = args.trim().split(/\s+/).filter(Boolean);
+      const rawSubcommand = (parts[0] || '').toLowerCase();
+      const subcommand = rawSubcommand === 'remove' ? 'rm' : rawSubcommand;
+      const subArgs = parts.slice(1).join(' ');
+
+      if (subcommand === 'ls') {
+        response = threadDisplay.chatBindingsResponse(msg.address.channelType, msg.address.chatId, responseParseMode === 'Markdown');
+        responseRichCard = threadDisplay.refreshedBoundThreadsCard(msg.address.channelType, msg.address.chatId);
+        break;
+      }
+
+      if (subcommand === 'add') {
+        const targetToken = subArgs.trim();
+        if (!targetToken) {
+          response = '用法：/t add <序号|thread-id|名称>。发送 `/t` 查看最近桌面会话，或发送 `/t ls` 查看已绑定线程。';
+          break;
+        }
+        const displayedThreads = getDisplayedDesktopThreads(DEFAULT_DESKTOP_THREAD_LIST_LIMIT);
+        if (!displayedThreads) {
+          response = '读取桌面会话列表失败，请稍后重试。';
+          break;
+        }
+        const decoratedThreads = threadDisplay.decorateDesktopSessions(displayedThreads, msg.address.channelType, msg.address.chatId);
+        const selected = selectDesktopThreadForCommand(threadDisplay, targetToken, decoratedThreads);
+        if (selected.ambiguous) {
+          response = '匹配到多个桌面会话，请先发送 `/t` 查看列表，再用 `/t add 1` 这种序号添加。';
+          break;
+        }
+        if (!selected.threadId) {
+          if (selected.index !== undefined) {
+            response = `最近桌面会话列表没有第 ${selected.index} 条。先发送 \`/t\` 查看最近会话，或直接使用 thread id。`;
+            break;
+          }
+          response = '没有找到对应的桌面会话。先发送 `/t` 查看最近会话，再用 `/t add 1` 添加。';
+          break;
+        }
+
+        const previousActive = store.getChannelBinding(msg.address.channelType, msg.address.chatId);
+        let binding: ReturnType<typeof router.bindToSdkSession>;
+        try {
+          binding = router.bindToSdkSession(msg.address, selected.threadId, selected.thread ? {
+            workingDirectory: selected.thread.cwd,
+            displayName: selected.thread.title,
+            active: previousActive ? false : true,
+          } : {
+            active: previousActive ? false : true,
+          });
+        } catch (error) {
+          response = toUserVisibleBindingError(error, '添加桌面会话失败。');
+          break;
+        }
+        const updatedBinding = store.listChannelBindings().find((item) => item.id === binding.id) || binding;
+        auditCommandBindingChange(
+          'add_desktop',
+          msg,
+          previousActive,
+          updatedBinding,
+          previousActive ? 'added inactive' : 'added active',
+        );
+        response = buildCommandFields(
+          updatedBinding.active !== false ? '已添加并激活线程' : '已添加绑定线程',
+          [
+            ['线程', threadDisplay.binding(updatedBinding).title],
+            ['binding_id', threadDisplay.bindingShortId(updatedBinding)],
+            ['thread_id', threadDisplay.bindingThreadId(updatedBinding) || '-'],
+          ],
+          updatedBinding.active !== false
+            ? ['接下来直接发送文本即可继续。']
+            : ['当前线程未改变。需要切换时发送 `/t use <序号|thread-id|binding-id|名称>`。'],
+          responseParseMode === 'Markdown',
+        );
+        responseRichCard = buildThreadCardRefresh(threadDisplay, deps.threadCardRefreshScope, msg.address);
+        break;
+      }
+
+      if (subcommand === 'use') {
+        const targetToken = subArgs.trim();
+        if (!targetToken) {
+          response = '用法：/t use <序号|thread-id|binding-id|名称>。发送 `/t ls` 查看已绑定线程。';
+          break;
+        }
+        const bindings = listBindingsForChat(store, msg.address.channelType, msg.address.chatId);
+        const selected = threadDisplay.resolveBoundBindingSelection(bindings, targetToken);
+        if (selected.ambiguous) {
+          response = '匹配到多个绑定线程，请先发送 `/t ls` 查看列表，再用序号切换。';
+          break;
+        }
+        if (!selected.binding) {
+          response = selected.index !== undefined
+            ? `当前聊天只有 ${bindings.length} 个绑定线程，没有第 ${selected.index} 个。发送 \`/t ls\` 查看列表。`
+            : '没有找到对应的绑定线程。发送 `/t ls` 查看列表。';
+          break;
+        }
+        const previousActive = store.getChannelBinding(msg.address.channelType, msg.address.chatId);
+        const updatedBinding = setActiveBindingForChat(store, selected.binding.id);
+        auditCommandBindingChange(
+          'use_binding',
+          msg,
+          previousActive,
+          updatedBinding,
+        );
+        response = buildCommandFields(
+          '当前线程已切换',
+          [
+            ...(previousActive && previousActive.id !== updatedBinding.id
+              ? [['原线程', threadDisplay.binding(previousActive).title] as [string, string]]
+              : []),
+            ['当前', threadDisplay.binding(updatedBinding).title],
+            ['binding_id', threadDisplay.bindingShortId(updatedBinding)],
+            ['thread_id', threadDisplay.bindingThreadId(updatedBinding) || '-'],
+          ],
+          ['接下来直接发送文本即可继续。'],
+          responseParseMode === 'Markdown',
+        );
+        responseRichCard = buildThreadCardRefresh(threadDisplay, deps.threadCardRefreshScope, msg.address);
+        break;
+      }
+
+      if (subcommand === 'rm') {
+        const parsedArgs = parseForceFlag(subArgs);
+        const targetToken = parsedArgs.args;
+        if (!targetToken) {
+          response = '用法：/t rm <序号|thread-id|binding-id|名称>。发送 `/t ls` 查看已绑定线程。';
+          break;
+        }
+        const bindings = listBindingsForChat(store, msg.address.channelType, msg.address.chatId);
+        const selected = threadDisplay.resolveBoundBindingSelection(bindings, targetToken);
+        if (selected.ambiguous) {
+          response = '匹配到多个绑定线程，请先发送 `/t ls` 查看列表，再用序号移除。';
+          break;
+        }
+        if (!selected.binding) {
+          response = selected.index !== undefined
+            ? `当前聊天只有 ${bindings.length} 个绑定线程，没有第 ${selected.index} 个。发送 \`/t ls\` 查看列表。`
+            : '没有找到对应的绑定线程。发送 `/t ls` 查看列表。';
+          break;
+        }
+        const blocked = guardBindingChangeWhileRunning(
+          store,
+          selected.binding,
+          parsedArgs.force,
+          deps,
+          responseParseMode === 'Markdown',
+        );
+        if (blocked) {
+          response = blocked;
+          break;
+        }
+        const previousActive = store.getChannelBinding(msg.address.channelType, msg.address.chatId);
+        store.deleteChannelBinding(selected.binding.id);
+        const nextActive = store.getChannelBinding(msg.address.channelType, msg.address.chatId);
+        auditCommandBindingChange(
+          'remove_binding',
+          msg,
+          selected.binding,
+          nextActive,
+          parsedArgs.force ? 'forced' : undefined,
+        );
+        response = buildCommandFields(
+          '已移除绑定线程',
+          [
+            ['移除', threadDisplay.binding(selected.binding).title],
+            ['当前', nextActive ? threadDisplay.binding(nextActive).title : '未绑定'],
+          ],
+          nextActive
+            ? ['已自动将另一个绑定线程设为当前。']
+            : ['当前聊天已没有绑定线程。之后直接发送文本会自动进入新的临时草稿线程。'],
+          responseParseMode === 'Markdown',
+        );
+        await reconcileMirrorSubscriptionsBestEffort(deps, 'binding remove');
+        responseRichCard = buildThreadCardRefresh(threadDisplay, deps.threadCardRefreshScope, msg.address);
+        break;
+      }
+
+      if (subcommand === 'rename') {
+        const binding = store.getChannelBinding(msg.address.channelType, msg.address.chatId);
+        if (!binding) {
+          response = '当前聊天还没有绑定线程，无法重命名。';
+          break;
+        }
+        const parsed = validateThreadName(subArgs);
+        if (!parsed.ok) {
+          response = parsed.message;
+          break;
+        }
+        const session = store.getSession(binding.codepilotSessionId);
+        if (!session) {
+          response = '当前会话不存在，无法重命名。';
+          break;
+        }
+        threadDisplay.renameBinding(binding, parsed.name);
+        response = buildCommandFields(
+          '当前线程已重命名',
+          [
+            ['新标题', parsed.name],
+            ['binding_id', threadDisplay.bindingShortId(binding)],
+            ['thread_id', threadDisplay.bindingThreadId(binding) || '-'],
+          ],
+          [],
+          responseParseMode === 'Markdown',
+        );
+        break;
+      }
+
+      response = '用法：/t、/t ls、/t add <序号|thread-id|名称>、/t use <序号|thread-id|binding-id|名称>、/t rm/remove <序号|thread-id|binding-id|名称>、/t rename <名称>';
       break;
     }
 
@@ -622,12 +902,19 @@ export async function handleBridgeCommand(
           response = '没有找到桌面会话。先在 Codex Desktop App 中打开一个会话，再回来试一次。';
           break;
         }
+        const decoratedSessions = threadDisplay.decorateDesktopSessions(desktopSessions, msg.address.channelType, msg.address.chatId);
         response = buildDesktopThreadsCommandResponse(
-          desktopSessions,
+          decoratedSessions,
           responseParseMode === 'Markdown',
           true,
         );
-        responseRichCard = buildDesktopThreadsCommandCard(desktopSessions, true) || undefined;
+        responseRichCard = threadDisplay.refreshedDesktopThreadsCard(
+          decoratedSessions,
+          true,
+          MAX_DESKTOP_THREAD_LIST_LIMIT,
+          msg.address.channelType,
+          msg.address.chatId,
+        );
         break;
       }
 
@@ -648,57 +935,57 @@ export async function handleBridgeCommand(
         response = '读取桌面会话列表失败，请稍后重试。';
         break;
       }
-      const threadPick = resolveByIndexOrPrefix(threadArgs, displayedThreads, (session) => session.threadId);
-      if (threadPick.ambiguous) {
+      const decoratedThreads = threadDisplay.decorateDesktopSessions(displayedThreads, msg.address.channelType, msg.address.chatId);
+      const selected = selectDesktopThreadForCommand(threadDisplay, threadArgs, decoratedThreads);
+      if (selected.ambiguous) {
         response = '匹配到多个桌面会话，请先发送 `/t` 查看列表，再用 `/t 1` 这种序号切换。';
         break;
       }
-      if (!threadPick.match) {
-        if (validateSessionId(threadArgs)) {
-          const desktop = getDesktopSessionByThreadIdSafe(threadArgs, 'thread switch');
-          let binding: ReturnType<typeof router.bindToSdkSession>;
-          try {
-            binding = router.bindToSdkSession(msg.address, threadArgs, desktop ? {
-              workingDirectory: desktop.cwd,
-              displayName: desktop.title,
-            } : undefined);
-          } catch (error) {
-            response = toUserVisibleBindingError(error, '切换桌面会话失败。');
-            break;
-          }
-          auditCommandBindingChange(
-            'switch_desktop',
-            msg,
-            currentBinding,
-            binding,
-            parsedArgs.force ? 'forced' : undefined,
-          );
-          const session = store.getSession(binding.codepilotSessionId);
-          response = buildCommandFields(
-            '已切换到桌面会话',
-            [
-              ['标题', desktop?.title || getSessionDisplayName(session, binding.workingDirectory)],
-              ['目录', formatCommandPath(binding.workingDirectory)],
-            ],
-            ['接下来直接发送文本即可继续。'],
-            responseParseMode === 'Markdown',
-          );
-          break;
-        }
-        if (threadPick.index !== undefined) {
+      if (!selected.threadId) {
+        if (selected.index !== undefined) {
           response = displayedThreads.length > 0
-            ? `当前只找到 ${displayedThreads.length} 条桌面会话，没有第 ${threadPick.index} 条。先发送 \`/t\` 查看最近会话，或发送 \`/t all\` 查看更多后再选择。`
+            ? `当前只找到 ${displayedThreads.length} 条桌面会话，没有第 ${selected.index} 条。先发送 \`/t\` 查看最近会话，或发送 \`/t all\` 查看更多后再选择。`
             : '没有找到桌面会话。先在 Codex Desktop App 中打开一个会话，再回来试一次。';
           break;
         }
         response = '没有找到对应的桌面会话。先发送 `/t` 查看最近会话，再用 `/t 1` 接管。';
         break;
       }
+      if (!selected.thread) {
+        let binding: ReturnType<typeof router.bindToSdkSession>;
+        try {
+          binding = router.bindToSdkSession(msg.address, selected.threadId);
+        } catch (error) {
+          response = toUserVisibleBindingError(error, '切换桌面会话失败。');
+          break;
+        }
+        auditCommandBindingChange(
+          'switch_desktop',
+          msg,
+          currentBinding,
+          binding,
+          parsedArgs.force ? 'forced' : undefined,
+        );
+        const session = store.getSession(binding.codepilotSessionId);
+        response = buildCommandFields(
+          '已切换到桌面会话',
+          [
+            ['标题', threadDisplay.binding(binding).title],
+            ['binding_id', threadDisplay.bindingShortId(binding)],
+            ['thread_id', threadDisplay.bindingThreadId(binding) || selected.threadId],
+            ['目录', formatCommandPath(binding.workingDirectory)],
+          ],
+          ['接下来直接发送文本即可继续。'],
+          responseParseMode === 'Markdown',
+        );
+        responseRichCard = buildThreadCardRefresh(threadDisplay, deps.threadCardRefreshScope, msg.address);
+        break;
+      }
       let binding: ReturnType<typeof router.bindToSdkSession>;
       try {
-        binding = router.bindToSdkSession(msg.address, threadPick.match.threadId, {
-          workingDirectory: threadPick.match.cwd,
-          displayName: threadPick.match.title,
+        binding = router.bindToSdkSession(msg.address, selected.thread.threadId, {
+          workingDirectory: selected.thread.cwd,
+          displayName: selected.thread.title,
         });
       } catch (error) {
         response = toUserVisibleBindingError(error, '切换桌面会话失败。');
@@ -714,12 +1001,15 @@ export async function handleBridgeCommand(
       response = buildCommandFields(
         '已切换到桌面会话',
         [
-          ['标题', threadPick.match.title || '未命名线程'],
+          ['标题', threadDisplay.binding(binding).title],
+          ['binding_id', threadDisplay.bindingShortId(binding)],
+          ['thread_id', threadDisplay.bindingThreadId(binding) || selected.thread.threadId],
           ['目录', formatCommandPath(binding.workingDirectory)],
         ],
         ['接下来直接发送文本即可继续。'],
         responseParseMode === 'Markdown',
       );
+      responseRichCard = buildThreadCardRefresh(threadDisplay, deps.threadCardRefreshScope, msg.address);
       break;
     }
 
@@ -741,13 +1031,20 @@ export async function handleBridgeCommand(
           : '没有找到最近桌面会话。先在 Codex Desktop App 中打开一个会话，再回来试一次。';
         break;
       }
+      const decoratedSessions = threadDisplay.decorateDesktopSessions(desktopSessions, msg.address.channelType, msg.address.chatId);
       response = buildDesktopThreadsCommandResponse(
-        desktopSessions,
+        decoratedSessions,
         responseParseMode === 'Markdown',
         showAll,
         limit,
       );
-      responseRichCard = buildDesktopThreadsCommandCard(desktopSessions, showAll, limit) || undefined;
+      responseRichCard = threadDisplay.refreshedDesktopThreadsCard(
+        decoratedSessions,
+        showAll,
+        limit,
+        msg.address.channelType,
+        msg.address.chatId,
+      );
       break;
     }
 
@@ -1282,7 +1579,7 @@ export async function handleBridgeCommand(
 
       const desktopThreadId = getExplicitDesktopThreadId(session);
       const codexThreadId = getCodexThreadId(session, binding);
-      const threadTitle = getDesktopThreadTitle(desktopThreadId);
+      const threadInfo = threadDisplay.binding(binding);
       const sandboxMode = resolveEffectiveSandboxMode(session);
       const networkAccess = resolveEffectiveNetworkAccess(session);
       const reasoningEffort = resolveEffectiveReasoningEffort(session);
@@ -1292,14 +1589,17 @@ export async function handleBridgeCommand(
         store.getSetting('default_model'),
         readConfiguredCodexModel(),
       );
+      const chatBindingCount = listBindingsForChat(store, msg.address.channelType, msg.address.chatId).length;
       const sessionKind = session?.session_type === 'draft'
         ? '临时草稿线程'
         : '普通会话';
       response = buildCommandFields(
         '当前会话',
         [
-          ['标题', threadTitle || getSessionDisplayName(session, binding.workingDirectory)],
+          ['标题', threadInfo.title],
           ['codex-thread-id', codexThreadId || '-'],
+          ['当前 binding', threadDisplay.bindingShortId(binding)],
+          ['聊天绑定数', `${chatBindingCount}`],
           ['目录', formatCommandPath(binding.workingDirectory)],
           ['模式', formatSessionMode(binding, session)],
           ['Provider', formatSessionCodexProvider(session)],
@@ -1317,6 +1617,7 @@ export async function handleBridgeCommand(
             : session?.session_type === 'draft'
               ? '当前聊天正在使用临时草稿线程（等同 `/t 0`）。可直接发送消息，或用 `/t` / `/new proj1` / `/new 绝对路径` 切换到正式会话。'
               : '当前聊天正在使用 IM 会话。可直接发送消息继续；如需接管桌面会话，可先发送 `/t`，再用 `/t 1` 接管。',
+          '发送 `/t ls` 可查看这个聊天绑定的全部线程。',
         ],
         responseParseMode === 'Markdown',
       );
@@ -1430,12 +1731,12 @@ export async function handleBridgeCommand(
         response = '当前会话还没有历史消息。';
         break;
       }
-      const threadTitle = sessionFile?.title || getDesktopThreadTitle(getExplicitDesktopThreadId(session));
+      const threadTitle = threadDisplay.binding(commandBinding).title;
       const messageSource = desktopMessages.length > 0 ? 'Codex session JSONL' : 'Bridge 缓存';
 
       if (historyArg === 'msg') {
         response = buildHistoryMessagesCard(messages, {
-          title: threadTitle || getSessionDisplayName(session, commandBinding.workingDirectory),
+          title: threadTitle,
           source: messageSource,
           limit,
           markdown: responseParseMode === 'Markdown',
@@ -1446,7 +1747,7 @@ export async function handleBridgeCommand(
       const header = buildCommandFields(
         '最近对话（解析文本）',
         [
-          ['标题', threadTitle || getSessionDisplayName(session, commandBinding.workingDirectory)],
+          ['标题', threadTitle],
           ['来源', messageSource],
           ['返回条数', `${messages.length} / 配置 ${limit}`],
         ],
@@ -1554,7 +1855,7 @@ export async function handleBridgeCommand(
     }
 
     case '/stop': {
-      const binding = router.resolve(msg.address);
+      const binding = commandBinding || router.resolve(msg.address);
       const session = store.getSession(binding.codepilotSessionId);
       const task = deps.getActiveTask(binding.codepilotSessionId);
       const looksRunning = sessionLooksRunning(session);
@@ -1575,7 +1876,7 @@ export async function handleBridgeCommand(
         break;
       }
       if (task || looksRunning) {
-        const taskName = getSessionDisplayName(session, binding.workingDirectory);
+        const taskName = threadDisplay.binding(binding).title;
         const detail = '用户执行 /stop，已停止当前任务。';
         if (deps.forceStopSession) {
           await deps.forceStopSession(binding.codepilotSessionId, detail);
@@ -1619,45 +1920,6 @@ export async function handleBridgeCommand(
       break;
     }
 
-    case '/unbind': {
-      if (!commandBinding) {
-        response = '当前聊天还没有绑定任何会话。';
-        break;
-      }
-      const parsedArgs = parseForceFlag(args);
-      const blocked = guardBindingChangeWhileRunning(
-        store,
-        commandBinding,
-        parsedArgs.force,
-        deps,
-        responseParseMode === 'Markdown',
-      );
-      if (blocked) {
-        response = blocked;
-        break;
-      }
-      store.deleteChannelBinding(commandBinding.id);
-      auditCommandBindingChange(
-        'unbind',
-        msg,
-        commandBinding,
-        null,
-        parsedArgs.force ? 'forced' : undefined,
-      );
-      response = buildCommandFields(
-        '已解绑当前聊天',
-        [
-          ['聊天', formatBindingChatLabel(commandBinding)],
-        ],
-        [
-          '这个聊天已释放当前会话绑定。',
-          '之后如果直接发送文本，会自动进入新的临时草稿线程。',
-        ],
-        responseParseMode === 'Markdown',
-      );
-      break;
-    }
-
     case '/help':
       responseParseMode = getFeedbackParseMode(adapter.channelType);
       response = [
@@ -1673,7 +1935,13 @@ export async function handleBridgeCommand(
         `- \`/t\` 最近 ${DEFAULT_DESKTOP_THREAD_LIST_LIMIT} 条桌面会话`,
         `- \`/t all\` 最多 ${MAX_DESKTOP_THREAD_LIST_LIMIT} 条桌面会话`,
         `- \`/t n 100\` 最近 100 条桌面会话（最多 ${MAX_DESKTOP_THREAD_LIST_LIMIT} 条）`,
-        '- `/t 1` 接管第 1 条会话',
+        '- `/t 1` 接管第 1 条会话，并设为当前线程',
+        '- `/t ls` 查看当前聊天已绑定线程',
+        '- `/t add 1` 添加第 1 条桌面会话但不切走当前线程',
+        '- `/t use 1` 切换当前绑定线程（也可用 thread id、binding id 或名称）',
+        '- `/t rm 1` 移除指定绑定线程（也可用 thread id、binding id 或名称）',
+        '- `/t rename <名称>` 重命名当前线程',
+        '- 序号范围：`/t 1` 和 `/t add 1` 使用 `/t` 全局桌面会话表；`/t use 1` 和 `/t rm 1` 使用 `/t ls` 当前聊天局部绑定表',
         '- `/n` 在当前工作目录下新建线程（仅保证 IM 可继续，不会自动出现在桌面会话列表）',
         '- `/n proj1` 在默认工作空间下新建项目会话',
         '- 直接发文本：继续当前会话；未绑定时进入临时草稿线程',
@@ -1701,7 +1969,6 @@ export async function handleBridgeCommand(
         '- `/model` 查看当前模型；`/model gpt-5.4` 可切换，`/model default` 回退到默认模型',
         '- `/t 0` 临时草稿线程',
         '- `/t 0 reset` 重置草稿线程',
-        '- `/unbind` 解绑当前聊天，释放当前会话',
         '- `/stop` 停止当前任务',
         '',
         '**其它**',
@@ -1722,6 +1989,7 @@ export async function handleBridgeCommand(
       replyToMessageId: msg.messageId,
       audit: auditResponse,
       richCard: responseRichCard,
+      richCardUpdateMessageId: msg.callbackMessageId,
     });
   }
 }

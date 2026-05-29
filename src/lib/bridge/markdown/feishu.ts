@@ -6,6 +6,7 @@ import type {
   TaskProgressInfo,
   ToolCallInfo,
 } from '../types.js';
+import type { StructuredStreamingUiMetadata } from '../channel-adapter.js';
 import { buildFencedCodeBlock } from './fence.js';
 
 export interface FeishuCardActionButton {
@@ -13,6 +14,36 @@ export interface FeishuCardActionButton {
   callbackData: string;
   type?: 'default' | 'primary' | 'danger';
   disabled?: boolean;
+}
+
+export function buildCardTitleHeader(
+  metadata: StructuredStreamingUiMetadata = {},
+  options: { tagElementPrefix?: string } = {},
+): Record<string, unknown> | undefined {
+  const title = metadata.title?.trim();
+  const tags = (metadata.tags || []).map((tag) => tag.trim()).filter(Boolean).slice(0, 3);
+  if (!title && tags.length === 0) return undefined;
+  const tagElementPrefix = options.tagElementPrefix || 'title_tag';
+  return {
+    title: {
+      tag: 'plain_text',
+      content: title || 'Codex',
+    },
+    template: metadata.template || 'blue',
+    ...(tags.length > 0
+      ? {
+          text_tag_list: tags.map((tag, index) => ({
+            tag: 'text_tag',
+            element_id: `${tagElementPrefix}_${index + 1}`,
+            text: {
+              tag: 'plain_text',
+              content: tag,
+            },
+            color: metadata.tagColor || 'blue',
+          })),
+        }
+      : {}),
+  };
 }
 
 /**
@@ -624,6 +655,7 @@ export function buildFinalCardJson(
   terminalStatus?: FinalCardTerminalStatus,
   actionRows: FeishuCardActionButton[][] = [],
   chatId?: string,
+  metadata: StructuredStreamingUiMetadata = {},
 ): string {
   const elements: Array<Record<string, unknown>> = [];
 
@@ -691,9 +723,11 @@ export function buildFinalCardJson(
     elements.push(...actionElements);
   }
 
+  const header = buildCardTitleHeader(metadata);
   return JSON.stringify({
     schema: '2.0',
     config: { wide_screen_mode: true },
+    ...(header ? { header } : {}),
     body: { elements },
   });
 }

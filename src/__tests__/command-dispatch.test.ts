@@ -11,6 +11,7 @@ import { initBridgeContext } from '../lib/bridge/context.js';
 import { handleBridgeCommand } from '../lib/bridge/command-dispatch.js';
 import { buildCommandCallbackData, parseCommandCallbackData } from '../lib/bridge/command-callbacks.js';
 import * as router from '../lib/bridge/channel-router.js';
+import type { OutboundRichCard } from '../lib/bridge/types.js';
 
 const DATA_DIR = path.join(CTI_HOME, 'data');
 
@@ -532,6 +533,173 @@ describe('command-dispatch', () => {
     assert.match(sent[0] || '', /旧会话「Bridge: chat-stop-stale」任务已停止/);
   });
 
+  it('lists, switches, and removes multiple bindings with /t subcommands', async () => {
+    const store = initTestContext();
+    const sent: string[] = [];
+    const richCards: OutboundRichCard[] = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      send: async (message: { text: string; richCard?: OutboundRichCard }) => {
+        sent.push(message.text);
+        if (message.richCard) richCards.push(message.richCard);
+        return { ok: true, messageId: `reply-t-${sent.length}` };
+      },
+    };
+    const address = { channelType: 'feishu', chatId: 'chat-t-multi' } as const;
+    const first = router.createBinding(address, 'D:\\workspace\\first');
+    const second = router.createBinding(address, 'D:\\workspace\\second');
+
+    assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, second.id);
+    assert.equal(store.listChannelBindings().filter((binding) => binding.chatId === address.chatId).length, 2);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/t ls',
+        messageId: 'incoming-t-ls',
+      } as any,
+      '/t ls',
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      },
+    );
+    assert.match(sent.at(-1) || '', /当前聊天绑定/);
+    assert.match(sent.at(-1) || '', /first/);
+    assert.match(sent.at(-1) || '', /second/);
+    assert.equal(richCards.at(-1)?.title, '当前聊天绑定（2）');
+    assert.deepEqual(
+      richCards.at(-1)?.actions?.flat().map((action) => action.text),
+      ['解绑', '激活', '刷新'],
+    );
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/t use 1',
+        messageId: 'incoming-t-use',
+      } as any,
+      '/t use 1',
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      },
+    );
+    assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, first.id);
+    assert.match(sent.at(-1) || '', /当前线程已切换/);
+    assert.equal(richCards.length, 1);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/t rm 2',
+        messageId: 'incoming-t-rm',
+      } as any,
+      '/t rm 2',
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      },
+    );
+    const remaining = store.listChannelBindings().filter((binding) => binding.chatId === address.chatId);
+    assert.deepEqual(remaining.map((binding) => binding.id), [first.id]);
+    assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, first.id);
+    assert.match(sent.at(-1) || '', /已移除绑定线程/);
+    assert.equal(richCards.length, 1);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/t remove 1',
+        messageId: 'incoming-t-remove',
+      } as any,
+      '/t remove 1',
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      },
+    );
+    assert.equal(store.listChannelBindings().filter((binding) => binding.chatId === address.chatId).length, 0);
+    assert.match(sent.at(-1) || '', /已移除绑定线程/);
+    assert.equal(richCards.length, 1);
+  });
+
+  it('resolves /t bound-thread targets by unique name and rejects duplicate names', async () => {
+    const store = initTestContext();
+    const sent: string[] = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      send: async (message: { text: string }) => {
+        sent.push(message.text);
+        return { ok: true, messageId: `reply-t-name-${sent.length}` };
+      },
+    };
+    const address = { channelType: 'feishu', chatId: 'chat-t-name' } as const;
+    const first = router.createBinding(address, 'D:\\workspace\\first-name');
+    const second = router.createBinding(address, 'D:\\workspace\\second-name');
+    store.updateSession(first.codepilotSessionId, { name: '前端修复' });
+    store.updateSession(second.codepilotSessionId, { name: '后端修复' });
+
+    const deps = {
+      getActiveTask: () => undefined,
+      diagnoseSessionHealth: async () => null,
+      diagnoseAllActiveSessions: async () => [],
+    };
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/t use 前端修复',
+        messageId: 'incoming-t-use-name',
+      } as any,
+      '/t use 前端修复',
+      deps,
+    );
+
+    assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, first.id);
+    assert.match(sent.at(-1) || '', /当前线程已切换/);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/t rm 后端修复',
+        messageId: 'incoming-t-rm-name',
+      } as any,
+      '/t rm 后端修复',
+      deps,
+    );
+
+    assert.equal(store.listChannelBindings().filter((binding) => binding.chatId === address.chatId).length, 1);
+    assert.match(sent.at(-1) || '', /已移除绑定线程/);
+
+    const duplicate = router.createBinding(address, 'D:\\workspace\\duplicate-name');
+    store.updateSession(duplicate.codepilotSessionId, { name: '前端修复' });
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/t use 前端修复',
+        messageId: 'incoming-t-use-duplicate-name',
+      } as any,
+      '/t use 前端修复',
+      deps,
+    );
+
+    assert.match(sent.at(-1) || '', /匹配到多个绑定线程/);
+  });
+
   it('maps /stop to C-c for a running tmux provider mirror turn', async () => {
     const store = initTestContext();
     const fakeTmux = installFakeTmux();
@@ -594,27 +762,30 @@ describe('command-dispatch', () => {
     }
   });
 
-  it('removes the current binding on /unbind', async () => {
+  it('renames the current /t binding and rejects ambiguous identifier-like names', async () => {
     const store = initTestContext();
     const sent: string[] = [];
+    const richCards: OutboundRichCard[] = [];
     const adapter: any = {
       channelType: 'feishu',
-      send: async (message: { text: string }) => {
+      provider: 'feishu',
+      send: async (message: { text: string; richCard?: OutboundRichCard }) => {
         sent.push(message.text);
-        return { ok: true, messageId: 'reply-unbind-1' };
+        if (message.richCard) richCards.push(message.richCard);
+        return { ok: true, messageId: `reply-rename-${sent.length}` };
       },
     };
-    const address = { channelType: 'feishu', chatId: 'chat-unbind' } as const;
-    router.createBinding(address, 'D:\\workspace\\unbind');
+    const address = { channelType: 'feishu', chatId: 'chat-rename' } as const;
+    const binding = router.createBinding(address, 'D:\\workspace\\rename');
 
     await handleBridgeCommand(
       adapter,
       {
         address,
-        text: '/unbind',
-        messageId: 'incoming-unbind-1',
+        text: '/t rename 12345',
+        messageId: 'incoming-rename-1',
       } as any,
-      '/unbind',
+      '/t rename 12345',
       {
         getActiveTask: () => undefined,
         diagnoseSessionHealth: async () => null,
@@ -622,9 +793,30 @@ describe('command-dispatch', () => {
       },
     );
 
-    assert.equal(store.getChannelBinding(address.channelType, address.chatId), null);
-    assert.match(sent[0] || '', /已解绑当前聊天/);
-    assert.match(sent[0] || '', /自动进入新的临时草稿线程/);
+    assert.equal(store.getSession(binding.codepilotSessionId)?.name, 'Bridge: chat-rename');
+    assert.match(sent[0] || '', /名称不能是纯数字/);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/t rename 前端修复',
+        messageId: 'incoming-rename-2',
+      } as any,
+      '/t rename 前端修复',
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      },
+    );
+
+    assert.equal(store.getSession(binding.codepilotSessionId)?.name, '前端修复');
+    assert.match(sent[1] || '', /当前线程已重命名/);
+    assert.match(sent[1] || '', /binding_id/);
+    assert.equal(richCards.length, 0);
+    const meta = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'ui-session-meta.json'), 'utf-8'));
+    assert.equal(meta[`session:${binding.codepilotSessionId}`]?.name, '前端修复');
   });
 
   it('prints file content with /cat and escapes embedded fences', async () => {

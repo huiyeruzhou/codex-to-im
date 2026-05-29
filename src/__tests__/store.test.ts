@@ -72,7 +72,7 @@ describe('JsonFileStore', () => {
     assert.equal(fetched?.health_reason, '任务已完成。');
   });
 
-  it('upsertChannelBinding creates and updates', () => {
+  it('upsertChannelBinding creates multiple bindings per chat and switches active target', () => {
     const store = new JsonFileStore(makeSettings());
     const b1 = store.upsertChannelBinding({
       channelType: 'feishu-default',
@@ -90,7 +90,8 @@ describe('JsonFileStore', () => {
     assert.equal(b1.chatUserId, 'user-1');
     assert.equal(b1.chatDisplayName, 'Alice');
 
-    // Upsert same channel+chat should update
+    // Upserting a different target in the same chat should preserve the old
+    // binding and make the new target active.
     const b2 = store.upsertChannelBinding({
       channelType: 'feishu-default',
       chatId: '123',
@@ -100,11 +101,52 @@ describe('JsonFileStore', () => {
       model: 'model-2',
       mode: 'yolo',
     });
-    assert.equal(b2.id, b1.id);
+    assert.notEqual(b2.id, b1.id);
     assert.equal(b2.codepilotSessionId, 'sess-2');
     assert.equal(b2.mode, 'yolo');
-    assert.equal(b2.chatUserId, 'user-1');
+    assert.equal(b2.chatUserId, undefined);
     assert.equal(b2.chatDisplayName, 'Alice Cooper');
+    assert.equal(store.getChannelBinding('feishu-default', '123')?.id, b2.id);
+
+    const bindings = store.listChannelBindings('feishu-default').filter((binding) => binding.chatId === '123');
+    assert.equal(bindings.length, 2);
+    assert.equal(bindings.filter((binding) => binding.active !== false).length, 1);
+    assert.equal(bindings.find((binding) => binding.id === b1.id)?.active, false);
+
+    const b1Updated = store.upsertChannelBinding({
+      channelType: 'feishu-default',
+      chatId: '123',
+      chatUserId: 'user-1b',
+      chatDisplayName: 'Alice',
+      codepilotSessionId: 'sess-1',
+      workingDirectory: '/tmp/again',
+      model: 'model-1b',
+    });
+    assert.equal(b1Updated.id, b1.id);
+    assert.equal(store.getChannelBinding('feishu-default', '123')?.id, b1.id);
+    assert.equal(b1Updated.chatUserId, 'user-1b');
+  });
+
+  it('can add an inactive binding without changing the current active binding', () => {
+    const store = new JsonFileStore(makeSettings());
+    const active = store.upsertChannelBinding({
+      channelType: 'feishu-default',
+      chatId: 'multi',
+      codepilotSessionId: 'sess-active',
+      workingDirectory: '/tmp/active',
+      model: 'model-1',
+    });
+    const inactive = store.upsertChannelBinding({
+      channelType: 'feishu-default',
+      chatId: 'multi',
+      codepilotSessionId: 'sess-inactive',
+      workingDirectory: '/tmp/inactive',
+      model: 'model-2',
+      active: false,
+    });
+
+    assert.equal(store.getChannelBinding('feishu-default', 'multi')?.id, active.id);
+    assert.equal(store.listChannelBindings().find((binding) => binding.id === inactive.id)?.active, false);
   });
 
   it('upsertChannelBinding uses default mode from settings', () => {

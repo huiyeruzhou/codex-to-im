@@ -22,6 +22,7 @@ export async function deliverTextResponse(
   options?: {
     audit?: boolean;
     richCard?: OutboundRichCard;
+    richCardUpdateMessageId?: string;
   },
 ): Promise<SendResult> {
   if (!responseText.trim()) return { ok: true };
@@ -35,6 +36,7 @@ export async function deliverTextResponse(
       text: responseText,
       parseMode: 'Markdown',
       richCard: options?.richCard,
+      richCardUpdateMessageId: options?.richCardUpdateMessageId,
       replyToMessageId,
     }, { sessionId, audit: options?.audit });
   }
@@ -43,6 +45,7 @@ export async function deliverTextResponse(
     text: parseMode === 'Markdown' ? responseText : renderedText,
     parseMode,
     richCard: options?.richCard,
+    richCardUpdateMessageId: options?.richCardUpdateMessageId,
     replyToMessageId,
   }, { sessionId, audit: options?.audit });
 }
@@ -56,6 +59,7 @@ export async function deliverBridgeNotice(
     replyToMessageId?: string;
     audit?: boolean;
     richCard?: OutboundRichCard;
+    richCardUpdateMessageId?: string;
   },
 ): Promise<SendResult> {
   return deliverTextResponse(
@@ -64,7 +68,11 @@ export async function deliverBridgeNotice(
     text,
     options?.sessionId,
     options?.replyToMessageId,
-    { audit: options?.audit, richCard: options?.richCard },
+    {
+      audit: options?.audit,
+      richCard: options?.richCard,
+      richCardUpdateMessageId: options?.richCardUpdateMessageId,
+    },
   );
 }
 

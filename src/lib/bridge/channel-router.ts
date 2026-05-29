@@ -127,6 +127,7 @@ export function createBinding(
 export function bindToSession(
   address: ChannelAddress,
   codepilotSessionId: string,
+  opts?: { active?: boolean },
 ): ChannelBinding | null {
   return bindStoreToSession(
     getBridgeContext().store,
@@ -136,6 +137,7 @@ export function bindToSession(
     {
       chatUserId: address.userId,
       chatDisplayName: address.displayName,
+      active: opts?.active,
     },
   );
 }
@@ -146,7 +148,7 @@ export function bindToSession(
 export function bindToSdkSession(
   address: ChannelAddress,
   sdkSessionId: string,
-  opts?: { workingDirectory?: string; model?: string; displayName?: string },
+  opts?: { workingDirectory?: string; model?: string; displayName?: string; active?: boolean },
 ): ChannelBinding {
   return bindStoreToSdkSession(getBridgeContext().store, address.channelType, address.chatId, sdkSessionId, {
     ...opts,

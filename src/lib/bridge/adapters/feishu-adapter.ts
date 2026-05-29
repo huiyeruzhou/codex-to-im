@@ -39,6 +39,7 @@ import {
   BaseChannelAdapter,
   registerAdapterFactory,
   type AdapterRuntimeInstance,
+  type StructuredStreamingUiMetadata,
   type StructuredStreamingUiSnapshot,
 } from '../channel-adapter.js';
 import { getBridgeContext } from '../context.js';
@@ -47,6 +48,7 @@ import {
   preprocessFeishuMarkdown,
   hasComplexMarkdown,
   buildCardContent,
+  buildCardTitleHeader,
   buildRichCardContent,
   buildPostContent,
   buildStreamingTaskContent,
@@ -89,6 +91,8 @@ interface FeishuCardState {
   renderedStatusText: string | null;
   actionRows: FeishuCardActionButton[][];
   renderedActionSignature: string;
+  metadata: StructuredStreamingUiMetadata;
+  renderedMetadataSignature: string;
   lastUpdateAt: number;
   throttleTimer: ReturnType<typeof setTimeout> | null;
   flushInFlight: Promise<void> | null;
@@ -102,11 +106,19 @@ interface FeishuCardState {
   lastSuccessfulFullRefreshAt: number | null;
 }
 
+interface RichCardUpdateState {
+  cardId: string;
+  messageId: string;
+  lastInteractionAt: number;
+  sequence: number;
+}
+
 /** Streaming card throttle interval (ms). */
 const CARD_THROTTLE_MS = 1000;
 const CARD_REQUEST_TIMEOUT_MS = 15_000;
 const CARD_FINALIZE_FLUSH_WAIT_EXTRA_MS = 1_000;
 const CARD_FULL_REFRESH_INTERVAL_MS = 5 * 60_000;
+const RICH_CARD_DEFAULT_UPDATE_TTL_MS = 60_000;
 const INITIAL_STREAMING_STATUS = '处理中';
 const EMPTY_STREAMING_TASKS = '';
 const EMPTY_STREAMING_TOOLS = '';
@@ -434,8 +446,11 @@ function buildStreamingCardBody(
   statusText: string,
   actionRows: FeishuCardActionButton[][] = [],
   chatId?: string,
+  metadata: StructuredStreamingUiMetadata = {},
 ): Record<string, unknown> {
-  const elements: Array<Record<string, unknown>> = [
+  const normalizedMetadata = normalizeStreamMetadata(metadata);
+  const elements: Array<Record<string, unknown>> = [];
+  elements.push(
     {
       tag: 'markdown',
       content,
@@ -464,12 +479,13 @@ function buildStreamingCardBody(
       text_size: 'notation',
       element_id: 'streaming_status',
     },
-  ];
+  );
   const actionElements = buildCardActionElements(actionRows, chatId);
   if (actionElements.length > 0) {
     elements.push({ tag: 'hr' }, ...actionElements);
   }
 
+  const header = buildCardTitleHeader(normalizedMetadata, { tagElementPrefix: 'streaming_tag' });
   return {
     schema: '2.0',
     config: {
@@ -477,6 +493,7 @@ function buildStreamingCardBody(
       wide_screen_mode: true,
       summary: { content: '思考中...' },
     },
+    ...(header ? { header } : {}),
     body: {
       elements,
     },
@@ -498,6 +515,19 @@ function normalizeCardActionRows(actionRows: FeishuCardActionButton[][]): Feishu
 
 function cardActionRowsSignature(actionRows: FeishuCardActionButton[][]): string {
   return JSON.stringify(normalizeCardActionRows(actionRows));
+}
+
+function normalizeStreamMetadata(metadata: StructuredStreamingUiMetadata = {}): StructuredStreamingUiMetadata {
+  return {
+    title: metadata.title?.trim() || undefined,
+    tags: (metadata.tags || []).map((tag) => tag.trim()).filter(Boolean).slice(0, 6),
+    template: metadata.template || 'blue',
+    tagColor: metadata.tagColor || 'blue',
+  };
+}
+
+function streamMetadataSignature(metadata: StructuredStreamingUiMetadata = {}): string {
+  return JSON.stringify(normalizeStreamMetadata(metadata));
 }
 
 function summarizeCardActionRows(actionRows: FeishuCardActionButton[][]): {
@@ -575,6 +605,10 @@ export class FeishuAdapter extends BaseChannelAdapter {
   private cardCreatePromises = new Map<string, Promise<boolean>>();
   /** Action rows to apply when a streaming card is created or refreshed. */
   private streamActionRows = new Map<string, FeishuCardActionButton[][]>();
+  /** Metadata to apply when a streaming card is created or refreshed. */
+  private pendingStreamMetadata = new Map<string, StructuredStreamingUiMetadata>();
+  /** Recently sent rich command cards that can be updated in-place. */
+  private richCardUpdates = new Map<string, RichCardUpdateState>();
   /** Cached tenant token for upload APIs. */
   private tenantTokenCache:
     | { token: string; expiresAt: number; appId: string; appSecret: string; domain: string }
@@ -778,6 +812,8 @@ export class FeishuAdapter extends BaseChannelAdapter {
     this.activeCards.clear();
     this.cardCreatePromises.clear();
     this.streamActionRows.clear();
+    this.pendingStreamMetadata.clear();
+    this.richCardUpdates.clear();
 
     // Clear state
     this.seenMessageIds.clear();
@@ -896,7 +932,12 @@ export class FeishuAdapter extends BaseChannelAdapter {
         callbackData,
       });
 
-      return { toast: { type: 'info' as const, content: '已收到，正在处理...' } };
+      return {
+        toast: {
+          type: 'info' as const,
+          content: String(callbackData).startsWith('cti-thread-select:') ? '已选择' : '已收到，正在处理...',
+        },
+      };
     } catch (err) {
       console.error('[feishu-adapter] Card action handler error:', err instanceof Error ? err.message : err);
       return FALLBACK_TOAST;
@@ -950,6 +991,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         INITIAL_STREAMING_STATUS,
         actionRows,
         chatId,
+        this.pendingStreamMetadata.get(cardKey),
       );
       const initialCardJson = JSON.stringify(cardBody);
       console.log('[feishu-adapter] Streaming card create payload:', {
@@ -969,14 +1011,12 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
       // Step 2: Send card as IM message
       const cardContent = JSON.stringify({ type: 'card', data: { card_id: cardId } });
-      let msgResp;
-      if (replyToMessageId) {
-        msgResp = await this.withFeishuRequestTimeout(cardKey, 'im.message.reply:interactive', () => this.restClient!.im.message.reply({
+      const msgResp = replyToMessageId
+        ? await this.withFeishuRequestTimeout(cardKey, 'im.message.reply:interactive', () => this.restClient!.im.message.reply({
           path: { message_id: replyToMessageId },
           data: { content: cardContent, msg_type: 'interactive' },
-        }));
-      } else {
-        msgResp = await this.withFeishuRequestTimeout(cardKey, 'im.message.create:interactive', () => this.restClient!.im.message.create({
+        }))
+        : await this.withFeishuRequestTimeout(cardKey, 'im.message.create:interactive', () => this.restClient!.im.message.create({
           params: { receive_id_type: 'chat_id' },
           data: {
             receive_id: chatId,
@@ -984,7 +1024,6 @@ export class FeishuAdapter extends BaseChannelAdapter {
             content: cardContent,
           },
         }));
-      }
 
       const messageId = msgResp?.data?.message_id;
       if (!messageId) {
@@ -994,6 +1033,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
       // Store card state
       const now = Date.now();
+      const metadata = normalizeStreamMetadata(this.pendingStreamMetadata.get(cardKey));
       this.activeCards.set(cardKey, {
         chatId,
         cardId,
@@ -1012,6 +1052,8 @@ export class FeishuAdapter extends BaseChannelAdapter {
         renderedStatusText: INITIAL_STREAMING_STATUS,
         actionRows,
         renderedActionSignature: cardActionRowsSignature(actionRows),
+        metadata,
+        renderedMetadataSignature: streamMetadataSignature(metadata),
         lastUpdateAt: 0,
         throttleTimer: null,
         flushInFlight: null,
@@ -1080,6 +1122,16 @@ export class FeishuAdapter extends BaseChannelAdapter {
     const state = this.activeCards.get(cardKey);
     if (!state || !this.restClient) return;
     state.actionRows = normalized;
+    this.scheduleCardFlush(cardKey);
+  }
+
+  private updateCardMetadata(chatId: string, metadata: StructuredStreamingUiMetadata, streamKey?: string): void {
+    const cardKey = this.resolveStreamKey(chatId, streamKey);
+    const normalized = normalizeStreamMetadata(metadata);
+    this.pendingStreamMetadata.set(cardKey, normalized);
+    const state = this.activeCards.get(cardKey);
+    if (!state || !this.restClient) return;
+    state.metadata = normalized;
     this.scheduleCardFlush(cardKey);
   }
 
@@ -1156,7 +1208,12 @@ export class FeishuAdapter extends BaseChannelAdapter {
     const actionSignature = cardActionRowsSignature(actionRows);
     const updates: Array<{ elementId: string; content: string; onSuccess: () => void }> = [];
 
-    if (actionSignature !== state.renderedActionSignature || this.shouldFullRefreshCard(state, Date.now())) {
+    const metadataSignature = streamMetadataSignature(state.metadata);
+    if (
+      actionSignature !== state.renderedActionSignature
+      || metadataSignature !== state.renderedMetadataSignature
+      || this.shouldFullRefreshCard(state, Date.now())
+    ) {
       const refreshed = await this.flushFullCardRefresh(
         streamKey,
         state,
@@ -1165,6 +1222,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         toolsText,
         statusText,
         actionRows,
+        state.metadata,
       );
       if (refreshed) return;
     }
@@ -1344,6 +1402,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
         status,
         state.actionRows,
         state.chatId,
+        state.metadata,
       );
 
       state.sequence++;
@@ -1379,6 +1438,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     } finally {
       this.activeCards.delete(cardKey);
       this.streamActionRows.delete(cardKey);
+      this.pendingStreamMetadata.delete(cardKey);
     }
   }
 
@@ -1412,6 +1472,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     }
     this.activeCards.delete(cardKey);
     this.streamActionRows.delete(cardKey);
+    this.pendingStreamMetadata.delete(cardKey);
   }
 
   /**
@@ -1455,6 +1516,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
     toolsText: string,
     statusText: string,
     actionRows: FeishuCardActionButton[][] = [],
+    metadata: StructuredStreamingUiMetadata = {},
   ): Promise<boolean> {
     state.lastFullRefreshAttemptAt = Date.now();
     const cardkit = (this.restClient as any)?.cardkit?.v1;
@@ -1462,7 +1524,8 @@ export class FeishuAdapter extends BaseChannelAdapter {
 
     try {
       state.sequence++;
-      const refreshCardJson = JSON.stringify(buildStreamingCardBody(content, tasksText, toolsText, statusText, actionRows, state.chatId));
+      const normalizedMetadata = normalizeStreamMetadata(metadata);
+      const refreshCardJson = JSON.stringify(buildStreamingCardBody(content, tasksText, toolsText, statusText, actionRows, state.chatId, normalizedMetadata));
       console.log('[feishu-adapter] Streaming card full refresh payload:', {
         streamKey,
         cardId: state.cardId,
@@ -1492,6 +1555,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       state.renderedToolsText = toolsText;
       state.renderedStatusText = statusText;
       state.renderedActionSignature = cardActionRowsSignature(actionRows);
+      state.renderedMetadataSignature = streamMetadataSignature(normalizedMetadata);
       state.lastSuccessfulFullRefreshAt = Date.now();
       this.markCardFlushSuccess(state);
       return true;
@@ -1645,6 +1709,11 @@ export class FeishuAdapter extends BaseChannelAdapter {
     this.updateCardStatus(chatId, statusText, cardKey);
   }
 
+  onStreamMetadata(chatId: string, metadata: StructuredStreamingUiMetadata, streamKey?: string): void {
+    if (!this.isStreamingEnabled()) return;
+    this.updateCardMetadata(chatId, metadata, streamKey);
+  }
+
   onStreamActions(chatId: string, actionRows: FeishuCardActionButton[][], streamKey?: string): void {
     if (!this.isStreamingEnabled()) return;
     this.updateCardActions(chatId, actionRows, streamKey);
@@ -1689,20 +1758,26 @@ export class FeishuAdapter extends BaseChannelAdapter {
     }
 
     if (message.richCard) {
-      return this.sendRichCard(message.address.chatId, message.richCard, text);
+      return this.sendRichCard(
+        message.address.chatId,
+        message.richCard,
+        text,
+        message.replyToMessageId,
+        message.richCardUpdateMessageId,
+      );
     }
 
     if (message.parseMode === 'plain') {
-      return this.sendAsPlainText(message.address.chatId, text);
+      return this.sendAsPlainText(message.address.chatId, text, message.replyToMessageId);
     }
 
     // Rendering strategy (aligned with Openclaw):
     // - Code blocks / tables → interactive card (schema 2.0 markdown)
     // - Other text → post (md tag)
     if (hasComplexMarkdown(text)) {
-      return this.sendAsCard(message.address.chatId, text);
+      return this.sendAsCard(message.address.chatId, text, message.replyToMessageId);
     }
-    return this.sendAsPost(message.address.chatId, text);
+    return this.sendAsPost(message.address.chatId, text, message.replyToMessageId);
   }
 
   private getOpenApiBaseUrl(): string {
@@ -1889,18 +1964,130 @@ export class FeishuAdapter extends BaseChannelAdapter {
     chatId: string,
     card: NonNullable<OutboundMessage['richCard']>,
     fallbackText: string,
+    replyToMessageId?: string,
+    updateMessageId?: string,
   ): Promise<SendResult> {
     const cardContent = buildRichCardContent(card, chatId);
+    const updateKey = card.updateKey?.trim();
+    const updateTtlMs = card.updateTtlMs === null
+      ? null
+      : Math.max(0, card.updateTtlMs ?? RICH_CARD_DEFAULT_UPDATE_TTL_MS);
+    const cardkit = (this.restClient as any)?.cardkit?.v1;
+
+    if (updateKey && cardkit?.card?.update) {
+      const now = Date.now();
+      const existing = this.richCardUpdates.get(updateKey);
+      let updateState: RichCardUpdateState | null = null;
+
+      if (
+        updateMessageId
+        && existing
+        && existing.messageId === updateMessageId
+        && (updateTtlMs === null || now - existing.lastInteractionAt <= updateTtlMs)
+      ) {
+        updateState = existing;
+      } else if (updateMessageId && cardkit.card.idConvert) {
+        try {
+          const converted = await this.withFeishuRequestTimeout<{ data?: { card_id?: string } }>(
+            updateKey,
+            'card.idConvert:rich-command-card',
+            () => cardkit.card.idConvert({
+              data: { message_id: updateMessageId },
+            }),
+          );
+          const recoveredCardId = converted?.data?.card_id;
+          if (recoveredCardId) {
+            updateState = {
+              cardId: recoveredCardId,
+              messageId: updateMessageId,
+              lastInteractionAt: now,
+              sequence: now,
+            };
+          }
+        } catch (err) {
+          console.warn('[feishu-adapter] Rich command card idConvert failed:', err instanceof Error ? err.message : err);
+        }
+      }
+
+      if (updateState) {
+        try {
+          updateState.sequence += 1;
+          await this.withFeishuRequestTimeout(updateKey, 'card.update:rich-command-card', () => cardkit.card.update({
+            path: { card_id: updateState.cardId },
+            data: {
+              card: { type: 'card_json', data: cardContent },
+              sequence: updateState.sequence,
+            },
+          }));
+          updateState.lastInteractionAt = now;
+          this.richCardUpdates.set(updateKey, updateState);
+          return { ok: true, messageId: updateState.messageId };
+        } catch (err) {
+          console.warn('[feishu-adapter] Rich command card update failed:', err instanceof Error ? err.message : err);
+          if (this.richCardUpdates.get(updateKey)?.messageId === updateState.messageId) {
+            this.richCardUpdates.delete(updateKey);
+          }
+          if (updateMessageId) {
+            return this.sendAsPost(chatId, fallbackText, replyToMessageId);
+          }
+        }
+      }
+
+      if (updateMessageId) {
+        return this.sendAsPost(chatId, fallbackText, replyToMessageId);
+      }
+    }
+
+    if (updateKey && cardkit?.card?.create) {
+      try {
+        const createResp = await this.withFeishuRequestTimeout<{ data?: { card_id?: string } }>(updateKey, 'card.create:rich-command-card', () => cardkit.card.create({
+          data: { type: 'card_json', data: cardContent },
+        }));
+        const cardId = createResp?.data?.card_id;
+        if (cardId) {
+          const linkedCardContent = JSON.stringify({ type: 'card', data: { card_id: cardId } });
+          const res = replyToMessageId
+            ? await this.withFeishuRequestTimeout(updateKey, 'im.message.reply:rich-command-card', () => this.restClient!.im.message.reply({
+              path: { message_id: replyToMessageId },
+              data: { msg_type: 'interactive', content: linkedCardContent },
+            }))
+            : await this.withFeishuRequestTimeout(updateKey, 'im.message.create:rich-command-card', () => this.restClient!.im.message.create({
+              params: { receive_id_type: 'chat_id' },
+              data: {
+                receive_id: chatId,
+                msg_type: 'interactive',
+                content: linkedCardContent,
+              },
+            }));
+          if (res?.data?.message_id) {
+            this.richCardUpdates.set(updateKey, {
+              cardId,
+              messageId: res.data.message_id,
+              lastInteractionAt: Date.now(),
+              sequence: 0,
+            });
+            return { ok: true, messageId: res.data.message_id };
+          }
+        }
+      } catch (err) {
+        console.warn('[feishu-adapter] Rich command card create/send error, falling back:', err instanceof Error ? err.message : err);
+      }
+    }
 
     try {
-      const res = await this.withFeishuRequestTimeout(chatId, 'im.message.create:rich-command-card', () => this.restClient!.im.message.create({
-        params: { receive_id_type: 'chat_id' },
-        data: {
-          receive_id: chatId,
-          msg_type: 'interactive',
-          content: cardContent,
-        },
-      }));
+      const res = replyToMessageId
+        ? await this.withFeishuRequestTimeout(chatId, 'im.message.reply:rich-command-card', () => this.restClient!.im.message.reply({
+          path: { message_id: replyToMessageId },
+          data: { msg_type: 'interactive', content: cardContent },
+        }))
+        : await this.withFeishuRequestTimeout(chatId, 'im.message.create:rich-command-card', () => this.restClient!.im.message.create({
+          params: { receive_id_type: 'chat_id' },
+          data: {
+            receive_id: chatId,
+            msg_type: 'interactive',
+            content: cardContent,
+          },
+        }));
 
       if (res?.data?.message_id) {
         return { ok: true, messageId: res.data.message_id };
@@ -1910,25 +2097,30 @@ export class FeishuAdapter extends BaseChannelAdapter {
       console.warn('[feishu-adapter] Rich command card send error, falling back to text:', err instanceof Error ? err.message : err);
     }
 
-    return this.sendAsPost(chatId, fallbackText);
+    return this.sendAsPost(chatId, fallbackText, replyToMessageId);
   }
 
   /**
    * Send text as an interactive card (schema 2.0 markdown).
    * Used for code blocks and tables — card renders them properly.
    */
-  private async sendAsCard(chatId: string, text: string): Promise<SendResult> {
+  private async sendAsCard(chatId: string, text: string, replyToMessageId?: string): Promise<SendResult> {
     const cardContent = buildCardContent(text);
 
     try {
-      const res = await this.withFeishuRequestTimeout(chatId, 'im.message.create:interactive-card', () => this.restClient!.im.message.create({
-        params: { receive_id_type: 'chat_id' },
-        data: {
-          receive_id: chatId,
-          msg_type: 'interactive',
-          content: cardContent,
-        },
-      }));
+      const res = replyToMessageId
+        ? await this.withFeishuRequestTimeout(chatId, 'im.message.reply:interactive-card', () => this.restClient!.im.message.reply({
+          path: { message_id: replyToMessageId },
+          data: { msg_type: 'interactive', content: cardContent },
+        }))
+        : await this.withFeishuRequestTimeout(chatId, 'im.message.create:interactive-card', () => this.restClient!.im.message.create({
+          params: { receive_id_type: 'chat_id' },
+          data: {
+            receive_id: chatId,
+            msg_type: 'interactive',
+            content: cardContent,
+          },
+        }));
 
       if (res?.data?.message_id) {
         return { ok: true, messageId: res.data.message_id };
@@ -1939,25 +2131,30 @@ export class FeishuAdapter extends BaseChannelAdapter {
     }
 
     // Fallback to post
-    return this.sendAsPost(chatId, text);
+    return this.sendAsPost(chatId, text, replyToMessageId);
   }
 
   /**
    * Send text as a post message (msg_type: 'post') with md tag.
    * Used for simple text — renders bold, italic, inline code, links.
    */
-  private async sendAsPost(chatId: string, text: string): Promise<SendResult> {
+  private async sendAsPost(chatId: string, text: string, replyToMessageId?: string): Promise<SendResult> {
     const postContent = buildPostContent(text);
 
     try {
-      const res = await this.withFeishuRequestTimeout(chatId, 'im.message.create:post', () => this.restClient!.im.message.create({
-        params: { receive_id_type: 'chat_id' },
-        data: {
-          receive_id: chatId,
-          msg_type: 'post',
-          content: postContent,
-        },
-      }));
+      const res = replyToMessageId
+        ? await this.withFeishuRequestTimeout(chatId, 'im.message.reply:post', () => this.restClient!.im.message.reply({
+          path: { message_id: replyToMessageId },
+          data: { msg_type: 'post', content: postContent },
+        }))
+        : await this.withFeishuRequestTimeout(chatId, 'im.message.create:post', () => this.restClient!.im.message.create({
+          params: { receive_id_type: 'chat_id' },
+          data: {
+            receive_id: chatId,
+            msg_type: 'post',
+            content: postContent,
+          },
+        }));
 
       if (res?.data?.message_id) {
         return { ok: true, messageId: res.data.message_id };
@@ -1968,19 +2165,25 @@ export class FeishuAdapter extends BaseChannelAdapter {
     }
 
     // Final fallback: plain text
-    return this.sendAsPlainText(chatId, text);
+    return this.sendAsPlainText(chatId, text, replyToMessageId);
   }
 
-  private async sendAsPlainText(chatId: string, text: string): Promise<SendResult> {
+  private async sendAsPlainText(chatId: string, text: string, replyToMessageId?: string): Promise<SendResult> {
     try {
-      const res = await this.withFeishuRequestTimeout(chatId, 'im.message.create:text', () => this.restClient!.im.message.create({
-        params: { receive_id_type: 'chat_id' },
-        data: {
-          receive_id: chatId,
-          msg_type: 'text',
-          content: JSON.stringify({ text }),
-        },
-      }));
+      const content = JSON.stringify({ text });
+      const res = replyToMessageId
+        ? await this.withFeishuRequestTimeout(chatId, 'im.message.reply:text', () => this.restClient!.im.message.reply({
+          path: { message_id: replyToMessageId },
+          data: { msg_type: 'text', content },
+        }))
+        : await this.withFeishuRequestTimeout(chatId, 'im.message.create:text', () => this.restClient!.im.message.create({
+          params: { receive_id_type: 'chat_id' },
+          data: {
+            receive_id: chatId,
+            msg_type: 'text',
+            content,
+          },
+        }));
       if (res?.data?.message_id) {
         return { ok: true, messageId: res.data.message_id };
       }
