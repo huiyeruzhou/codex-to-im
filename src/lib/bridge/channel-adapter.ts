@@ -82,6 +82,12 @@ export abstract class BaseChannelAdapter {
    */
   abstract send(message: OutboundMessage): Promise<SendResult>;
 
+  /** Pin a previously sent message when the provider supports it. */
+  pinMessage?(_chatId: string, _messageId: string): Promise<SendResult>;
+
+  /** Remove a pin from a previously sent message when the provider supports it. */
+  unpinMessage?(_chatId: string, _messageId: string): Promise<SendResult>;
+
   /**
    * Answer a callback query or interactive-card action when supported.
    * Not all platforms support this — default implementation is a no-op.

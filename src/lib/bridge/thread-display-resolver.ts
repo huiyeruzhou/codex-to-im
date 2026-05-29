@@ -5,17 +5,16 @@ import { CTI_HOME } from '../../config.js';
 import type { DesktopSessionSummary } from '../../desktop-sessions.js';
 import { getDesktopSessionByThreadIdSafe } from './bridge-session-support.js';
 import {
+  buildBoundThreadsCommandResponse,
   buildBoundThreadsCommandCard,
   buildCommandFields,
   buildDesktopThreadsCommandCard,
-  formatCommandPath,
   getSessionDisplayName,
   stripDesktopSessionPrefix,
   type BoundThreadCardItem,
   type DesktopThreadCardBindingState,
 } from './command-formatters.js';
 import type { BridgeStore } from './host.js';
-import { buildFencedCodeBlock } from './markdown/fence.js';
 import type { ChannelBinding } from './types.js';
 import { getCodexThreadId, getExplicitDesktopThreadId } from './turns/turn-classifier.js';
 import { listBindingsForChat } from '../../session-bindings.js';
@@ -28,6 +27,7 @@ export interface ThreadDisplayInfo {
   title: string;
   threadId: string;
   cwd: string;
+  lastActiveAt?: string;
   originator?: string;
 }
 
@@ -67,27 +67,7 @@ export class ThreadDisplayService {
       );
     }
 
-    const lines = bindings.map((binding, index) => {
-      const display = this.binding(binding);
-      const marker = binding.active !== false ? '*' : ' ';
-      return `${marker} ${index + 1}. ${display.title}  thread=${display.threadId || '-'}  binding=${this.bindingShortId(binding)}  cwd=${display.cwd || '(no cwd)'}`;
-    });
-
-    return [
-      buildCommandFields(
-        '当前聊天绑定',
-        [
-          ['数量', `${bindings.length}`],
-          ['当前', bindings.find((binding) => binding.active !== false) ? '已标记 *' : '未设置'],
-        ],
-        [
-          '`/t use <序号|thread-id|binding-id|名称>` 切换当前线程；`/t rm <序号|thread-id|binding-id|名称>` 移除绑定；`/t rename <名称>` 重命名当前线程。',
-          '`/t use` 和 `/t rm` 的序号来自 `/t ls` 的局部绑定表；`/t` 和 `/t add` 的序号来自全局桌面会话表。',
-        ],
-        markdown,
-      ),
-      markdown ? buildFencedCodeBlock(lines.join('\n'), 'text') : lines.join('\n'),
-    ].join('\n\n').trim();
+    return buildBoundThreadsCommandResponse(this.boundThreadCardItems(channelType, chatId), markdown);
   }
 
   refreshedDesktopThreadsCard(
@@ -138,6 +118,7 @@ export class ThreadDisplayService {
       title: formatResolvedThreadTitle(title, options),
       threadId,
       cwd: binding.workingDirectory || desktop?.cwd || '',
+      lastActiveAt: desktop?.lastEventAt || session?.last_progress_at || session?.updated_at || binding.updatedAt,
       originator: desktop?.originator || '当前聊天',
     };
   }
@@ -155,6 +136,7 @@ export class ThreadDisplayService {
       title: formatResolvedThreadTitle(title, options),
       threadId: session.threadId,
       cwd: session.cwd || bindingDisplay?.cwd || '',
+      lastActiveAt: session.lastEventAt || bindingDisplay?.lastActiveAt,
       originator: session.originator || bindingDisplay?.originator || 'Codex Desktop',
     };
   }
@@ -173,6 +155,7 @@ export class ThreadDisplayService {
       title: formatResolvedThreadTitle(title, options),
       threadId,
       cwd: session?.working_directory || desktop?.cwd || '',
+      lastActiveAt: desktop?.lastEventAt || session?.last_progress_at || session?.updated_at,
       originator: desktop?.originator || 'Codex Desktop',
     };
   }
@@ -216,6 +199,7 @@ export class ThreadDisplayService {
       return {
         title: display.title,
         cwd: display.cwd,
+        lastActiveAt: display.lastActiveAt,
         threadId: display.threadId,
         bindingId: binding.id,
         active: binding.active !== false,

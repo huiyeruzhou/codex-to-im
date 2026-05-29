@@ -368,6 +368,8 @@ describe('bridge-manager resolveCommandAlias', () => {
       10,
     );
     assert.match(response, /^最近 2 条桌面会话/);
+    assert.match(response, /标题\s+目录\s+上一次活动\(mm\/dd:hh:mm\)\s+binding_id\s+thread_id\s+source\s+命令/);
+    assert.match(response, /Project A\s+D:\\workspace\\project-a\s+03\/31:\d\d:00\s+-\s+thread-1\s+Codex Desktop\s+\/t 1/);
   });
 
   it('renders all-thread list titles with the actual displayed count', () => {
@@ -407,12 +409,23 @@ describe('bridge-manager resolveCommandAlias', () => {
     const card = buildDesktopThreadsCommandCard(sessions.slice(0, 20), false);
     assert.equal(card?.table?.rows.length, 20);
     assert.equal(card?.selects?.[0]?.options.length, 20);
+    assert.deepEqual(card?.table?.columns.map((column) => column.name), [
+      'title',
+      'cwd',
+      'last_active',
+      'binding_id',
+      'thread_id',
+      'source',
+      'command',
+    ]);
     const activeCard = buildDesktopThreadsCommandCard(sessions.slice(0, 2), false, undefined, [{
       threadId: 'thread-1',
       bindingId: 'binding-1',
       active: true,
     }]);
-    assert.equal(activeCard?.table?.rows?.[0]?.index, '* **1**');
+    assert.equal(activeCard?.table?.rows?.[0]?.title, 'Project 1');
+    assert.equal(activeCard?.table?.rows?.[0]?.binding_id, 'binding-');
+    assert.equal(activeCard?.table?.rows?.[0]?.thread_id, 'thread-1');
   });
 
   it('maps numeric reasoning aliases to supported effort levels', () => {

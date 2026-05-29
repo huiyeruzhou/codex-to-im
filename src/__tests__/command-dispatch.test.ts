@@ -11,6 +11,7 @@ import { initBridgeContext } from '../lib/bridge/context.js';
 import { handleBridgeCommand } from '../lib/bridge/command-dispatch.js';
 import { buildCommandCallbackData, parseCommandCallbackData } from '../lib/bridge/command-callbacks.js';
 import * as router from '../lib/bridge/channel-router.js';
+import { getThreadTableMessageRecord } from '../lib/bridge/thread-table-message-pins.js';
 import type { OutboundRichCard } from '../lib/bridge/types.js';
 
 const DATA_DIR = path.join(CTI_HOME, 'data');
@@ -537,6 +538,8 @@ describe('command-dispatch', () => {
     const store = initTestContext();
     const sent: string[] = [];
     const richCards: OutboundRichCard[] = [];
+    const pinned: string[] = [];
+    const unpinned: string[] = [];
     const adapter: any = {
       channelType: 'feishu',
       provider: 'feishu',
@@ -544,6 +547,14 @@ describe('command-dispatch', () => {
         sent.push(message.text);
         if (message.richCard) richCards.push(message.richCard);
         return { ok: true, messageId: `reply-t-${sent.length}` };
+      },
+      pinMessage: async (_chatId: string, messageId: string) => {
+        pinned.push(messageId);
+        return { ok: true, messageId };
+      },
+      unpinMessage: async (_chatId: string, messageId: string) => {
+        unpinned.push(messageId);
+        return { ok: true, messageId };
       },
     };
     const address = { channelType: 'feishu', chatId: 'chat-t-multi' } as const;
@@ -568,13 +579,52 @@ describe('command-dispatch', () => {
       },
     );
     assert.match(sent.at(-1) || '', /当前聊天绑定/);
+    assert.match(sent.at(-1) || '', /标题\s+目录\s+上一次活动\(mm\/dd:hh:mm\)\s+binding_id\s+thread_id\s+source\s+命令/);
     assert.match(sent.at(-1) || '', /first/);
     assert.match(sent.at(-1) || '', /second/);
     assert.equal(richCards.at(-1)?.title, '当前聊天绑定（2）');
+    assert.deepEqual(richCards.at(-1)?.table?.columns.map((column) => column.name), [
+      'title',
+      'cwd',
+      'last_active',
+      'binding_id',
+      'thread_id',
+      'source',
+      'command',
+    ]);
     assert.deepEqual(
       richCards.at(-1)?.actions?.flat().map((action) => action.text),
       ['解绑', '激活', '刷新'],
     );
+    assert.deepEqual(pinned, ['reply-t-1']);
+    assert.deepEqual(unpinned, []);
+    assert.deepEqual(getThreadTableMessageRecord(address), {
+      channelType: 'feishu',
+      chatId: 'chat-t-multi',
+      scope: 'bound',
+      messageId: 'reply-t-1',
+      pinnedMessageId: 'reply-t-1',
+      updatedAt: getThreadTableMessageRecord(address)?.updatedAt,
+    });
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/t ls',
+        messageId: 'incoming-t-ls-2',
+      } as any,
+      '/t ls',
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      },
+    );
+    assert.deepEqual(pinned, ['reply-t-1', 'reply-t-2']);
+    assert.deepEqual(unpinned, ['reply-t-1']);
+    assert.equal(getThreadTableMessageRecord(address)?.messageId, 'reply-t-2');
+    assert.equal(getThreadTableMessageRecord(address)?.pinnedMessageId, 'reply-t-2');
 
     await handleBridgeCommand(
       adapter,
@@ -592,7 +642,7 @@ describe('command-dispatch', () => {
     );
     assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, first.id);
     assert.match(sent.at(-1) || '', /当前线程已切换/);
-    assert.equal(richCards.length, 1);
+    assert.equal(richCards.length, 2);
 
     await handleBridgeCommand(
       adapter,
@@ -612,7 +662,7 @@ describe('command-dispatch', () => {
     assert.deepEqual(remaining.map((binding) => binding.id), [first.id]);
     assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, first.id);
     assert.match(sent.at(-1) || '', /已移除绑定线程/);
-    assert.equal(richCards.length, 1);
+    assert.equal(richCards.length, 2);
 
     await handleBridgeCommand(
       adapter,
@@ -630,7 +680,7 @@ describe('command-dispatch', () => {
     );
     assert.equal(store.listChannelBindings().filter((binding) => binding.chatId === address.chatId).length, 0);
     assert.match(sent.at(-1) || '', /已移除绑定线程/);
-    assert.equal(richCards.length, 1);
+    assert.equal(richCards.length, 2);
   });
 
   it('resolves /t bound-thread targets by unique name and rejects duplicate names', async () => {

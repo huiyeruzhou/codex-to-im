@@ -57,6 +57,7 @@ import { readDesktopSessionMessagesByFilePath, type DesktopSessionSummary } from
 import { getCodexThreadId, getExplicitDesktopThreadId } from './turns/turn-classifier.js';
 import { buildFencedCodeBlock } from './markdown/fence.js';
 import { ThreadDisplayService } from './thread-display-resolver.js';
+import { persistAndPinLatestThreadTableMessage } from './thread-table-message-pins.js';
 import {
   codexTmuxSessionName,
   handleTmuxBridgeCommand,
@@ -549,6 +550,7 @@ export async function handleBridgeCommand(
   let responseRichCard: OutboundRichCard | undefined;
   let responseParseMode: 'Markdown' | 'plain' = getFeedbackParseMode(adapter.channelType);
   let auditResponse = true;
+  let threadTableCardScope: ThreadCardScope | undefined;
   const currentBinding = deps.scopedBinding || store.getChannelBinding(msg.address.channelType, msg.address.chatId);
   const shouldApplyDefaultTargetForCommand = !new Set(['/status', '/threads', '/t']).has(command);
   const commandBinding = !shouldApplyDefaultTargetForCommand
@@ -635,6 +637,9 @@ export async function handleBridgeCommand(
       if (subcommand === 'ls') {
         response = threadDisplay.chatBindingsResponse(msg.address.channelType, msg.address.chatId, responseParseMode === 'Markdown');
         responseRichCard = threadDisplay.refreshedBoundThreadsCard(msg.address.channelType, msg.address.chatId);
+        if (listBindingsForChat(store, msg.address.channelType, msg.address.chatId).length > 0) {
+          threadTableCardScope = 'bound';
+        }
         break;
       }
 
@@ -699,6 +704,7 @@ export async function handleBridgeCommand(
           responseParseMode === 'Markdown',
         );
         responseRichCard = buildThreadCardRefresh(threadDisplay, deps.threadCardRefreshScope, msg.address);
+        if (responseRichCard && deps.threadCardRefreshScope) threadTableCardScope = deps.threadCardRefreshScope;
         break;
       }
 
@@ -742,6 +748,7 @@ export async function handleBridgeCommand(
           responseParseMode === 'Markdown',
         );
         responseRichCard = buildThreadCardRefresh(threadDisplay, deps.threadCardRefreshScope, msg.address);
+        if (responseRichCard && deps.threadCardRefreshScope) threadTableCardScope = deps.threadCardRefreshScope;
         break;
       }
 
@@ -798,6 +805,7 @@ export async function handleBridgeCommand(
         );
         await reconcileMirrorSubscriptionsBestEffort(deps, 'binding remove');
         responseRichCard = buildThreadCardRefresh(threadDisplay, deps.threadCardRefreshScope, msg.address);
+        if (responseRichCard && deps.threadCardRefreshScope) threadTableCardScope = deps.threadCardRefreshScope;
         break;
       }
 
@@ -907,6 +915,8 @@ export async function handleBridgeCommand(
           decoratedSessions,
           responseParseMode === 'Markdown',
           true,
+          MAX_DESKTOP_THREAD_LIST_LIMIT,
+          threadDisplay.desktopBindingStates(msg.address.channelType, msg.address.chatId),
         );
         responseRichCard = threadDisplay.refreshedDesktopThreadsCard(
           decoratedSessions,
@@ -915,6 +925,7 @@ export async function handleBridgeCommand(
           msg.address.channelType,
           msg.address.chatId,
         );
+        threadTableCardScope = 'global';
         break;
       }
 
@@ -979,6 +990,7 @@ export async function handleBridgeCommand(
           responseParseMode === 'Markdown',
         );
         responseRichCard = buildThreadCardRefresh(threadDisplay, deps.threadCardRefreshScope, msg.address);
+        if (responseRichCard && deps.threadCardRefreshScope) threadTableCardScope = deps.threadCardRefreshScope;
         break;
       }
       let binding: ReturnType<typeof router.bindToSdkSession>;
@@ -1010,6 +1022,7 @@ export async function handleBridgeCommand(
         responseParseMode === 'Markdown',
       );
       responseRichCard = buildThreadCardRefresh(threadDisplay, deps.threadCardRefreshScope, msg.address);
+      if (responseRichCard && deps.threadCardRefreshScope) threadTableCardScope = deps.threadCardRefreshScope;
       break;
     }
 
@@ -1037,6 +1050,7 @@ export async function handleBridgeCommand(
         responseParseMode === 'Markdown',
         showAll,
         limit,
+        threadDisplay.desktopBindingStates(msg.address.channelType, msg.address.chatId),
       );
       responseRichCard = threadDisplay.refreshedDesktopThreadsCard(
         decoratedSessions,
@@ -1045,6 +1059,7 @@ export async function handleBridgeCommand(
         msg.address.channelType,
         msg.address.chatId,
       );
+      threadTableCardScope = 'global';
       break;
     }
 
@@ -1985,11 +2000,14 @@ export async function handleBridgeCommand(
   }
 
   if (response) {
-    await deliverBridgeNotice(adapter, msg.address, response, {
+    const result = await deliverBridgeNotice(adapter, msg.address, response, {
       replyToMessageId: msg.messageId,
       audit: auditResponse,
       richCard: responseRichCard,
       richCardUpdateMessageId: msg.callbackMessageId,
     });
+    if (result.ok && threadTableCardScope && result.messageId) {
+      await persistAndPinLatestThreadTableMessage(adapter, msg.address, threadTableCardScope, result.messageId);
+    }
   }
 }

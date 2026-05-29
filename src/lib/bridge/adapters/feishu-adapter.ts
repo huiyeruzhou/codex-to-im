@@ -1780,6 +1780,42 @@ export class FeishuAdapter extends BaseChannelAdapter {
     return this.sendAsPost(message.address.chatId, text, message.replyToMessageId);
   }
 
+  async pinMessage(chatId: string, messageId: string): Promise<SendResult> {
+    const pinApi = (this.restClient as any)?.im?.pin;
+    if (!pinApi?.create) {
+      return { ok: false, messageId, error: 'Feishu pin API is not available' };
+    }
+    try {
+      const res = await this.withFeishuRequestTimeout<{ code?: number; msg?: string }>(chatId, 'im.pin.create', () => pinApi.create({
+        data: { message_id: messageId },
+      }));
+      if (res?.code && res.code !== 0) {
+        return { ok: false, messageId, error: res.msg || 'Pin message failed' };
+      }
+      return { ok: true, messageId };
+    } catch (err) {
+      return { ok: false, messageId, error: err instanceof Error ? err.message : 'Pin message failed' };
+    }
+  }
+
+  async unpinMessage(chatId: string, messageId: string): Promise<SendResult> {
+    const pinApi = (this.restClient as any)?.im?.pin;
+    if (!pinApi?.delete) {
+      return { ok: false, messageId, error: 'Feishu unpin API is not available' };
+    }
+    try {
+      const res = await this.withFeishuRequestTimeout<{ code?: number; msg?: string }>(chatId, 'im.pin.delete', () => pinApi.delete({
+        path: { message_id: messageId },
+      }));
+      if (res?.code && res.code !== 0) {
+        return { ok: false, messageId, error: res.msg || 'Unpin message failed' };
+      }
+      return { ok: true, messageId };
+    } catch (err) {
+      return { ok: false, messageId, error: err instanceof Error ? err.message : 'Unpin message failed' };
+    }
+  }
+
   private getOpenApiBaseUrl(): string {
     return feishuSiteToApiBaseUrl(this.site);
   }
