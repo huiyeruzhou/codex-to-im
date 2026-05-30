@@ -15,6 +15,12 @@ import {
   parsePositiveIntEnv,
   shouldUseCodexTmuxTui,
 } from '../codex/tmux-provider.js';
+import {
+  buildShellSnapshotLaunchCommand,
+  buildShellSnapshotContent,
+  detectCodexShellType,
+  resolveDefaultUserShell,
+} from '../codex/shell-snapshot.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -163,7 +169,91 @@ describe('codex-tmux-provider', () => {
     assert.equal(args.includes('--sandbox'), false);
   });
 
-  it('starts a real tmux session with the env-wrapped shell command form', async (t: TestContext) => {
+  it('detects default shell using Codex-compatible platform fallback rules', () => {
+    const fileExists = (filePath: string) => [
+      '/usr/bin/fish',
+      '/bin/bash',
+      '/bin/zsh',
+      '/bin/sh',
+      '/opt/homebrew/bin/zsh',
+      'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
+    ].includes(filePath);
+
+    assert.equal(detectCodexShellType('/usr/bin/bash'), 'bash');
+    assert.equal(detectCodexShellType('pwsh.exe'), 'powershell');
+    assert.equal(
+      detectCodexShellType('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'),
+      'powershell',
+    );
+    assert.equal(detectCodexShellType('/usr/bin/fish'), null);
+
+    assert.deepEqual(resolveDefaultUserShell({
+      platform: 'linux',
+      userShellPath: '/usr/bin/fish',
+      pathEnv: '',
+      fileExists,
+    }), { type: 'bash', path: '/bin/bash' });
+
+    assert.deepEqual(resolveDefaultUserShell({
+      platform: 'darwin',
+      userShellPath: null,
+      pathEnv: '/opt/homebrew/bin',
+      fileExists,
+    }), { type: 'zsh', path: '/opt/homebrew/bin/zsh' });
+
+    assert.deepEqual(resolveDefaultUserShell({
+      platform: 'win32',
+      userShellPath: null,
+      pathEnv: 'C:\\Program Files\\PowerShell\\7',
+      fileExists,
+    }), { type: 'powershell', path: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe' });
+  });
+
+  it('renders shell-specific current-process environment snapshots', () => {
+    const env = {
+      CTI_KEEP: "value with spaces and 'quotes'",
+      OLDPWD: '/old',
+      PWD: '/pwd',
+      'BAD-NAME': 'ignored',
+    };
+
+    const bash = buildShellSnapshotContent('bash', env);
+    assert.match(bash, /^# Snapshot file/m);
+    assert.match(bash, /declare -x CTI_KEEP='value with spaces and '\\''quotes'\\'''/);
+    assert.doesNotMatch(bash, /OLDPWD|BAD-NAME/);
+
+    const zsh = buildShellSnapshotContent('zsh', env);
+    assert.match(zsh, /typeset -gx CTI_KEEP=/);
+
+    const sh = buildShellSnapshotContent('sh', env);
+    assert.match(sh, /export CTI_KEEP=/);
+
+    const powershell = buildShellSnapshotContent('powershell', env);
+    assert.match(powershell, /Set-Item -LiteralPath 'Env:CTI_KEEP' -Value 'value with spaces and ''quotes'''/);
+  });
+
+  it('builds shell launch commands that source the snapshot before execing codex', () => {
+    const bashCommand = buildShellSnapshotLaunchCommand('codex', ['--cd', '/tmp/work dir'], {
+      shell: { type: 'bash', path: '/bin/bash' },
+      path: '/tmp/cti env.sh',
+      content: '',
+    });
+    assert.match(bashCommand, /^\/bin\/bash -c /);
+    assert.match(bashCommand, /\/tmp\/cti env\.sh/);
+    assert.match(bashCommand, /exec codex --cd/);
+    assert.match(bashCommand, /\/tmp\/work dir/);
+
+    const powershellCommand = buildShellSnapshotLaunchCommand('codex', ['--model', 'gpt-5-codex'], {
+      shell: { type: 'powershell', path: 'C:\\Program Files\\PowerShell\\7\\pwsh.exe' },
+      path: 'C:\\Temp\\cti env.ps1',
+      content: '',
+    });
+    assert.match(powershellCommand, /-NoProfile -Command/);
+    assert.match(powershellCommand, /C:\\Temp\\cti env\.ps1/);
+    assert.match(powershellCommand, /gpt-5-codex/);
+  });
+
+  it('starts a real tmux session with the shell snapshot command form', async (t: TestContext) => {
     if (!(await tmuxAvailable())) {
       t.skip('tmux is not available');
       return;

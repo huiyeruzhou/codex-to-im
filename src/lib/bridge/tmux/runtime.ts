@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import {
   buildCodexTuiArgs,
   buildCodexTuiEnv,
+  buildCodexTuiShellCommand,
 } from '../../../codex/tmux-provider.js';
 import type { StreamChatParams } from '../host.js';
 
@@ -44,48 +45,6 @@ function quoteShellArg(value: string): string {
 
 export function tmuxCommandPreview(args: readonly string[]): string {
   return ['tmux', ...args].map(quoteShellArg).join(' ');
-}
-
-function codexCommandPreview(args: readonly string[]): string {
-  return ['codex', ...args].map(quoteShellArg).join(' ');
-}
-
-function shouldForwardCodexTuiEnv(key: string): boolean {
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) return false;
-  if (key.startsWith('CTI_')) return true;
-  if (key.startsWith('OPENAI_')) return true;
-  if (key.startsWith('HTTPS_PROXY')) return true;
-  if (key.startsWith('HTTP_PROXY')) return true;
-  if (key.startsWith('ALL_PROXY')) return true;
-  if (key.startsWith('NO_PROXY')) return true;
-  if (key.startsWith('NODE_')) return true;
-  if (key.startsWith('NVM_')) return true;
-  if (key.startsWith('LC_')) return true;
-  return [
-    'CODEX_API_KEY',
-    'CODEX_HOME',
-    'HOME',
-    'LANG',
-    'LITELLM_KEY',
-    'LOGNAME',
-    'PATH',
-    'SHELL',
-    'SSL_CERT_FILE',
-    'TERM',
-    'USER',
-  ].includes(key);
-}
-
-function codexCommandWithEnvPreview(args: readonly string[]): string {
-  const forwardedEnv = Object.entries(buildCodexTuiEnv())
-    .filter(([key]) => shouldForwardCodexTuiEnv(key))
-    .sort(([a], [b]) => a.localeCompare(b));
-  if (forwardedEnv.length === 0) return codexCommandPreview(args);
-  return [
-    'env',
-    ...forwardedEnv.map(([key, value]) => `${key}=${quoteShellArg(value)}`),
-    codexCommandPreview(args),
-  ].join(' ');
 }
 
 export function codexTmuxSessionName(threadId: string): string {
@@ -141,7 +100,7 @@ export function buildCodexResumeTmuxCommand(params: StartCodexResumeTmuxSessionP
     permissionMode: params.permissionMode,
     codexMode: params.codexMode,
   }, []);
-  const codexCommand = codexCommandWithEnvPreview(codexArgs);
+  const codexCommand = buildCodexTuiShellCommand('codex', codexArgs, buildCodexTuiEnv());
   const tmuxArgs = ['new-session', '-d', '-s', params.sessionName];
   if (params.workingDirectory) {
     tmuxArgs.push('-c', params.workingDirectory);

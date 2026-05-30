@@ -15,6 +15,10 @@ import {
   normalizeSandboxMode,
   parseReasoningEffort,
 } from '../runtime-options.js';
+import {
+  buildShellSnapshotLaunchCommand,
+  ensureShellSnapshot,
+} from './shell-snapshot.js';
 
 const DEFAULT_TMUX_PROMPT_DELAY_MS = 1_200;
 const DEFAULT_TMUX_POLL_INTERVAL_MS = 500;
@@ -119,42 +123,9 @@ export function buildCodexTuiEnv(): Record<string, string> {
   return env;
 }
 
-function shouldForwardCodexTuiEnv(key: string): boolean {
-  if (key.startsWith('CTI_')) return true;
-  if (key.startsWith('CODEX_')) return true;
-  if (key.startsWith('OPENAI_')) return true;
-  if (key.startsWith('HTTPS_PROXY')) return true;
-  if (key.startsWith('HTTP_PROXY')) return true;
-  if (key.startsWith('NO_PROXY')) return true;
-  if (key.startsWith('NODE_')) return true;
-  if (key.startsWith('NVM_')) return true;
-  if (key.startsWith('LC_')) return true;
-  return [
-    'CODEX_API_KEY',
-    'CODEX_HOME',
-    'HOME',
-    'LANG',
-    'LITELLM_KEY',
-    'LOGNAME',
-    'PATH',
-    'SHELL',
-    'SSL_CERT_FILE',
-    'TERM',
-    'USER',
-  ].includes(key);
-}
-
 export function buildCodexTuiShellCommand(command: string, args: string[], env: Record<string, string>): string {
-  const forwardedEnv = Object.entries(env)
-    .filter(([key]) => shouldForwardCodexTuiEnv(key))
-    .sort(([a], [b]) => a.localeCompare(b));
-  if (forwardedEnv.length === 0) return commandPreview(command, args);
-  return [
-    'env',
-    ...forwardedEnv.map(([key, value]) => `${key}=${value}`),
-    command,
-    ...args,
-  ].map(shellQuote).join(' ');
+  const snapshot = ensureShellSnapshot(env);
+  return buildShellSnapshotLaunchCommand(command, args, snapshot);
 }
 
 function toApprovalPolicy(permissionMode?: string): string {

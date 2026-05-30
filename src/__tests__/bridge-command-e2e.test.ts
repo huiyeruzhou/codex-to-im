@@ -906,11 +906,12 @@ describe('bridge command e2e', () => {
       const startLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
       assert.match(startLog, new RegExp(`has-session -t ${normalTmuxSession}`));
       assert.match(startLog, new RegExp(`new-session -d -s ${normalTmuxSession}`));
-      assert.match(startLog, /-- env .* codex --sandbox read-only/);
+      assert.match(startLog, /-- .*codex-to-im-shell-snapshot-[^ \n]+\.sh.*exec codex --sandbox read-only/);
+      assert.doesNotMatch(startLog, /-- env .* codex/);
       assert.doesNotMatch(startLog, / new-session .* -e /);
       assert.match(startLog, new RegExp(`--cd ${workDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
       assert.match(startLog, /--ask-for-approval on-request/);
-      assert.match(startLog, /--config 'model_reasoning_effort="high"'/);
+      assert.match(startLog, /model_reasoning_effort="high"/);
       assert.match(startLog, /--config sandbox_workspace_write.network_access=true/);
       assert.match(startLog, new RegExp(`resume ${normalThreadId}`));
 
@@ -965,7 +966,8 @@ describe('bridge command e2e', () => {
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/provider tmux', 'incoming-runtime-provider-tmux-yolo'));
       const yoloLog = fs.readFileSync(fakeTmux.logPath, 'utf-8').slice(beforeYoloLog.length);
       assert.match(yoloLog, new RegExp(`new-session -d -s ${yoloTmuxSession}`));
-      assert.match(yoloLog, /-- env .* codex --dangerously-bypass-approvals-and-sandbox/);
+      assert.match(yoloLog, /-- .*codex-to-im-shell-snapshot-[^ \n]+\.sh.*exec codex --dangerously-bypass-approvals-and-sandbox/);
+      assert.doesNotMatch(yoloLog, /-- env .* codex/);
       assert.doesNotMatch(yoloLog, / new-session .* -e /);
       assert.doesNotMatch(yoloLog, /--sandbox/);
       assert.doesNotMatch(yoloLog, /--ask-for-approval/);
