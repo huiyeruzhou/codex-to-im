@@ -5,7 +5,7 @@ export const AUTO_TASK_SELECT_CALLBACK_PREFIX = 'cti-auto-select:';
 export const AUTO_TASK_ACTION_CALLBACK_PREFIX = 'cti-auto-action:';
 
 export type AutoTaskCardAction = 'rm' | 'set1';
-export type ThreadCardScope = 'global' | 'bound';
+export type ThreadCardScope = 'global' | 'bound' | 'auto';
 
 export interface ParsedCommandCallback {
   commandText: string;

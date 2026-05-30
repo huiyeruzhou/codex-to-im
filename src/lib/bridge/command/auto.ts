@@ -1,5 +1,6 @@
 import type { BridgeSession, BridgeStore } from '../host.js';
 import type { InboundMessage, OutboundRichCard } from '../types.js';
+import type { ThreadCardScope } from '../command-callbacks.js';
 import {
   createAutoTask,
   deleteAutoTask,
@@ -32,6 +33,7 @@ export interface AutoCommandDeps {
 export interface AutoCommandResult {
   response: string;
   richCard?: OutboundRichCard;
+  threadTableCardScope?: ThreadCardScope;
 }
 
 export function handleAutoCommand(options: {
@@ -55,7 +57,10 @@ export function handleAutoCommand(options: {
       response: buildAutoTasksCommandResponse(tasks, sessionsById, options.markdown),
       richCard: buildAutoTasksCommandCard(tasks, sessionsById, {
         selectedTaskId: options.deps.selectedAutoTaskId,
+        channelType: options.msg.address.channelType,
+        chatId: options.msg.address.chatId,
       }) || undefined,
+      threadTableCardScope: tasks.length > 0 ? 'auto' : undefined,
     };
   }
 

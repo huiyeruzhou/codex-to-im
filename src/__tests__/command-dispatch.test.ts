@@ -800,7 +800,9 @@ describe('command-dispatch', () => {
     const address = { channelType: 'feishu', chatId: 'chat-auto' } as const;
     const first = router.createBinding(address, 'D:\\workspace\\auto-first');
     const second = router.createBinding(address, 'D:\\workspace\\auto-second');
-    const scriptPath = path.join(os.tmpdir(), `cti-auto-${Date.now()}.sh`);
+    const scriptDir = path.join(process.env.CODEX_HOME!, 'auto-scripts');
+    fs.mkdirSync(scriptDir, { recursive: true });
+    const scriptPath = path.join(scriptDir, `cti-auto-${Date.now()}.sh`);
     fs.writeFileSync(scriptPath, '#!/usr/bin/env bash\nprintf "check progress\\n"\n', 'utf-8');
     fs.chmodSync(scriptPath, 0o755);
 
@@ -845,6 +847,9 @@ describe('command-dispatch', () => {
     assert.match(sent.at(-1) || '', /session codex-id/);
     assert.equal(richCards.at(-1)?.template, 'green');
     assert.equal(richCards.at(-1)?.title, '当前聊天自动化任务（1）');
+    assert.equal(richCards.at(-1)?.updateKey, `thread-card:auto:${address.channelType}:${address.chatId}`);
+    assert.equal(richCards.at(-1)?.updateTtlMs, null);
+    assert.equal(getThreadTableMessageRecord(address, 'auto')?.messageId, 'reply-auto-2');
     assert.deepEqual(richCards.at(-1)?.table?.columns.map((column) => column.name), [
       'index',
       'session_title',
@@ -918,6 +923,41 @@ describe('command-dispatch', () => {
     assert.equal(listAutoTasks({ bridgeSessionId: second.bridgeSessionId, includeCompleted: true }).length, 0);
     assert.deepEqual(stopped, [secondTasks[0].id]);
     assert.match(sent.at(-1) || '', /已删除自动化任务/);
+  });
+
+  it('rejects /auto scripts outside Codex home', async () => {
+    initTestContext();
+    const sent: string[] = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      send: async (message: { text: string }) => {
+        sent.push(message.text);
+        return { ok: true, messageId: `reply-auto-outside-${sent.length}` };
+      },
+    };
+    const address = { channelType: 'feishu', chatId: 'chat-auto-outside' } as const;
+    router.createBinding(address, 'D:\\workspace\\auto-outside');
+    const scriptPath = path.join(os.tmpdir(), `cti-auto-outside-${Date.now()}.sh`);
+    fs.writeFileSync(scriptPath, '#!/usr/bin/env bash\nprintf "check progress\\n"\n', 'utf-8');
+    fs.chmodSync(scriptPath, 0o755);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: `/auto new ${scriptPath} 1`,
+        messageId: 'incoming-auto-outside-new',
+      } as any,
+      `/auto new ${scriptPath} 1`,
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      },
+    );
+
+    assert.match(sent.at(-1) || '', /自动化脚本必须位于 Codex home 下/);
   });
 
   it('maps /stop to C-c for a running tmux provider mirror turn', async () => {

@@ -5,6 +5,7 @@ import { buildCommandCallbackData } from '../command-callbacks.js';
 import {
   AUTO_TASK_SELECT_CALLBACK_PREFIX,
   buildAutoTaskActionCallbackData,
+  buildThreadCardUpdateKey,
 } from '../command-callbacks.js';
 import { buildFencedCodeBlock } from '../markdown/fence.js';
 import {
@@ -104,6 +105,8 @@ export function buildAutoTasksCommandCard(
   sessionsById: Map<string, BridgeSession>,
   options: {
     selectedTaskId?: string | null;
+    channelType?: string;
+    chatId?: string;
   } = {},
 ): OutboundRichCard | null {
   if (tasks.length === 0 || tasks.length > AUTO_TASK_CARD_MAX_ITEMS) return null;
@@ -111,7 +114,7 @@ export function buildAutoTasksCommandCard(
     ? `${AUTO_TASK_SELECT_CALLBACK_PREFIX}${encodeURIComponent(options.selectedTaskId)}`
     : undefined;
 
-  return {
+  const card: OutboundRichCard = {
     title: `当前聊天自动化任务（${tasks.length}）`,
     subtitle: '这张表显示当前聊天可见的自动化任务；任务仍归属各自 bridge session。',
     template: 'green',
@@ -162,6 +165,11 @@ export function buildAutoTasksCommandCard(
       `超过 ${AUTO_TASK_CARD_MAX_ITEMS} 条时只发送文本列表，避免卡片过长。`,
     ],
   };
+  if (options.channelType && options.chatId) {
+    card.updateKey = buildThreadCardUpdateKey('auto', options.channelType, options.chatId);
+    card.updateTtlMs = null;
+  }
+  return card;
 }
 
 function formatTaskSessionTitle(task: AutoTask, session: BridgeSession | undefined): string {

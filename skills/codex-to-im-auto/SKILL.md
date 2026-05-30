@@ -5,12 +5,19 @@ description: Use this skill when the user wants to create a local script for Cod
 
 # Codex-to-IM /auto script creation
 
-Use this skill when the user asks to create an automation script for `/auto new <scriptpath> <times>`.
+Use this skill when the user asks to create an automation script for:
+
+```text
+/auto new <absolute-script-path> <times>
+```
+
+`times` is a positive integer. `/auto new` does not accept `0`; use `/auto set <index> 0` later to pause an existing task.
 
 ## Contract
 
 Create a local executable script that:
 
+- lives under the current Codex home, preferably `~/.codex/auto-scripts/`
 - waits for the requested timing or condition
 - checks any relevant local process, log, job, Ray cluster, file, or command state
 - prints exactly one useful Codex prompt to stdout
@@ -25,9 +32,9 @@ After creating the script, tell the user:
 
 - the script content
 - the absolute script path
-- the suggested `/auto new <scriptpath> <times>` command
+- the suggested `/auto new <absolute-script-path> <positive-times>` command
 
-Name the script after the trigger timing or condition, for example `check_experiment_progress_every_20m.sh`.
+Name the script after the trigger timing or condition, for example `check_experiment_progress_every_20m.sh`, and place it under `~/.codex/auto-scripts/`.
 
 ## Script pattern
 
@@ -66,6 +73,8 @@ Make the script executable with `chmod +x`.
 ## Rules
 
 - Use absolute paths inside the script when checking known files or logs.
+- Store the script itself under `~/.codex/auto-scripts/`; scripts outside Codex home are rejected by `/auto new`.
+- Always provide the exact creation command in this shape: `/auto new /home/<user>/.codex/auto-scripts/<script>.sh <times>`.
 - Keep stdout focused on the Codex prompt. Put debug logs on stderr if needed.
 - Do not start long-running experiment work unless the user asked for that; `/auto` scripts should usually observe and report.
 - If the user asks for “every N minutes”, the script itself should sleep for N minutes, checking every few seconds when useful.

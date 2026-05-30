@@ -89,7 +89,9 @@ function finishControlledCall(call: ControlledLlmCall, responseText: string): vo
 }
 
 function writeAutoScript(name: string, body: string): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `cti-auto-${name}-`));
+  const root = path.join(process.env.CODEX_HOME!, 'auto-scripts');
+  fs.mkdirSync(root, { recursive: true });
+  const dir = fs.mkdtempSync(path.join(root, `cti-auto-${name}-`));
   const scriptPath = path.join(dir, `${name}.sh`);
   fs.writeFileSync(scriptPath, body, 'utf-8');
   fs.chmodSync(scriptPath, 0o755);
@@ -255,6 +257,9 @@ describe('bridge command e2e', () => {
 
     await _testOnly.handleMessage(adapter, inboundMessage(address, '/auto skill install', 'incoming-auto-skill-install'));
     assert.ok(fs.existsSync(path.join(skillDir, 'SKILL.md')));
+    const installedSkill = fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf-8');
+    assert.match(installedSkill, /\/auto new <absolute-script-path> <times>/);
+    assert.match(installedSkill, /~\/\.codex\/auto-scripts/);
     assert.match(adapter.sent.at(-1)?.text || '', /已安装自动脚本 skill|自动脚本 skill 已存在/);
 
     await _testOnly.handleMessage(adapter, inboundMessage(address, '/auto skill install', 'incoming-auto-skill-install-again'));
@@ -286,6 +291,8 @@ describe('bridge command e2e', () => {
     assert.match(adapter.sent.at(-1)?.text || '', /当前聊天自动化任务/);
     assert.match(adapter.sent.at(-1)?.text || '', /slow_text_timer/);
     assert.equal(adapter.sent.at(-1)?.richCard?.template, 'green');
+    assert.equal(adapter.sent.at(-1)?.richCard?.updateKey, `thread-card:auto:${address.channelType}:${address.chatId}`);
+    assert.equal(adapter.sent.at(-1)?.richCard?.updateTtlMs, null);
 
     await _testOnly.handleMessage(adapter, inboundMessage(address, '/auto rm 1', 'incoming-auto-text-rm'));
     assert.match(adapter.sent.at(-1)?.text || '', /已删除自动化任务/);
@@ -309,6 +316,8 @@ describe('bridge command e2e', () => {
     assert.ok(card);
     assert.equal(card.template, 'green');
     assert.equal(card.title, '当前聊天自动化任务（1）');
+    assert.equal(card.updateKey, `thread-card:auto:${address.channelType}:${address.chatId}`);
+    assert.equal(card.updateTtlMs, null);
     const selectCallback = card.selects?.[0]?.options?.[0]?.callbackData;
     const setCallback = card.actions?.[0]?.find((action) => action.text === '设为1次')?.callbackData;
     const rmCallback = card.actions?.[0]?.find((action) => action.text === '删除')?.callbackData;

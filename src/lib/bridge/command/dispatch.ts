@@ -356,6 +356,7 @@ export async function handleBridgeCommand(
       });
       response = result.response;
       responseRichCard = result.richCard;
+      threadTableCardScope = result.threadTableCardScope;
       break;
     }
 

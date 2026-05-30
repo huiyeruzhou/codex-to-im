@@ -179,14 +179,27 @@ export function resolveAutoScriptPath(rawPath: string, cwd: string): string {
 
 export function validateAutoScriptPath(scriptPath: string): { ok: true } | { ok: false; message: string } {
   if (!scriptPath) return { ok: false, message: '脚本路径不能为空。' };
+  const codexHome = path.resolve(getCodexHome());
+  const resolvedScriptPath = path.resolve(scriptPath);
+  const relativeToCodexHome = path.relative(codexHome, resolvedScriptPath);
+  if (
+    relativeToCodexHome === ''
+    || relativeToCodexHome.startsWith('..')
+    || path.isAbsolute(relativeToCodexHome)
+  ) {
+    return {
+      ok: false,
+      message: `自动化脚本必须位于 Codex home 下：${path.join(codexHome, 'auto-scripts')}`,
+    };
+  }
   let stat: fs.Stats;
   try {
-    stat = fs.statSync(scriptPath);
+    stat = fs.statSync(resolvedScriptPath);
   } catch {
-    return { ok: false, message: `脚本不存在：${scriptPath}` };
+    return { ok: false, message: `脚本不存在：${resolvedScriptPath}` };
   }
   if (!stat.isFile()) {
-    return { ok: false, message: `脚本路径不是文件：${scriptPath}` };
+    return { ok: false, message: `脚本路径不是文件：${resolvedScriptPath}` };
   }
   return { ok: true };
 }
