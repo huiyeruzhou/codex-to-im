@@ -615,7 +615,7 @@ describe('bridge-manager resolveCommandAlias', () => {
     assert.deepEqual(filtered, [laterRecord]);
   });
 
-  it('releases global mirror suppression after abort while still ignoring the aborted turn', () => {
+  it('keeps an aborted mirror turn suppressed until its terminal event', () => {
     const sessionId = 'session-suppress-abort';
     const suppressionId = _testOnly.beginMirrorSuppression(sessionId, 'hello');
 
@@ -641,7 +641,7 @@ describe('bridge-manager resolveCommandAlias', () => {
 
     _testOnly.abortMirrorSuppression(sessionId, suppressionId);
 
-    assert.equal(_testOnly.isMirrorSuppressed(sessionId), false);
+    assert.equal(_testOnly.isMirrorSuppressed(sessionId), true);
 
     const oldTurnTail = _testOnly.filterSuppressedMirrorRecords(sessionId, [
       {
@@ -655,6 +655,19 @@ describe('bridge-manager resolveCommandAlias', () => {
     ] as never);
     assert.deepEqual(oldTurnTail, []);
 
+    const aborted = _testOnly.filterSuppressedMirrorRecords(sessionId, [
+      {
+        type: 'task_aborted',
+        role: 'assistant',
+        content: 'stopped',
+        signature: 'sig-aborted',
+        timestamp: '2026-03-26T06:25:50.000Z',
+        turnId: 'turn-1',
+      },
+    ] as never);
+    assert.deepEqual(aborted, []);
+    assert.equal(_testOnly.isMirrorSuppressed(sessionId), false);
+
     const newTurnRecord = {
       type: 'message',
       role: 'assistant',
@@ -665,6 +678,60 @@ describe('bridge-manager resolveCommandAlias', () => {
     };
     const released = _testOnly.filterSuppressedMirrorRecords(sessionId, [newTurnRecord] as never);
     assert.deepEqual(released, [newTurnRecord]);
+  });
+
+  it('does not leak a stopped mirror tail when terminal records arrive after the abort window', () => {
+    const originalNow = Date.now;
+    let now = new Date('2026-03-26T06:25:26.000Z').getTime();
+    Date.now = () => now;
+    try {
+      const sessionId = 'session-suppress-abort-no-turn-id';
+      const suppressionId = _testOnly.beginMirrorSuppression(sessionId, 'hello');
+
+      _testOnly.filterSuppressedMirrorRecords(sessionId, [
+        {
+          type: 'message',
+          role: 'user',
+          content: 'hello',
+          signature: 'sig-user-no-turn',
+          timestamp: '2026-03-26T06:25:26.708Z',
+        },
+      ] as never);
+
+      _testOnly.abortMirrorSuppression(sessionId, suppressionId);
+      now += 5_000;
+
+      const stoppedTail = _testOnly.filterSuppressedMirrorRecords(sessionId, [
+        {
+          type: 'message',
+          role: 'assistant',
+          content: 'tail that should not become a mirror reply',
+          signature: 'sig-tail-no-turn',
+          timestamp: '2026-03-26T06:25:30.000Z',
+        },
+        {
+          type: 'task_complete',
+          role: 'assistant',
+          content: 'tail that should not become a mirror reply',
+          signature: 'sig-complete-no-turn',
+          timestamp: '2026-03-26T06:25:31.000Z',
+        },
+      ] as never);
+      assert.deepEqual(stoppedTail, []);
+      assert.equal(_testOnly.isMirrorSuppressed(sessionId), false);
+
+      const laterRecord = {
+        type: 'message',
+        role: 'assistant',
+        content: 'new visible mirror reply',
+        signature: 'sig-later-no-turn',
+        timestamp: '2026-03-26T06:26:00.000Z',
+      };
+      const released = _testOnly.filterSuppressedMirrorRecords(sessionId, [laterRecord] as never);
+      assert.deepEqual(released, [laterRecord]);
+    } finally {
+      Date.now = originalNow;
+    }
   });
 });
 

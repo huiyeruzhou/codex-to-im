@@ -115,6 +115,10 @@ function clearMirrorSuppression(
   }
 }
 
+function isMirrorTerminalRecord(record: CodexMirrorRecord): boolean {
+  return record.type === 'task_complete' || record.type === 'task_aborted';
+}
+
 export function beginMirrorSuppression(
   store: MirrorSuppressionStore,
   sessionId: string,
@@ -171,6 +175,11 @@ export function abortMirrorSuppression(
     : suppressions[suppressions.length - 1];
   if (!target) return;
 
+  if (target.awaitingPromptMatch || target.droppingTurn) {
+    target.until = nowMs + config.promptMatchGraceMs;
+    return;
+  }
+
   const trackedTurnId = target.activeTurnId || target.candidateTurnId;
   if (trackedTurnId) {
     markIgnoredMirrorTurn(
@@ -217,7 +226,7 @@ export function filterSuppressedMirrorRecords(
     while (true) {
       const ignoredTurnIds = cleanupIgnoredMirrorTurns(store, sessionId, nowMs);
       if (record.turnId && ignoredTurnIds.has(record.turnId)) {
-        if (record.type === 'task_complete') {
+        if (isMirrorTerminalRecord(record)) {
           clearIgnoredMirrorTurn(store, sessionId, record.turnId, nowMs);
         }
         handled = true;
@@ -255,7 +264,7 @@ export function filterSuppressedMirrorRecords(
         }
 
         if (
-          record.type === 'task_complete'
+          isMirrorTerminalRecord(record)
           && suppression.candidateTurnId
           && record.turnId
           && record.turnId === suppression.candidateTurnId
@@ -289,7 +298,7 @@ export function filterSuppressedMirrorRecords(
           break;
         }
 
-        if (record.type === 'task_complete') {
+        if (isMirrorTerminalRecord(record)) {
           clearMirrorSuppression(store, sessionId, suppression.id);
           handled = true;
           break;
