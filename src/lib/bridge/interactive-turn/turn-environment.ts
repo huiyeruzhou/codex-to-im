@@ -74,6 +74,8 @@ export interface StaleTaskCompletionNoticePorts {
   resolveDisplayInfo?: ResolveInteractiveTurnDisplayInfo;
 }
 
+const SYNTHETIC_BINDING_PREFIXES = ['auto:'] as const;
+
 const STREAM_DEFAULTS: Record<string, InteractiveStreamConfig> = {
   default: { intervalMs: 1000, minDeltaChars: 30, maxChars: 4000 },
 };
@@ -185,9 +187,10 @@ export function buildStaleTaskCompletionNotice(
 ): string | null {
   const bindings = ports.listChannelBindings?.(address.channelType);
   if (!bindings) return null;
+  const isSyntheticBinding = SYNTHETIC_BINDING_PREFIXES.some((prefix) => binding.id.startsWith(prefix));
   const stillBound = bindings.some((item) => (
     item.chatId === address.chatId
-    && item.id === binding.id
+    && (item.id === binding.id || (isSyntheticBinding && item.bridgeSessionId === binding.bridgeSessionId))
     && item.bridgeSessionId === binding.bridgeSessionId
   ));
   if (stillBound) return null;

@@ -109,7 +109,7 @@ export function buildAutoTasksCommandCard(
     chatId?: string;
   } = {},
 ): OutboundRichCard | null {
-  if (tasks.length === 0 || tasks.length > AUTO_TASK_CARD_MAX_ITEMS) return null;
+  if (tasks.length > AUTO_TASK_CARD_MAX_ITEMS) return null;
   const selectedCallbackData = options.selectedTaskId
     ? `${AUTO_TASK_SELECT_CALLBACK_PREFIX}${encodeURIComponent(options.selectedTaskId)}`
     : undefined;
@@ -132,36 +132,57 @@ export function buildAutoTasksCommandCard(
       rows: buildAutoTaskCommandTableCardRows(buildAutoTaskCommandRows(tasks, sessionsById)),
     },
     sections: [],
-    selects: [{
-      id: 'auto_task_select',
-      placeholder: '选择自动化任务',
-      selectedCallbackData,
-      options: tasks.map((task, index) => ({
-        text: `${index + 1}. ${task.scriptPath}`,
-        callbackData: `${AUTO_TASK_SELECT_CALLBACK_PREFIX}${encodeURIComponent(task.id)}`,
-      })),
-    }],
-    actions: [
-      [
-        {
-          text: '删除',
-          callbackData: buildAutoTaskActionCallbackData('rm'),
-          type: 'danger',
-        },
-        {
-          text: '设为1次',
-          callbackData: buildAutoTaskActionCallbackData('set1'),
-          type: 'primary',
-        },
-        {
-          text: '刷新',
-          callbackData: buildCommandCallbackData('/auto ls'),
-          type: 'default',
-        },
-      ],
-    ],
+    ...(tasks.length > 0
+      ? {
+          selects: [{
+            id: 'auto_task_select',
+            placeholder: '选择自动化任务',
+            selectedCallbackData,
+            options: tasks.map((task, index) => ({
+              text: `${index + 1}. ${task.scriptPath}`,
+              callbackData: `${AUTO_TASK_SELECT_CALLBACK_PREFIX}${encodeURIComponent(task.id)}`,
+            })),
+          }],
+        }
+      : {}),
+    actions: tasks.length > 0
+      ? [
+          [
+            {
+              text: '删除',
+              callbackData: buildAutoTaskActionCallbackData('rm'),
+              type: 'danger',
+            },
+            {
+              text: '设为1次',
+              callbackData: buildAutoTaskActionCallbackData('set1'),
+              type: 'primary',
+            },
+            {
+              text: '刷新',
+              callbackData: buildCommandCallbackData('/auto ls'),
+              type: 'default',
+            },
+          ],
+        ]
+      : [
+          [
+            {
+              text: '安装skill',
+              callbackData: buildCommandCallbackData('/auto skill install'),
+              type: 'primary',
+            },
+            {
+              text: '刷新',
+              callbackData: buildCommandCallbackData('/auto ls'),
+              type: 'default',
+            },
+          ],
+        ],
     footer: [
-      '纯文本命令：`/auto rm 1` 删除第 1 个自动化任务，`/auto set 1 3` 重置为触发 3 次。',
+      tasks.length > 0
+        ? '纯文本命令：`/auto rm 1` 删除第 1 个自动化任务，`/auto set 1 3` 重置为触发 3 次。'
+        : '还没有任务。先安装 skill，让 Codex 创建脚本；脚本创建后发送 `/auto new <scriptpath> <times>`。',
       `超过 ${AUTO_TASK_CARD_MAX_ITEMS} 条时只发送文本列表，避免卡片过长。`,
     ],
   };

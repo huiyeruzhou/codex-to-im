@@ -144,7 +144,7 @@ function shouldForwardCodexTuiEnv(key: string): boolean {
   ].includes(key);
 }
 
-function commandWithEnvPreview(command: string, args: string[], env: Record<string, string>): string {
+export function buildCodexTuiShellCommand(command: string, args: string[], env: Record<string, string>): string {
   const forwardedEnv = Object.entries(env)
     .filter(([key]) => shouldForwardCodexTuiEnv(key))
     .sort(([a], [b]) => a.localeCompare(b));
@@ -581,7 +581,7 @@ async function launchTmuxCodexSession(
 ): Promise<void> {
   const env = buildCodexTuiEnv();
   const codexArgs = buildCodexTuiArgs(params, imagePaths);
-  const command = commandWithEnvPreview('codex', codexArgs, env);
+  const command = buildCodexTuiShellCommand('codex', codexArgs, env);
   const tmuxArgs = ['new-session', '-d', '-s', sessionName];
   if (params.workingDirectory) {
     tmuxArgs.push('-c', params.workingDirectory);

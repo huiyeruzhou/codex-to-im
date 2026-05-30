@@ -447,6 +447,10 @@ export function buildCodexThreadsCommandCard(
         },
       ],
       [{
+        text: '新建',
+        callbackData: buildCommandCallbackData('/new'),
+        type: 'primary',
+      }, {
         text: '刷新',
         callbackData: buildCommandCallbackData(showAll ? '/t all' : '/t'),
         type: 'default',
@@ -479,7 +483,7 @@ export function buildBoundThreadsCommandCard(
     selectedBindingId?: string | null;
   } = {},
 ): OutboundRichCard | null {
-  if (bindings.length === 0 || bindings.length > CODEX_THREADS_CARD_MAX_ITEMS) return null;
+  if (bindings.length > CODEX_THREADS_CARD_MAX_ITEMS) return null;
   const selectedCallbackData = options.selectedBindingId
     ? `${THREAD_SELECT_CALLBACK_PREFIX}${encodeURIComponent(options.selectedBindingId)}`
     : undefined;
@@ -489,34 +493,53 @@ export function buildBoundThreadsCommandCard(
     template: 'blue',
     table: buildThreadCommandCardTable(buildBoundThreadCommandTableRows(bindings)),
     sections: [],
-    selects: [{
-      id: 'bound_select',
-      placeholder: '选择绑定线程',
-      selectedCallbackData,
-      options: bindings.map((binding, index) => ({
-        text: `${index + 1}. ${binding.title || binding.cwd || '未命名线程'}`,
-        callbackData: `${THREAD_SELECT_CALLBACK_PREFIX}${encodeURIComponent(binding.bindingId)}`,
-      })),
-    }],
-    actions: [
-      [
-        {
-          text: '解绑',
-          callbackData: buildThreadActionCallbackData('bound', 'rm'),
-          type: 'danger',
-        },
-        {
-          text: '激活',
-          callbackData: buildThreadActionCallbackData('bound', 'use'),
-          type: 'primary',
-        },
-      ],
-      [{
-        text: '刷新',
-        callbackData: buildCommandCallbackData('/t ls'),
-        type: 'default',
-      }],
-    ],
+    ...(bindings.length > 0
+      ? {
+          selects: [{
+            id: 'bound_select',
+            placeholder: '选择绑定线程',
+            selectedCallbackData,
+            options: bindings.map((binding, index) => ({
+              text: `${index + 1}. ${binding.title || binding.cwd || '未命名线程'}`,
+              callbackData: `${THREAD_SELECT_CALLBACK_PREFIX}${encodeURIComponent(binding.bindingId)}`,
+            })),
+          }],
+        }
+      : {}),
+    actions: bindings.length > 0
+      ? [
+          [
+            {
+              text: '解绑',
+              callbackData: buildThreadActionCallbackData('bound', 'rm'),
+              type: 'danger',
+            },
+            {
+              text: '激活',
+              callbackData: buildThreadActionCallbackData('bound', 'use'),
+              type: 'primary',
+            },
+          ],
+          [{
+            text: '刷新',
+            callbackData: buildCommandCallbackData('/t ls'),
+            type: 'default',
+          }],
+        ]
+      : [
+          [
+            {
+              text: '新建',
+              callbackData: buildCommandCallbackData('/new'),
+              type: 'primary',
+            },
+            {
+              text: '刷新',
+              callbackData: buildCommandCallbackData('/t ls'),
+              type: 'default',
+            },
+          ],
+        ],
     footer: [
       '纯文本命令：`/t use 1` 激活第 1 个绑定线程，`/t rm 1` 移除第 1 个绑定线程。',
       '`/t use` 和 `/t rm` 的序号来自这张局部绑定表；`/t` 和 `/t add` 的序号来自全局本地 Codex 会话表。',

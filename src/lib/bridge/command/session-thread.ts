@@ -285,9 +285,7 @@ export async function handleThreadBindingCommand(options: {
     return {
       response,
       richCard,
-      threadTableCardScope: listBindingsForChat(options.store, options.msg.address.channelType, options.msg.address.chatId).length > 0
-        ? 'bound'
-        : undefined,
+      threadTableCardScope: richCard ? 'bound' : undefined,
     };
   }
 

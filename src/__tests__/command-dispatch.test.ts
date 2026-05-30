@@ -690,6 +690,63 @@ describe('command-dispatch', () => {
     assert.equal(richCards.length, 2);
   });
 
+  it('renders actionable rich cards for empty /t ls and /auto ls tables', async () => {
+    initTestContext();
+    const richCards: OutboundRichCard[] = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      send: async (message: { text: string; richCard?: OutboundRichCard }) => {
+        if (message.richCard) richCards.push(message.richCard);
+        return { ok: true, messageId: `reply-empty-${richCards.length}` };
+      },
+    };
+    const emptyAddress = { channelType: 'feishu', chatId: 'chat-empty-t' } as const;
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address: emptyAddress,
+        text: '/t ls',
+        messageId: 'incoming-empty-t-ls',
+      } as any,
+      '/t ls',
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      },
+    );
+
+    assert.equal(richCards.at(-1)?.title, '当前聊天绑定（0）');
+    assert.equal(richCards.at(-1)?.table?.rows.length, 0);
+    assert.equal(richCards.at(-1)?.selects, undefined);
+    assert.deepEqual(richCards.at(-1)?.actions?.flat().map((action) => action.text), ['新建', '刷新']);
+
+    const autoAddress = { channelType: 'feishu', chatId: 'chat-empty-auto' } as const;
+    router.createBinding(autoAddress, 'D:\\workspace\\empty-auto');
+    await handleBridgeCommand(
+      adapter,
+      {
+        address: autoAddress,
+        text: '/auto ls',
+        messageId: 'incoming-empty-auto-ls',
+      } as any,
+      '/auto ls',
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      },
+    );
+
+    assert.equal(richCards.at(-1)?.title, '当前聊天自动化任务（0）');
+    assert.equal(richCards.at(-1)?.template, 'green');
+    assert.equal(richCards.at(-1)?.table?.rows.length, 0);
+    assert.equal(richCards.at(-1)?.selects, undefined);
+    assert.deepEqual(richCards.at(-1)?.actions?.flat().map((action) => action.text), ['安装skill', '刷新']);
+  });
+
   it('resolves /t bound-thread targets by unique name and rejects duplicate names', async () => {
     const store = initTestContext();
     const sent: string[] = [];

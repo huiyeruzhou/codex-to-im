@@ -298,9 +298,12 @@ export function createMirrorRuntime(
         `[bridge-manager] Unhandled Codex mirror event for thread ${subscription.threadId}: ${kind}`,
       );
     }
-    const routeResult = deliverableRecords.length > 0 && deps.routeCodexRecords
-      ? await deps.routeCodexRecords(subscription.sessionId, subscription.threadId, deliverableRecords)
-      : { claimed: [], unclaimed: deliverableRecords, terminalClaimed: false };
+    const unsuppressedRecords = deliverableRecords.length > 0
+      ? deps.filterSuppressedMirrorRecords(subscription.sessionId, deliverableRecords)
+      : deliverableRecords;
+    const routeResult = unsuppressedRecords.length > 0 && deps.routeCodexRecords
+      ? await deps.routeCodexRecords(subscription.sessionId, subscription.threadId, unsuppressedRecords)
+      : { claimed: [], unclaimed: unsuppressedRecords, terminalClaimed: false };
     const mirrorRecords = routeResult.unclaimed;
 
     if (mirrorRecords.length > 0) {

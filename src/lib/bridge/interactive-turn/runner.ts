@@ -469,7 +469,7 @@ export async function runInteractiveMessage(
       sdkStreamEvents.onTaskEvent,
       sdkStreamEvents.onStatusNote,
       (preparedPrompt) => {
-        if (codexThreadId) {
+        if (turnClassification.kind === 'im_codex_reuse') {
           externalTerminal.expectCodexTerminalFinal();
         }
         if (codexThreadId && !taskState.mirrorSuppressionId) {

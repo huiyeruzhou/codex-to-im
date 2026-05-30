@@ -1034,7 +1034,7 @@ async function runAutoTaskPrompt(
       resolveInteractiveTurnEnvironmentBase(address, targetMessageId, {
         resolveBinding: () => syntheticBinding,
         getBridgeSession: (sessionId) => getBridgeContext().store.getSession(sessionId),
-        codexThreadExists: (threadId) => Boolean(getCodexSessionByThreadIdSafe(threadId, 'auto task classify')),
+        codexThreadExists: () => false,
       })
     ),
     resolveInteractiveTurnRuntimeSettings: (channelType) => resolveInteractiveTurnRuntimeSettings(

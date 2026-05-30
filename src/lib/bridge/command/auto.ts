@@ -53,14 +53,15 @@ export function handleAutoCommand(options: {
     if (!session.ok) return { response: session.message };
     const tasks = listVisibleAutoTasks(options.msg);
     const sessionsById = buildAutoTaskSessionMap(tasks, options.store);
+    const richCard = buildAutoTasksCommandCard(tasks, sessionsById, {
+      selectedTaskId: options.deps.selectedAutoTaskId,
+      channelType: options.msg.address.channelType,
+      chatId: options.msg.address.chatId,
+    }) || undefined;
     return {
       response: buildAutoTasksCommandResponse(tasks, sessionsById, options.markdown),
-      richCard: buildAutoTasksCommandCard(tasks, sessionsById, {
-        selectedTaskId: options.deps.selectedAutoTaskId,
-        channelType: options.msg.address.channelType,
-        chatId: options.msg.address.chatId,
-      }) || undefined,
-      threadTableCardScope: tasks.length > 0 ? 'auto' : undefined,
+      richCard,
+      threadTableCardScope: richCard ? 'auto' : undefined,
     };
   }
 

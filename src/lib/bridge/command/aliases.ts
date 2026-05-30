@@ -30,6 +30,8 @@ export function resolveCommandAlias(rawCommand: string, args: string): string {
       return '/new';
     case '/m':
       return '/mode';
+    case '/p':
+      return '/provider';
     case '/r':
       return '/reasoning';
     case '/sb':

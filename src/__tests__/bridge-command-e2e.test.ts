@@ -283,6 +283,8 @@ describe('bridge command e2e', () => {
     await _testOnly.handleMessage(adapter, inboundMessage(address, `/new ${workDir}`, 'incoming-auto-text-new-session'));
     await _testOnly.handleMessage(adapter, inboundMessage(address, '/auto ls', 'incoming-auto-text-ls-empty'));
     assert.match(adapter.sent.at(-1)?.text || '', /当前聊天没有自动化任务/);
+    assert.equal(adapter.sent.at(-1)?.richCard?.title, '当前聊天自动化任务（0）');
+    assert.deepEqual(adapter.sent.at(-1)?.richCard?.actions?.flat().map((action) => action.text), ['安装skill', '刷新']);
 
     await _testOnly.handleMessage(adapter, inboundMessage(address, `/auto new ${scriptPath} 3`, 'incoming-auto-text-new'));
     assert.match(adapter.sent.at(-1)?.text || '', /已创建自动化任务/);
@@ -299,6 +301,7 @@ describe('bridge command e2e', () => {
 
     await _testOnly.handleMessage(adapter, inboundMessage(address, '/auto ls', 'incoming-auto-text-ls-removed'));
     assert.match(adapter.sent.at(-1)?.text || '', /当前聊天没有自动化任务/);
+    assert.equal(adapter.sent.at(-1)?.richCard?.title, '当前聊天自动化任务（0）');
   });
 
   it('runs the /auto rich card chain with refresh, set, remove, and refresh callbacks', async () => {
@@ -369,7 +372,7 @@ describe('bridge command e2e', () => {
     const sessionA = store.getChannelBinding(address.channelType, address.chatId)!.bridgeSessionId;
 
     await _testOnly.handleMessage(adapter, inboundMessage(address, `/auto new ${scriptPath} 1`, 'incoming-auto-cross-auto-new'));
-    await waitForCondition(() => calls.length === 1);
+    await waitForCondition(() => calls.length === 1, 3000);
     assert.equal(calls[0].sessionId, sessionA);
     assert.equal(calls[0].prompt, 'old session prompt');
 
@@ -385,6 +388,61 @@ describe('bridge command e2e', () => {
     await waitForCondition(() => calls.length === 2);
     assert.equal(calls[1].sessionId, sessionA);
     assert.equal(calls[1].prompt, 'old session prompt');
+  });
+
+  it('delivers /auto SDK final output for a still-bound session without duplicate mirror output', async () => {
+    const calls: ControlledLlmCall[] = [];
+    const store = initBridgeTestContext({ dynamicSettings: true, llm: createControlledLlm(calls) });
+    const adapter = new RecordingAdapter();
+    registerAdapter(adapter);
+    const bridgeState = (globalThis as unknown as Record<string, any>).__bridge_manager__;
+    bridgeState.running = true;
+    const address = { channelType: 'feishu', chatId: 'chat-auto-sdk-mirror-e2e' } as const;
+    const threadId = 'auto-sdk-mirror-thread-0000000001';
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-auto-sdk-mirror-'));
+    const fixture = writeCodexSessionJsonlFixture({
+      threadId,
+      workDir,
+      lines: [{
+        timestamp: '2026-05-28T00:00:00.000Z',
+        type: 'session_meta',
+        payload: {
+          id: threadId,
+          timestamp: '2026-05-28T00:00:00.000Z',
+          cwd: workDir,
+          originator: 'Codex CLI',
+        },
+      }],
+    });
+    const scriptPath = writeAutoScript('instant_sdk_mirror_timer', '#!/usr/bin/env bash\nprintf "auto sdk prompt\\n"\n');
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/t ${threadId}`, 'incoming-auto-sdk-mirror-bind'));
+    const binding = store.getChannelBinding(address.channelType, address.chatId);
+    assert.ok(binding);
+    await _testOnly.reconcileMirrorSubscriptions();
+    assert.ok(bridgeState.mirrorSubscriptions.has(binding.id));
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/auto new ${scriptPath} 1`, 'incoming-auto-sdk-mirror-new'));
+    await waitForCondition(() => calls.length === 1, 3000);
+    assert.equal(calls[0].sessionId, binding.bridgeSessionId);
+    assert.equal(calls[0].prompt, 'auto sdk prompt');
+    assert.equal(_testOnly.isMirrorSuppressed(binding.bridgeSessionId), true);
+
+    appendCodexMirrorTurn(fixture.sessionPath, {
+      timestampPrefix: '2026-05-28T00:01',
+      turnId: 'turn-auto-sdk-mirror',
+      userText: 'auto sdk prompt',
+      assistantText: 'duplicate mirror final',
+    });
+    await _testOnly.reconcileMirrorSubscriptions();
+    assert.doesNotMatch(adapter.sent.map((message) => message.text).join('\n\n'), /duplicate mirror final/);
+
+    finishControlledCall(calls[0], 'auto sdk final');
+    await waitForCondition(() => adapter.sent.some((message) => /auto sdk final/.test(message.text)));
+    const sentText = adapter.sent.map((message) => message.text).join('\n\n');
+    assert.match(sentText, /auto sdk final/);
+    assert.doesNotMatch(sentText, /回复已跳过/);
+    assert.doesNotMatch(sentText, /duplicate mirror final/);
   });
 
   it('stops /auto task after configured times and set restarts from zero', async () => {
@@ -456,6 +514,56 @@ describe('bridge command e2e', () => {
     assert.equal(resetTask.status, 'running');
 
     await _testOnly.handleMessage(adapter, inboundMessage(address, '/auto rm 1', 'incoming-auto-unbind-cleanup'));
+  });
+
+  it('allows /auto set after rebinding the original session with /t', async () => {
+    const store = initBridgeTestContext({ dynamicSettings: true });
+    const adapter = new RecordingAdapter();
+    const address = { channelType: 'feishu', chatId: 'chat-auto-rebind-e2e' } as const;
+    const threadId = 'auto-rebind-thread-0000000000000001';
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-auto-rebind-'));
+    writeCodexSessionJsonlFixture({
+      threadId,
+      workDir,
+      lines: [{
+        timestamp: '2026-05-28T00:00:00.000Z',
+        type: 'session_meta',
+        payload: {
+          id: threadId,
+          timestamp: '2026-05-28T00:00:00.000Z',
+          cwd: workDir,
+          originator: 'Codex CLI',
+        },
+      }],
+    });
+    const scriptPath = writeAutoScript('slow_rebind_timer', '#!/usr/bin/env bash\nsleep 30\nprintf "rebind timer prompt\\n"\n');
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/t ${threadId}`, 'incoming-auto-rebind-bind-a'));
+    const bindingA = store.getChannelBinding(address.channelType, address.chatId);
+    assert.ok(bindingA);
+    const sessionA = bindingA.bridgeSessionId;
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/auto new ${scriptPath} 3`, 'incoming-auto-rebind-auto-new'));
+    assert.equal(listAutoTasks({ bridgeSessionId: sessionA, includeCompleted: true })[0].times, 3);
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t rm 1', 'incoming-auto-rebind-rm-binding'));
+    const pausedTask = listAutoTasks({ bridgeSessionId: sessionA, includeCompleted: true })[0];
+    assert.equal(pausedTask.times, 0);
+    assert.equal(pausedTask.triggeredCount, 0);
+    assert.equal(pausedTask.status, 'completed');
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/t ${threadId}`, 'incoming-auto-rebind-bind-again'));
+    const rebound = store.getChannelBinding(address.channelType, address.chatId);
+    assert.ok(rebound);
+    assert.equal(rebound.bridgeSessionId, sessionA);
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/auto set 1 2', 'incoming-auto-rebind-set'));
+    const resetTask = listAutoTasks({ bridgeSessionId: sessionA, includeCompleted: true })[0];
+    assert.equal(resetTask.times, 2);
+    assert.equal(resetTask.triggeredCount, 0);
+    assert.equal(resetTask.status, 'running');
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/auto rm 1', 'incoming-auto-rebind-cleanup'));
   });
 
   it('routes normal messages to the active binding across a user multi-binding flow', async () => {
@@ -787,7 +895,7 @@ describe('bridge command e2e', () => {
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/sandbox read-only', 'incoming-runtime-sandbox'));
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/network on', 'incoming-runtime-network'));
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/r high', 'incoming-runtime-reasoning'));
-      await _testOnly.handleMessage(adapter, inboundMessage(address, '/provider tmux', 'incoming-runtime-provider'));
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/p tmux', 'incoming-runtime-provider'));
 
       const tmuxSession = store.getSession(binding.bridgeSessionId);
       assert.equal(tmuxSession?.codex_provider, 'tmux');
@@ -843,7 +951,7 @@ describe('bridge command e2e', () => {
       assert.match(adapter.sent.at(-1)?.text || '', /Codex TUI 里使用内置 slash 命令/);
       assert.equal(store.getSession(binding.bridgeSessionId)?.codex_network_access, true);
 
-      await _testOnly.handleMessage(adapter, inboundMessage(address, '/provider sdk', 'incoming-runtime-provider-sdk'));
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/p sdk', 'incoming-runtime-provider-sdk'));
       assert.equal(store.getSession(binding.bridgeSessionId)?.codex_provider, 'sdk');
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/m yolo', 'incoming-runtime-mode-yolo'));

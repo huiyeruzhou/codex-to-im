@@ -8,6 +8,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import {
+  buildCodexTuiShellCommand,
   buildCodexTuiArgs,
   injectPromptIntoTmuxPane,
   isTruthyEnv,
@@ -160,6 +161,59 @@ describe('codex-tmux-provider', () => {
     assert.ok(args.includes('--dangerously-bypass-approvals-and-sandbox'));
     assert.equal(args.includes('--ask-for-approval'), false);
     assert.equal(args.includes('--sandbox'), false);
+  });
+
+  it('starts a real tmux session with the env-wrapped shell command form', async (t: TestContext) => {
+    if (!(await tmuxAvailable())) {
+      t.skip('tmux is not available');
+      return;
+    }
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-tmux-command-'));
+    const sessionName = `cti-test-command-${process.pid}-${Date.now()}`;
+    const outputPath = path.join(tempDir, 'result.json');
+    const scriptPath = path.join(tempDir, 'write-result.cjs');
+    const envValue = "value with spaces and 'quotes'";
+    fs.writeFileSync(scriptPath, [
+      "const fs = require('node:fs');",
+      'const [, , outputPath, argValue] = process.argv;',
+      'fs.writeFileSync(outputPath, JSON.stringify({',
+      '  envValue: process.env.CTI_TMUX_COMMAND_TEST,',
+      '  argValue,',
+      '}));',
+      '',
+    ].join('\n'), 'utf-8');
+
+    const shellCommand = buildCodexTuiShellCommand(process.execPath, [
+      scriptPath,
+      outputPath,
+      'arg with spaces',
+    ], {
+      CTI_TMUX_COMMAND_TEST: envValue,
+      PATH: process.env.PATH || '',
+    });
+
+    try {
+      await execFileAsync('tmux', [
+        'new-session',
+        '-d',
+        '-s',
+        sessionName,
+        '--',
+        shellCommand,
+      ]);
+
+      assert.equal(await waitForFile(outputPath), true, 'tmux shell command should write output');
+      const parsed = JSON.parse(fs.readFileSync(outputPath, 'utf-8')) as {
+        envValue: string;
+        argValue: string;
+      };
+      assert.equal(parsed.envValue, envValue);
+      assert.equal(parsed.argValue, 'arg with spaces');
+    } finally {
+      await execFileAsync('tmux', ['kill-session', '-t', sessionName]).catch(() => undefined);
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it('injects prompt into a real tmux pane with Option+Enter newlines and Enter submit', async (t: TestContext) => {

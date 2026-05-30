@@ -328,6 +328,7 @@ describe('bridge-manager resolveCommandAlias', () => {
       ['/t', 'n 10', '/threads'],
       ['/t', '1', '/thread'],
       ['/m', '', '/mode'],
+      ['/p', 'tmux', '/provider'],
       ['/r', 'high', '/reasoning'],
       ['/n', 'proj1', '/new'],
       ['/h', '', '/help'],
