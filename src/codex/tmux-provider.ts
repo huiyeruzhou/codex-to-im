@@ -119,6 +119,44 @@ export function buildCodexTuiEnv(): Record<string, string> {
   return env;
 }
 
+function shouldForwardCodexTuiEnv(key: string): boolean {
+  if (key.startsWith('CTI_')) return true;
+  if (key.startsWith('CODEX_')) return true;
+  if (key.startsWith('OPENAI_')) return true;
+  if (key.startsWith('HTTPS_PROXY')) return true;
+  if (key.startsWith('HTTP_PROXY')) return true;
+  if (key.startsWith('NO_PROXY')) return true;
+  if (key.startsWith('NODE_')) return true;
+  if (key.startsWith('NVM_')) return true;
+  if (key.startsWith('LC_')) return true;
+  return [
+    'CODEX_API_KEY',
+    'CODEX_HOME',
+    'HOME',
+    'LANG',
+    'LITELLM_KEY',
+    'LOGNAME',
+    'PATH',
+    'SHELL',
+    'SSL_CERT_FILE',
+    'TERM',
+    'USER',
+  ].includes(key);
+}
+
+function commandWithEnvPreview(command: string, args: string[], env: Record<string, string>): string {
+  const forwardedEnv = Object.entries(env)
+    .filter(([key]) => shouldForwardCodexTuiEnv(key))
+    .sort(([a], [b]) => a.localeCompare(b));
+  if (forwardedEnv.length === 0) return commandPreview(command, args);
+  return [
+    'env',
+    ...forwardedEnv.map(([key, value]) => `${key}=${value}`),
+    command,
+    ...args,
+  ].map(shellQuote).join(' ');
+}
+
 function toApprovalPolicy(permissionMode?: string): string {
   switch (permissionMode) {
     case 'never': return 'never';
@@ -543,13 +581,10 @@ async function launchTmuxCodexSession(
 ): Promise<void> {
   const env = buildCodexTuiEnv();
   const codexArgs = buildCodexTuiArgs(params, imagePaths);
-  const command = commandPreview('codex', codexArgs);
+  const command = commandWithEnvPreview('codex', codexArgs, env);
   const tmuxArgs = ['new-session', '-d', '-s', sessionName];
   if (params.workingDirectory) {
     tmuxArgs.push('-c', params.workingDirectory);
-  }
-  for (const [key, value] of Object.entries(env)) {
-    tmuxArgs.push('-e', `${key}=${value}`);
   }
   tmuxArgs.push('--', command);
 
