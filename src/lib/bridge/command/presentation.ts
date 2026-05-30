@@ -358,7 +358,7 @@ export function buildBoundThreadsCommandResponse(
     '当前聊天绑定',
     buildBoundThreadCommandTableRows(bindings),
     [
-      '`/t use <序号|thread-id|binding-id|名称>` 切换当前线程；`/t rm <序号|thread-id|binding-id|名称>` 移除绑定；`/t rename <名称>` 重命名当前线程。',
+      '`/t use <序号|binding-id|thread-id|名称>` 切换当前线程；`/t rm <序号|binding-id|thread-id|名称>` 移除绑定；`/t rename <名称>` 重命名当前线程。',
       '`/t use` 和 `/t rm` 的序号来自 `/t ls` 的局部绑定表；`/t` 和 `/t add` 的序号来自全局本地 Codex 会话表。',
     ],
     markdown,

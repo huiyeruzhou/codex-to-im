@@ -345,7 +345,7 @@ export async function handleThreadBindingCommand(options: {
         ],
         updatedBinding.active !== false
           ? ['接下来直接发送文本即可继续。']
-          : ['当前线程未改变。需要切换时发送 `/t use <序号|thread-id|binding-id|名称>`。'],
+          : ['当前线程未改变。需要切换时发送 `/t use <序号|binding-id|thread-id|名称>`。'],
         options.markdown,
       ),
       richCard,
@@ -356,7 +356,7 @@ export async function handleThreadBindingCommand(options: {
   if (subcommand === 'use') {
     const targetToken = subArgs.trim();
     if (!targetToken) {
-      return { response: '用法：/t use <序号|thread-id|binding-id|名称>。发送 `/t ls` 查看已绑定线程。' };
+      return { response: '用法：/t use <序号|binding-id|thread-id|名称>。发送 `/t ls` 查看已绑定线程。' };
     }
     const bindings = listBindingsForChat(options.store, options.msg.address.channelType, options.msg.address.chatId);
     const selected = options.threadDisplay.resolveBoundBindingSelection(bindings, targetToken);
@@ -403,7 +403,7 @@ export async function handleThreadBindingCommand(options: {
     const parsedArgs = parseForceFlag(subArgs);
     const targetToken = parsedArgs.args;
     if (!targetToken) {
-      return { response: '用法：/t rm <序号|thread-id|binding-id|名称>。发送 `/t ls` 查看已绑定线程。' };
+      return { response: '用法：/t rm <序号|binding-id|thread-id|名称>。发送 `/t ls` 查看已绑定线程。' };
     }
     const bindings = listBindingsForChat(options.store, options.msg.address.channelType, options.msg.address.chatId);
     const selected = options.threadDisplay.resolveBoundBindingSelection(bindings, targetToken);
@@ -485,7 +485,7 @@ export async function handleThreadBindingCommand(options: {
     };
   }
 
-  return { response: '用法：/t、/t ls、/t add <序号|thread-id|名称>、/t use <序号|thread-id|binding-id|名称>、/t rm/remove <序号|thread-id|binding-id|名称>、/t rename <名称>' };
+  return { response: '用法：/t、/t ls、/t add <序号|thread-id|名称>、/t use <序号|binding-id|thread-id|名称>、/t rm/remove <序号|binding-id|thread-id|名称>、/t rename <名称>' };
 }
 
 export async function handleThreadSwitchCommand(options: {

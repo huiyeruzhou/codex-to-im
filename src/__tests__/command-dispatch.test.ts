@@ -725,6 +725,32 @@ describe('command-dispatch', () => {
     assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, first.id);
     assert.match(sent.at(-1) || '', /当前线程已切换/);
 
+    store.updateSessionCodexThreadId(second.bridgeSessionId, first.id);
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/t use 后端修复',
+        messageId: 'incoming-t-use-second-name',
+      } as any,
+      '/t use 后端修复',
+      deps,
+    );
+    assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, second.id);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: `/t use ${first.id}`,
+        messageId: 'incoming-t-use-binding-id-priority',
+      } as any,
+      `/t use ${first.id}`,
+      deps,
+    );
+    assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, first.id);
+    assert.match(sent.at(-1) || '', /当前线程已切换/);
+
     await handleBridgeCommand(
       adapter,
       {

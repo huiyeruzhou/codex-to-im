@@ -98,9 +98,15 @@ export function findVisibleBridgeSessionByCodexThread(
   ));
 }
 
-export function buildBridgeSessionDisplaySummary(session: BridgeSession): SessionDisplaySummary {
+export function buildBridgeSessionDisplaySummary(
+  session: BridgeSession,
+  linkedCodexSession?: CodexSessionSummary,
+): SessionDisplaySummary {
   const codexThreadId = getBridgeSessionCodexThreadId(session);
-  const title = getBridgeSessionDisplayTitle(session);
+  const sessionForTitle = !session.codex_title?.trim() && linkedCodexSession?.title
+    ? { ...session, codex_title: linkedCodexSession.title }
+    : session;
+  const title = getBridgeSessionDisplayTitle(sessionForTitle);
   const executionProvider = bridgeSessionExecutionProvider(session);
   const creatorBadge = formatCreatorBadge('bridge');
   return {
@@ -111,8 +117,8 @@ export function buildBridgeSessionDisplaySummary(session: BridgeSession): Sessio
     threadId: codexThreadId,
     displayTitle: title,
     title,
-    codexTitle: session.codex_title || '',
-    cwd: session.working_directory || '',
+    codexTitle: session.codex_title || linkedCodexSession?.title || '',
+    cwd: session.working_directory || linkedCodexSession?.cwd || '',
     mode: bridgeSessionMode(session),
     executionProvider,
     codexProvider: executionProvider,
@@ -121,7 +127,7 @@ export function buildBridgeSessionDisplaySummary(session: BridgeSession): Sessio
     creatorClass: creatorBadge.className,
     originator: 'Bridge / IM',
     source: 'bridge',
-    lastEventAt: session.updated_at || session.created_at || '',
+    lastEventAt: session.updated_at || session.last_progress_at || linkedCodexSession?.lastEventAt || session.created_at || '',
   };
 }
 
@@ -207,7 +213,7 @@ export class SessionDisplayQuery {
     codexRawSessions: CodexSessionSummary[],
     options: { root: string; limit?: number },
   ): SessionDisplayListPayload {
-    const codexThreadIds = new Set(codexRawSessions.map((session) => session.threadId));
+    const codexByThreadId = new Map(codexRawSessions.map((session) => [session.threadId, session]));
     const bridgeRawSessions = this.store.listSessions()
       .filter(isVisibleBridgeSession)
       .sort((left, right) => (
@@ -222,7 +228,7 @@ export class SessionDisplayQuery {
     }
 
     let dedupedBridgeRows = 0;
-    const seenThreadIds = new Set(codexThreadIds);
+    const seenThreadIds = new Set<string>();
     const bridgeSessions: SessionDisplaySummary[] = [];
     for (const session of bridgeRawSessions) {
       const threadId = getBridgeSessionCodexThreadId(session);
@@ -233,12 +239,16 @@ export class SessionDisplayQuery {
         }
         seenThreadIds.add(threadId);
       }
-      bridgeSessions.push(buildBridgeSessionDisplaySummary(session));
+      bridgeSessions.push(buildBridgeSessionDisplaySummary(session, threadId ? codexByThreadId.get(threadId) : undefined));
     }
 
-    const codexSessions = codexRawSessions.map((session) => (
-      buildCodexThreadDisplaySummary(session, bridgeByCodexThreadId.get(session.threadId))
-    ));
+    const codexSessions = codexRawSessions
+      .filter((session) => {
+        const hasLinkedBridgeSession = bridgeByCodexThreadId.has(session.threadId);
+        if (hasLinkedBridgeSession) dedupedBridgeRows += 1;
+        return !hasLinkedBridgeSession;
+      })
+      .map((session) => buildCodexThreadDisplaySummary(session));
 
     const combined = [...bridgeSessions, ...codexSessions]
       .sort((left, right) => (right.lastEventAt || '').localeCompare(left.lastEventAt || ''));

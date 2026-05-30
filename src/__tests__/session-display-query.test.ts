@@ -63,23 +63,20 @@ describe('SessionDisplayQuery', () => {
 
     const linkedRow = payload.sessions.find((session) => session.codexThreadId === 'thread-linked');
     assert.ok(linkedRow);
-    assert.equal(linkedRow.kind, 'codex');
+    assert.equal(linkedRow.kind, 'bridge');
     assert.equal(linkedRow.bridgeSessionId, linked.id);
     assert.equal(linkedRow.sessionId, linked.id);
     assert.equal(linkedRow.displayTitle, 'Linked workspace');
     assert.equal(linkedRow.title, 'Linked workspace');
     assert.equal(linkedRow.codexTitle, 'Raw Codex title');
+    assert.equal(linkedRow.cwd, '/repo/linked');
     assert.equal(linkedRow.mode, 'yolo');
     assert.equal(linkedRow.executionProvider, 'tmux');
     assert.equal(linkedRow.codexProvider, 'tmux');
-    assert.equal(linkedRow.creatorKind, 'vscode');
-    assert.equal(linkedRow.creatorLabel, 'VS Code');
-    assert.equal(linkedRow.creatorClass, 'vscode');
-    assert.deepEqual(linkedRow.codexSource, {
-      originator: 'Codex Desktop',
-      source: 'vscode',
-      cliVersion: '1.2.3',
-    });
+    assert.equal(linkedRow.creatorKind, 'bridge');
+    assert.equal(linkedRow.creatorLabel, 'Bridge');
+    assert.equal(linkedRow.creatorClass, 'bridge');
+    assert.equal(linkedRow.codexSource, undefined);
 
     const bridgeOnlyRow = payload.sessions.find((session) => session.bridgeSessionId === bridgeOnly.id);
     assert.ok(bridgeOnlyRow);

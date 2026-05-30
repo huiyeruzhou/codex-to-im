@@ -155,13 +155,6 @@ export class ThreadDisplayService {
       return { binding: bindings[index - 1], index };
     }
 
-    const threadMatches = bindings.filter((binding) => {
-      const threadId = this.bindingThreadId(binding);
-      return Boolean(threadId && (threadId.toLowerCase() === lowerToken || threadId.toLowerCase().startsWith(lowerToken)));
-    });
-    if (threadMatches.length > 1) return { ambiguous: true };
-    if (threadMatches.length === 1) return { binding: threadMatches[0] };
-
     const bindingMatches = bindings.filter((binding) => (
       binding.id.toLowerCase() === lowerToken
       || binding.id.toLowerCase().startsWith(lowerToken)
@@ -170,6 +163,13 @@ export class ThreadDisplayService {
     ));
     if (bindingMatches.length > 1) return { ambiguous: true };
     if (bindingMatches.length === 1) return { binding: bindingMatches[0] };
+
+    const threadMatches = bindings.filter((binding) => {
+      const threadId = this.bindingThreadId(binding);
+      return Boolean(threadId && (threadId.toLowerCase() === lowerToken || threadId.toLowerCase().startsWith(lowerToken)));
+    });
+    if (threadMatches.length > 1) return { ambiguous: true };
+    if (threadMatches.length === 1) return { binding: threadMatches[0] };
 
     const nameMatches = bindings.filter((binding) => this.binding(binding).title.trim() === token);
     if (nameMatches.length > 1) return { ambiguous: true };
