@@ -1,4 +1,4 @@
-import type { DesktopMirrorRecord } from '../../desktop-sessions.js';
+import type { CodexMirrorRecord } from '../../codex/session-index.js';
 import type { TaskProgressInfo, ToolCallInfo } from './types.js';
 import { buildMirrorStreamKey, formatMirrorUserText } from './mirror-formatters.js';
 
@@ -9,7 +9,7 @@ function nowIso(): string {
 const MIRROR_DUPLICATE_TEXT_WINDOW_MS = 2_000;
 const CONTEXT_COMPACTED_NOTICE_MARKER = '上下文已压缩';
 
-export interface DesktopMirrorTurnState {
+export interface CodexMirrorTurnState {
   turnId: string | null;
   streamKey: string;
   startedAt: string;
@@ -31,7 +31,7 @@ export interface DesktopMirrorTurnState {
   toolCalls: Map<string, ToolCallInfo>;
 }
 
-export interface FinalizedDesktopMirrorTurn {
+export interface FinalizedCodexMirrorTurn {
   streamKey: string;
   userText: string | null;
   text: string;
@@ -44,29 +44,29 @@ export interface FinalizedDesktopMirrorTurn {
 export interface MirrorTurnStateHolder {
   sessionId: string;
   threadId: string;
-  pendingTurn: DesktopMirrorTurnState | null;
+  pendingTurn: CodexMirrorTurnState | null;
 }
 
 export interface BufferedMirrorTurnStateHolder extends MirrorTurnStateHolder {
-  bufferedRecords: DesktopMirrorRecord[];
+  bufferedRecords: CodexMirrorRecord[];
 }
 
 export interface PendingMirrorDeliveryStateHolder {
-  pendingDeliveries: FinalizedDesktopMirrorTurn[];
+  pendingDeliveries: FinalizedCodexMirrorTurn[];
 }
 
 export interface MirrorTurnHooks<TSubscription extends MirrorTurnStateHolder = MirrorTurnStateHolder> {
-  onStreamText?: (subscription: TSubscription, turnState: DesktopMirrorTurnState) => void;
-  onStatusProgress?: (subscription: TSubscription, turnState: DesktopMirrorTurnState) => void;
-  onTaskProgress?: (subscription: TSubscription, turnState: DesktopMirrorTurnState) => void;
-  onToolProgress?: (subscription: TSubscription, turnState: DesktopMirrorTurnState) => void;
+  onStreamText?: (subscription: TSubscription, turnState: CodexMirrorTurnState) => void;
+  onStatusProgress?: (subscription: TSubscription, turnState: CodexMirrorTurnState) => void;
+  onTaskProgress?: (subscription: TSubscription, turnState: CodexMirrorTurnState) => void;
+  onToolProgress?: (subscription: TSubscription, turnState: CodexMirrorTurnState) => void;
 }
 
 export function createMirrorTurnState(
   sessionId: string,
   timestamp: string,
   turnId?: string,
-): DesktopMirrorTurnState {
+): CodexMirrorTurnState {
   const safeTimestamp = timestamp || nowIso();
   return {
     turnId: turnId || null,
@@ -89,7 +89,7 @@ export function createMirrorTurnState(
 }
 
 export function appendMirrorUserText(
-  turnState: DesktopMirrorTurnState,
+  turnState: CodexMirrorTurnState,
   chunk: string,
 ): void {
   const normalized = formatMirrorUserText(chunk);
@@ -105,7 +105,7 @@ export function appendMirrorUserText(
 }
 
 export function appendMirrorStreamText(
-  turnState: DesktopMirrorTurnState,
+  turnState: CodexMirrorTurnState,
   chunk: string,
 ): void {
   const normalized = chunk.trim();
@@ -117,8 +117,8 @@ export function appendMirrorStreamText(
 
 export function ensureMirrorTurnState<TSubscription extends MirrorTurnStateHolder>(
   subscription: TSubscription,
-  record: DesktopMirrorRecord,
-): DesktopMirrorTurnState {
+  record: CodexMirrorRecord,
+): CodexMirrorTurnState {
   if (!subscription.pendingTurn) {
     subscription.pendingTurn = createMirrorTurnState(subscription.sessionId, record.timestamp, record.turnId);
     return subscription.pendingTurn;
@@ -134,14 +134,14 @@ export function ensureMirrorTurnState<TSubscription extends MirrorTurnStateHolde
 }
 
 function markMirrorActivity(
-  turnState: DesktopMirrorTurnState,
+  turnState: CodexMirrorTurnState,
   timestamp: string,
 ): void {
   turnState.lastActivityAt = timestamp || nowIso();
 }
 
 function markMirrorContentResponse(
-  turnState: DesktopMirrorTurnState,
+  turnState: CodexMirrorTurnState,
   timestamp: string,
 ): void {
   const responseAt = timestamp || nowIso();
@@ -165,7 +165,7 @@ function isNearDuplicateMirrorText(
 }
 
 function buildFinalMirrorText(
-  turnState: DesktopMirrorTurnState,
+  turnState: CodexMirrorTurnState,
   preferredText?: string,
 ): string {
   const preferred = (preferredText || '').trim();
@@ -186,7 +186,7 @@ export function finalizeMirrorTurn<TSubscription extends MirrorTurnStateHolder>(
   timestamp: string,
   status: 'completed' | 'interrupted',
   preferredText?: string,
-): FinalizedDesktopMirrorTurn | null {
+): FinalizedCodexMirrorTurn | null {
   const pendingTurn = subscription.pendingTurn;
   subscription.pendingTurn = null;
   if (!pendingTurn) return null;
@@ -208,10 +208,10 @@ export function finalizeMirrorTurn<TSubscription extends MirrorTurnStateHolder>(
 
 export function consumeMirrorRecords<TSubscription extends MirrorTurnStateHolder>(
   subscription: TSubscription,
-  records: DesktopMirrorRecord[],
+  records: CodexMirrorRecord[],
   hooks: MirrorTurnHooks<TSubscription> = {},
-): FinalizedDesktopMirrorTurn[] {
-  const finalized: FinalizedDesktopMirrorTurn[] = [];
+): FinalizedCodexMirrorTurn[] {
+  const finalized: FinalizedCodexMirrorTurn[] = [];
 
   for (const record of records) {
     if (record.type === 'task_started') {
@@ -352,7 +352,7 @@ export function flushTimedOutMirrorTurn<TSubscription extends MirrorTurnStateHol
   subscription: TSubscription,
   idleTimeoutMs: number,
   nowMs = Date.now(),
-): FinalizedDesktopMirrorTurn | null {
+): FinalizedCodexMirrorTurn | null {
   const pendingTurn = subscription.pendingTurn;
   if (!pendingTurn?.lastActivityAt) return null;
   const lastActivityMs = Date.parse(pendingTurn.lastActivityAt);
@@ -371,7 +371,7 @@ export function flushTimedOutMirrorTurn<TSubscription extends MirrorTurnStateHol
 
 export function enqueuePendingMirrorDeliveries<TSubscription extends PendingMirrorDeliveryStateHolder>(
   subscription: TSubscription,
-  turns: FinalizedDesktopMirrorTurn[],
+  turns: FinalizedCodexMirrorTurn[],
 ): void {
   if (turns.length === 0) return;
   const existingSignatures = new Set(subscription.pendingDeliveries.map((turn) => turn.signature));
@@ -384,7 +384,7 @@ export function enqueuePendingMirrorDeliveries<TSubscription extends PendingMirr
 
 export function removePendingMirrorDeliveries<TSubscription extends PendingMirrorDeliveryStateHolder>(
   subscription: TSubscription,
-  turns: FinalizedDesktopMirrorTurn[],
+  turns: FinalizedCodexMirrorTurn[],
 ): void {
   if (turns.length === 0 || subscription.pendingDeliveries.length === 0) return;
   const deliveredSignatures = new Set(turns.map((turn) => turn.signature));
@@ -396,7 +396,7 @@ export function removePendingMirrorDeliveries<TSubscription extends PendingMirro
 export function selectPendingMirrorDeliveries<TSubscription extends PendingMirrorDeliveryStateHolder>(
   subscription: TSubscription,
   blocked: boolean,
-): FinalizedDesktopMirrorTurn[] {
+): FinalizedCodexMirrorTurn[] {
   if (!blocked) {
     return subscription.pendingDeliveries.slice();
   }
@@ -416,7 +416,7 @@ export function consumeBufferedMirrorTurns<TSubscription extends BufferedMirrorT
   idleTimeoutMs: number,
   nowMs = Date.now(),
   hooks: MirrorTurnHooks<TSubscription> = {},
-): FinalizedDesktopMirrorTurn[] {
+): FinalizedCodexMirrorTurn[] {
   const bufferedRecords = subscription.bufferedRecords;
   subscription.bufferedRecords = [];
 

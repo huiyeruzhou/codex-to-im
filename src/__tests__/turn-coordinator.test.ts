@@ -8,12 +8,11 @@ function activeTurn(overrides: Partial<ActiveBridgeTurn> = {}): ActiveBridgeTurn
   return {
     id: 'turn-1',
     sessionId: 'session-1',
-    kind: 'im_desktop_reuse',
+    kind: 'im_codex_reuse',
     origin: 'im',
     progressSource: 'sdk_stream',
-    finalSource: 'desktop_task_complete',
-    codexThreadId: 'desktop-thread-1',
-    desktopThreadId: 'desktop-thread-1',
+    finalSource: 'codex_task_complete',
+    codexThreadId: 'codex-thread-1',
     startedAt: 1000,
     ...overrides,
   };
@@ -22,8 +21,8 @@ function activeTurn(overrides: Partial<ActiveBridgeTurn> = {}): ActiveBridgeTurn
 function terminal(overrides: Partial<BridgeTurnTerminalRecord> = {}): BridgeTurnTerminalRecord {
   return {
     sessionId: 'session-1',
-    desktopThreadId: 'desktop-thread-1',
-    turnId: 'desktop-turn-1',
+    codexThreadId: 'codex-thread-1',
+    turnId: 'codex-turn-1',
     text: 'final answer',
     outcome: 'completed',
     timestamp: '2026-04-27T00:00:00.000Z',
@@ -32,7 +31,7 @@ function terminal(overrides: Partial<BridgeTurnTerminalRecord> = {}): BridgeTurn
 }
 
 describe('turn-coordinator', () => {
-  it('claims a desktop terminal for the active IM desktop reuse turn', async () => {
+  it('claims a Codex terminal for the active IM Codex reuse turn', async () => {
     const finalized: string[] = [];
     const coordinator = createTurnCoordinator({
       finalizeTerminalTurn: async (turn, record) => {
@@ -42,7 +41,7 @@ describe('turn-coordinator', () => {
     });
     coordinator.registerInteractiveTurn(activeTurn());
 
-    const result = await coordinator.claimDesktopTerminal(terminal());
+    const result = await coordinator.claimCodexTerminal(terminal());
 
     assert.equal(result.claimed, true);
     assert.equal(result.turn?.id, 'turn-1');
@@ -57,23 +56,23 @@ describe('turn-coordinator', () => {
     });
     coordinator.registerInteractiveTurn(activeTurn({
       kind: 'im_sdk',
-      desktopThreadId: undefined,
+      codexThreadId: undefined,
       finalSource: 'sdk_result',
     }));
 
-    const result = await coordinator.claimDesktopTerminal(terminal());
+    const result = await coordinator.claimCodexTerminal(terminal());
 
     assert.equal(result.claimed, false);
   });
 
-  it('does not claim terminals from another desktop thread', async () => {
+  it('does not claim terminals from another Codex thread', async () => {
     const coordinator = createTurnCoordinator({
       finalizeTerminalTurn: async () => true,
     });
     coordinator.registerInteractiveTurn(activeTurn());
 
-    const result = await coordinator.claimDesktopTerminal(terminal({
-      desktopThreadId: 'other-thread',
+    const result = await coordinator.claimCodexTerminal(terminal({
+      codexThreadId: 'other-thread',
     }));
 
     assert.equal(result.claimed, false);

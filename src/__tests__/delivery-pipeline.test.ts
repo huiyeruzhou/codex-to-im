@@ -5,7 +5,6 @@ import { BaseChannelAdapter } from '../lib/bridge/channel-adapter.js';
 import { initBridgeContext } from '../lib/bridge/context.js';
 import {
   deliverFinalResponse,
-  finalizeStreamingUi,
 } from '../lib/bridge/turns/delivery-pipeline.js';
 import { assembleSdkFinalResponse } from '../lib/bridge/turns/response-assembler.js';
 import type { InboundMessage, OutboundMessage, SendResult } from '../lib/bridge/types.js';
@@ -13,7 +12,6 @@ import type { InboundMessage, OutboundMessage, SendResult } from '../lib/bridge/
 class FakeAdapter extends BaseChannelAdapter {
   readonly channelType = 'feishu-default';
   readonly provider = 'feishu';
-  readonly streamEnds: Array<{ status: 'completed' | 'interrupted' | 'error'; text: string; streamKey?: string }> = [];
 
   async start(): Promise<void> {}
   async stop(): Promise<void> {}
@@ -23,15 +21,6 @@ class FakeAdapter extends BaseChannelAdapter {
   validateConfig(): string | null { return null; }
   isAuthorized(): boolean { return true; }
 
-  async onStreamEnd(
-    _chatId: string,
-    status: 'completed' | 'interrupted' | 'error',
-    responseText: string,
-    streamKey?: string,
-  ): Promise<boolean> {
-    this.streamEnds.push({ status, text: responseText, streamKey });
-    return true;
-  }
 }
 
 describe('delivery-pipeline', () => {
@@ -96,26 +85,5 @@ describe('delivery-pipeline', () => {
 
     assert.equal(result.ok, true);
     assert.deepEqual(calls, ['text:镜像正文', 'attachments::1']);
-  });
-
-  it('finalizes stream feedback through the adapter', async () => {
-    const adapter = new FakeAdapter();
-    const finalized = await finalizeStreamingUi(
-      {
-        adapter,
-        channelType: 'feishu-default',
-        chatId: 'chat-1',
-        streamKey: 'stream-1',
-      },
-      'completed',
-      assembleSdkFinalResponse({ text: '最终回复' }),
-    );
-
-    assert.equal(finalized, true);
-    assert.deepEqual(adapter.streamEnds, [{
-      status: 'completed',
-      text: '最终回复',
-      streamKey: 'stream-1',
-    }]);
   });
 });

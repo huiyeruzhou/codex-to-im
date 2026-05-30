@@ -171,7 +171,7 @@ export interface SendResult {
 
 export type ChannelBindingMode = 'normal' | 'yolo' | 'code' | 'plan' | 'ask';
 
-/** Links an IM chat to a CodePilot session */
+/** Links an IM chat to a BridgeSession */
 export interface ChannelBinding {
   id: string;
   channelType: ChannelType;
@@ -180,10 +180,8 @@ export interface ChannelBinding {
   chatId: string;
   chatUserId?: string;
   chatDisplayName?: string;
-  /** CodePilot session ID this chat is bound to */
-  codepilotSessionId: string;
-  /** SDK session ID for resume (cached from last conversation) */
-  sdkSessionId: string;
+  /** BridgeSession ID this chat is bound to */
+  bridgeSessionId: string;
   /** Working directory for this binding */
   workingDirectory: string;
   /** Model override for this binding */
@@ -202,7 +200,7 @@ export interface ChannelDefaultTarget {
   channelType: ChannelType;
   channelProvider?: string;
   channelAlias?: string;
-  targetKey: string;
+  bridgeSessionId: string;
   createdAt: string;
   updatedAt: string;
 }

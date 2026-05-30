@@ -5,7 +5,7 @@ import {
   buildAdapterSyncPlan,
   listEnabledAdapterInstances,
 } from './adapter-sync-plan.js';
-import { isBridgeCommandText } from './command-aliases.js';
+import { isBridgeCommandText } from './command.js';
 
 export interface AdapterMeta {
   lastMessageAt: string | null;

@@ -1,21 +1,60 @@
 import type { OutboundAttachment } from '../types.js';
 import {
+  parseOutboundArtifacts,
   stripOutboundArtifactBlocksForStreaming,
 } from '../outbound-artifacts.js';
 import type {
   BridgeTurnFinalSource,
   FinalizedBridgeResponse,
 } from './turn-types.js';
-import {
-  collectFinalResponseArtifacts,
-  dedupeOutboundAttachments,
-} from './final-response-artifacts.js';
 
 export interface AssembleFinalResponseInput {
   text?: string | null;
   attachments?: OutboundAttachment[];
   hasError?: boolean;
   errorMessage?: string;
+}
+
+export interface FinalResponseArtifactParseResult {
+  text: string;
+  attachments: OutboundAttachment[];
+}
+
+function attachmentKey(attachment: OutboundAttachment): string {
+  return [
+    attachment.kind,
+    attachment.path,
+    attachment.caption || '',
+    attachment.name || '',
+  ].join('\0');
+}
+
+export function dedupeOutboundAttachments(
+  attachments: OutboundAttachment[],
+): OutboundAttachment[] {
+  const seen = new Set<string>();
+  const deduped: OutboundAttachment[] = [];
+  for (const attachment of attachments) {
+    const key = attachmentKey(attachment);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(attachment);
+  }
+  return deduped;
+}
+
+export function collectFinalResponseArtifacts(
+  text?: string | null,
+  attachments: OutboundAttachment[] = [],
+): FinalResponseArtifactParseResult {
+  const parsed = parseOutboundArtifacts(text || '');
+  return {
+    text: parsed.cleanText,
+    attachments: dedupeOutboundAttachments([
+      ...attachments,
+      ...parsed.attachments,
+    ]),
+  };
 }
 
 function assembleFinalResponse(
@@ -38,10 +77,10 @@ export function assembleSdkFinalResponse(
   return assembleFinalResponse('sdk_result', input);
 }
 
-export function assembleDesktopFinalResponse(
+export function assembleCodexFinalResponse(
   input: AssembleFinalResponseInput,
 ): FinalizedBridgeResponse {
-  return assembleFinalResponse('desktop_task_complete', input);
+  return assembleFinalResponse('codex_task_complete', input);
 }
 
 export function hasFinalResponsePayload(response: FinalizedBridgeResponse): boolean {

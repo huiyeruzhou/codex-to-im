@@ -15,7 +15,7 @@ function getMirrorAssistantRuntimeLabel(): string {
 }
 
 export function buildMirrorTitle(threadTitle: string | null, markdown = false): string {
-  const title = threadTitle?.trim() || '桌面线程';
+  const title = threadTitle?.trim() || 'Codex thread';
   const rendered = markdown ? `\`<${title}>\`` : `<${title}>`;
   return markdown ? `**${rendered}**` : rendered;
 }
@@ -103,8 +103,8 @@ export function formatMirrorMessage(
 
 function buildMirrorTimeoutNotice(markdown = false): string {
   return markdown
-    ? '> 超时提醒：长时间没有收到新的桌面会话输出，本次流式同步已先结束；如果桌面后续继续产出内容，会重新开始新一轮同步。'
-    : '超时提醒：长时间没有收到新的桌面会话输出，本次流式同步已先结束；如果桌面后续继续产出内容，会重新开始新一轮同步。';
+    ? '> 超时提醒：长时间没有收到新的本地 Codex 会话输出，本次流式同步已先结束；如果 Codex 后续继续产出内容，会重新开始新一轮同步。'
+    : '超时提醒：长时间没有收到新的本地 Codex 会话输出，本次流式同步已先结束；如果 Codex 后续继续产出内容，会重新开始新一轮同步。';
 }
 
 export function appendMirrorTimeoutNotice(text: string, markdown = false): string {

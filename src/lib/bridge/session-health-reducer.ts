@@ -59,7 +59,7 @@ export interface SessionHealthDiagnosis {
   lastStreamUiErrorAt: string | null;
   lastStreamUiError: string | null;
   streamUiConsecutiveFailures: number;
-  sdkSessionId: string | null;
+  codexThreadId: string | null;
   processProbe: ThreadProcessProbeResult | null;
 }
 
@@ -146,7 +146,7 @@ export function buildProgressReason(type: SessionProgressType, detail?: string):
     case 'task_started':
       return '任务已启动。';
     case 'message':
-      return '最近收到了新的桌面会话消息。';
+      return '最近收到了新的本地 Codex 会话消息。';
     case 'commentary':
       return '最近收到了新的执行进展说明。';
     case 'reasoning':
@@ -219,7 +219,7 @@ export function computeBaseDiagnosis(
     && session.stream_ui_consecutive_failures > 0
     ? session.stream_ui_consecutive_failures
     : 0;
-  const sdkSessionId = trimOrNull(session.sdk_session_id);
+  const codexThreadId = trimOrNull(session.codex_thread_id);
   const lastProgressMs = parseIsoMs(lastProgressAt || undefined);
   const previousStatus = session.health_status || 'idle';
 
@@ -241,7 +241,7 @@ export function computeBaseDiagnosis(
       lastStreamUiErrorAt,
       lastStreamUiError,
       streamUiConsecutiveFailures,
-      sdkSessionId,
+      codexThreadId,
     };
   }
 
@@ -268,7 +268,7 @@ export function computeBaseDiagnosis(
       lastStreamUiErrorAt,
       lastStreamUiError,
       streamUiConsecutiveFailures,
-      sdkSessionId,
+      codexThreadId,
     };
   }
 
@@ -319,7 +319,7 @@ export function computeBaseDiagnosis(
     lastStreamUiErrorAt,
     lastStreamUiError,
     streamUiConsecutiveFailures,
-    sdkSessionId,
+    codexThreadId,
   };
 }
 

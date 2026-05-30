@@ -51,7 +51,7 @@ describe('mirror-subscription-state', () => {
     });
   });
 
-  it('resets the correct state when a binding switches to a different desktop thread', () => {
+  it('resets the correct state when a binding switches to a different Codex thread', () => {
     const subscription = createMirrorSubscription({
       bindingId: 'binding-1',
       sessionId: 'session-old',

@@ -1,4 +1,4 @@
-import type { DesktopMirrorRecord } from '../../desktop-sessions.js';
+import type { CodexMirrorRecord } from '../../codex/session-index.js';
 
 export interface MirrorSuppressionState {
   id: string;
@@ -198,15 +198,15 @@ export function isMirrorSuppressed(
 export function filterSuppressedMirrorRecords(
   store: MirrorSuppressionStore,
   sessionId: string,
-  records: DesktopMirrorRecord[],
+  records: CodexMirrorRecord[],
   config: MirrorSuppressionConfig,
   nowMs = Date.now(),
-): DesktopMirrorRecord[] {
+): CodexMirrorRecord[] {
   const suppressions = getMirrorSuppressionStates(store, sessionId, nowMs);
   const ignoredTurnIds = cleanupIgnoredMirrorTurns(store, sessionId, nowMs);
   if ((suppressions.length === 0 && ignoredTurnIds.size === 0) || records.length === 0) return records;
 
-  const filtered: DesktopMirrorRecord[] = [];
+  const filtered: CodexMirrorRecord[] = [];
 
   for (const record of records) {
     const normalizedContent = record.type === 'message'

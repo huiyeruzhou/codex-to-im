@@ -35,7 +35,7 @@ export function makeDraftSessionName(address: { channelType: string; chatId: str
 
 export function cleanupHiddenSessions(store: BridgeStore): void {
   const bindings = store.listChannelBindings();
-  const boundSessionIds = new Set(bindings.map((binding) => binding.codepilotSessionId));
+  const boundSessionIds = new Set(bindings.map((binding) => binding.bridgeSessionId));
   const hiddenSessions = store.listSessions().filter((session) => session.hidden === true);
 
   for (const session of hiddenSessions) {

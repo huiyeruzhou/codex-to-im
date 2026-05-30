@@ -1,0 +1,217 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codex-to-im.local/schemas/config.v2.schema.json",
+  "title": "Codex-to-IM config.v2.json",
+  "description": "Structured runtime and channel configuration stored at ~/.codex-to-im/config.v2.json.",
+  "type": "object",
+  "required": ["schemaVersion", "runtime", "channels"],
+  "properties": {
+    "schemaVersion": {
+      "const": 2
+    },
+    "runtime": {
+      "$ref": "#/$defs/runtime"
+    },
+    "channels": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/channelInstance"
+      }
+    }
+  },
+  "allOf": [
+    {
+      "$ref": "#/$defs/noRetiredThreadIdentityFields"
+    }
+  ],
+  "additionalProperties": true,
+  "$defs": {
+    "runtime": {
+      "type": "object",
+      "required": ["provider", "defaultMode"],
+      "properties": {
+        "provider": {
+          "const": "codex"
+        },
+        "defaultWorkspaceRoot": {
+          "type": "string"
+        },
+        "defaultModel": {
+          "type": "string"
+        },
+        "defaultMode": {
+          "enum": ["normal", "yolo"]
+        },
+        "historyMessageLimit": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "streamStatusIdleStartSeconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "streamStatusCheckIntervalSeconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "codexSkipGitRepoCheck": {
+          "type": "boolean"
+        },
+        "codexSandboxMode": {
+          "enum": ["read-only", "workspace-write", "danger-full-access"]
+        },
+        "codexNetworkAccess": {
+          "type": "boolean"
+        },
+        "codexReasoningEffort": {
+          "enum": ["minimal", "low", "medium", "high", "xhigh"]
+        },
+        "sdkToolCallDetailsInText": {
+          "type": "boolean"
+        },
+        "uiAllowLan": {
+          "type": "boolean"
+        },
+        "uiAccessToken": {
+          "type": "string"
+        }
+      },
+      "allOf": [
+        {
+          "$ref": "#/$defs/noRetiredThreadIdentityFields"
+        }
+      ],
+      "additionalProperties": true
+    },
+    "channelInstance": {
+      "type": "object",
+      "required": ["id", "alias", "provider", "enabled", "createdAt", "updatedAt", "config"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "alias": {
+          "type": "string",
+          "minLength": 1
+        },
+        "provider": {
+          "enum": ["feishu", "weixin"]
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "config": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/feishuChannelConfig"
+            },
+            {
+              "$ref": "#/$defs/weixinChannelConfig"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "$ref": "#/$defs/noRetiredThreadIdentityFields"
+        }
+      ],
+      "additionalProperties": true
+    },
+    "feishuChannelConfig": {
+      "type": "object",
+      "properties": {
+        "appId": {
+          "type": "string"
+        },
+        "appSecret": {
+          "type": "string"
+        },
+        "site": {
+          "enum": ["feishu", "lark"]
+        },
+        "allowedUsers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "streamingEnabled": {
+          "type": "boolean"
+        },
+        "feedbackMarkdownEnabled": {
+          "type": "boolean"
+        }
+      },
+      "allOf": [
+        {
+          "$ref": "#/$defs/noRetiredThreadIdentityFields"
+        }
+      ],
+      "additionalProperties": true
+    },
+    "weixinChannelConfig": {
+      "type": "object",
+      "properties": {
+        "accountId": {
+          "type": "string"
+        },
+        "baseUrl": {
+          "type": "string"
+        },
+        "cdnBaseUrl": {
+          "type": "string"
+        },
+        "mediaEnabled": {
+          "type": "boolean"
+        },
+        "feedbackMarkdownEnabled": {
+          "type": "boolean"
+        }
+      },
+      "allOf": [
+        {
+          "$ref": "#/$defs/noRetiredThreadIdentityFields"
+        }
+      ],
+      "additionalProperties": true
+    },
+    "noRetiredThreadIdentityFields": {
+      "not": {
+        "anyOf": [
+          {
+            "required": ["sdk_session_id"]
+          },
+          {
+            "required": ["sdkSessionId"]
+          },
+          {
+            "required": ["desktop_thread_id"]
+          },
+          {
+            "required": ["desktopThreadId"]
+          },
+          {
+            "required": ["thread_origin"]
+          },
+          {
+            "required": ["threadOrigin"]
+          },
+          {
+            "required": ["thread_id"]
+          },
+          {
+            "required": ["threadId"]
+          }
+        ]
+      }
+    }
+  }
+}

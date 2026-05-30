@@ -2,10 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import {
-  getDesktopSessionByThreadId,
-  listDesktopSessions,
-} from '../../desktop-sessions.js';
-import type { DesktopSessionSummary } from '../../desktop-sessions.js';
+  getCodexSessionByThreadId,
+  listCodexSessions,
+  type CodexSessionSummary,
+} from '../../codex/session-index.js';
 import { DEFAULT_WORKSPACE_ROOT } from '../../config.js';
 import {
   resetDraftSession as resetDraftSessionForStore,
@@ -14,7 +14,7 @@ import {
   findSelectableCodexModel,
   isCliOnlyCodexModel,
   listSelectableCodexModels,
-} from '../../codex-models.js';
+} from '../../codex/models.js';
 import {
   normalizeReasoningEffort as normalizeStoredReasoningEffort,
   normalizeSandboxMode,
@@ -26,24 +26,24 @@ import { validateWorkingDirectory } from './security/validators.js';
 const AVAILABLE_CODEX_MODELS = listSelectableCodexModels();
 const AVAILABLE_CODEX_MODEL_MAP = new Map(AVAILABLE_CODEX_MODELS.map((model) => [model.slug, model]));
 
-export function getDisplayedDesktopThreads(limit: number): DesktopSessionSummary[] | null {
+export function getDisplayedCodexThreads(limit: number): CodexSessionSummary[] | null {
   try {
-    return listDesktopSessions(limit);
+    return listCodexSessions(limit);
   } catch (error) {
-    console.error('[bridge-manager] Failed to list desktop sessions:', error);
+    console.error('[bridge-manager] Failed to list codex sessions:', error);
     return null;
   }
 }
 
-export function getDesktopSessionByThreadIdSafe(
+export function getCodexSessionByThreadIdSafe(
   threadId: string,
   context: string,
-): DesktopSessionSummary | null {
+): CodexSessionSummary | null {
   try {
-    return getDesktopSessionByThreadId(threadId);
+    return getCodexSessionByThreadId(threadId);
   } catch (error) {
     console.error(
-      `[bridge-manager] Failed to load desktop thread ${threadId} during ${context}:`,
+      `[bridge-manager] Failed to load Codex thread ${threadId} during ${context}:`,
       error,
     );
     return null;
@@ -203,7 +203,7 @@ export function getHistoryMessageLimit(): number {
   return Math.max(1, Math.min(20, configured));
 }
 
-export function getDesktopThreadTitle(threadId: string | undefined | null): string | null {
+export function getCodexThreadTitle(threadId: string | undefined | null): string | null {
   if (!threadId) return null;
-  return getDesktopSessionByThreadIdSafe(threadId, 'status lookup')?.title || null;
+  return getCodexSessionByThreadIdSafe(threadId, 'status lookup')?.title || null;
 }

@@ -1,8 +1,8 @@
 import './test-setup.js';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { downloadMediaFromItem, encryptMedia } from '../adapters/weixin/weixin-media.js';
-import { MessageItemType } from '../adapters/weixin/weixin-types.js';
+import { downloadMediaFromItem, encryptMedia } from '../lib/bridge/adapters/weixin/weixin-media.js';
+import { MessageItemType } from '../lib/bridge/adapters/weixin/weixin-types.js';
 
 describe('weixin-media', () => {
   const originalFetch = globalThis.fetch;

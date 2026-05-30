@@ -1,27 +1,23 @@
-import fs from 'node:fs';
-import path from 'node:path';
-
-import { CTI_HOME } from '../../config.js';
-import type { DesktopSessionSummary } from '../../desktop-sessions.js';
-import { getDesktopSessionByThreadIdSafe } from './bridge-session-support.js';
+import type { CodexSessionSummary } from '../../codex/session-index.js';
+import { getCodexSessionByThreadIdSafe } from './bridge-session-support.js';
 import {
-  buildBoundThreadsCommandResponse,
-  buildBoundThreadsCommandCard,
-  buildCommandFields,
-  buildDesktopThreadsCommandCard,
+  bridgeSessionExecutionProvider,
+  buildCodexThreadDisplaySummary,
+  findVisibleBridgeSessionByCodexThread,
+  getBridgeSessionDisplayTitle,
+} from './display/session-display-query.js';
+import {
+  resolveCreatorKind,
+  type CodexSourceSummary,
+  type CreatorKind,
+} from './display/session-creator.js';
+import {
   getSessionDisplayName,
-  stripDesktopSessionPrefix,
-  type BoundThreadCardItem,
-  type DesktopThreadCardBindingState,
-} from './command-formatters.js';
+  stripLegacySessionPrefix,
+} from './display/session-title.js';
 import type { BridgeStore } from './host.js';
 import type { ChannelBinding } from './types.js';
-import { getCodexThreadId, getExplicitDesktopThreadId } from './turns/turn-classifier.js';
-import { listBindingsForChat } from '../../session-bindings.js';
-
-interface UiSessionMetaEntry {
-  name?: string;
-}
+import { getCodexThreadId } from './turns/turn-classifier.js';
 
 export interface ThreadDisplayInfo {
   title: string;
@@ -29,6 +25,10 @@ export interface ThreadDisplayInfo {
   cwd: string;
   lastActiveAt?: string;
   originator?: string;
+  bridgeSessionId?: string;
+  creatorKind?: CreatorKind;
+  codexSource?: CodexSourceSummary;
+  executionProvider?: string;
 }
 
 export interface ThreadTitleOptions {
@@ -41,63 +41,19 @@ export interface BindingSelection {
   index?: number;
 }
 
-export interface DesktopThreadSelection {
-  thread?: DesktopSessionSummary;
+export interface CodexThreadSelection {
+  thread?: CodexSessionSummary;
   threadId?: string;
   ambiguous?: boolean;
   index?: number;
 }
 
 export class ThreadDisplayService {
-  private readonly uiSessionMetaPath: string;
-  private uiSessionMeta: Record<string, UiSessionMetaEntry> | null = null;
-
-  constructor(private readonly store: BridgeStore, options: { uiSessionMetaPath?: string } = {}) {
-    this.uiSessionMetaPath = options.uiSessionMetaPath || path.join(CTI_HOME, 'data', 'ui-session-meta.json');
-  }
-
-  chatBindingsResponse(channelType: string, chatId: string, markdown: boolean): string {
-    const bindings = listBindingsForChat(this.store, channelType, chatId);
-    if (bindings.length === 0) {
-      return buildCommandFields(
-        '当前聊天绑定',
-        [],
-        ['还没有绑定线程。发送 `/t` 查看最近桌面会话，再用 `/t add 1` 添加。'],
-        markdown,
-      );
-    }
-
-    return buildBoundThreadsCommandResponse(this.boundThreadCardItems(channelType, chatId), markdown);
-  }
-
-  refreshedDesktopThreadsCard(
-    desktopSessions: DesktopSessionSummary[] | null | undefined,
-    showAll: boolean,
-    limit: number,
-    channelType: string,
-    chatId: string,
-    selectedThreadId?: string | null,
-  ) {
-    if (!desktopSessions || desktopSessions.length === 0) return undefined;
-    return buildDesktopThreadsCommandCard(
-      this.decorateDesktopSessions(desktopSessions, channelType, chatId),
-      showAll,
-      limit,
-      this.desktopBindingStates(channelType, chatId),
-      { channelType, chatId, selectedThreadId },
-    ) || undefined;
-  }
-
-  refreshedBoundThreadsCard(channelType: string, chatId: string, selectedBindingId?: string | null) {
-    return buildBoundThreadsCommandCard(
-      this.boundThreadCardItems(channelType, chatId),
-      { channelType, chatId, selectedBindingId },
-    ) || undefined;
-  }
+  constructor(private readonly store: BridgeStore) {}
 
   bindingThreadId(binding: ChannelBinding): string {
-    const session = this.store.getSession(binding.codepilotSessionId);
-    return getExplicitDesktopThreadId(session) || getCodexThreadId(session, binding) || binding.sdkSessionId || '';
+    const session = this.store.getSession(binding.bridgeSessionId);
+    return getCodexThreadId(session, binding) || '';
   }
 
   bindingShortId(binding: ChannelBinding): string {
@@ -105,32 +61,47 @@ export class ThreadDisplayService {
   }
 
   binding(binding: ChannelBinding, options: ThreadTitleOptions = {}): ThreadDisplayInfo {
-    const session = this.store.getSession(binding.codepilotSessionId);
+    const session = this.store.getSession(binding.bridgeSessionId);
     const threadId = this.bindingThreadId(binding);
-    const desktop = threadId ? getDesktopSessionByThreadIdSafe(threadId, 'thread display binding') : null;
+    const codexSession = threadId ? getCodexSessionByThreadIdSafe(threadId, 'thread display binding') : null;
+    const sessionForTitle = session && !session.codex_title?.trim() && codexSession?.title
+      ? { ...session, codex_title: codexSession.title }
+      : session;
     const title = this.resolveTitle({
-      sessionName: session?.name,
-      sessionId: session?.id || binding.codepilotSessionId,
+      sessionName: sessionForTitle ? getBridgeSessionDisplayTitle(sessionForTitle) : undefined,
+      sessionId: session?.id || binding.bridgeSessionId,
       threadId,
-      desktopTitle: desktop?.title,
-      fallback: getSessionDisplayName(session, binding.workingDirectory) || binding.codepilotSessionId.slice(0, 8),
+      codexTitle: session?.codex_title || codexSession?.title,
+      fallback: getSessionDisplayName(session, binding.workingDirectory) || binding.bridgeSessionId.slice(0, 8),
     });
+    const codexSource = codexSession ? codexSessionSource(codexSession) : undefined;
     return {
       title: formatResolvedThreadTitle(title, options),
       threadId,
-      cwd: binding.workingDirectory || desktop?.cwd || '',
-      lastActiveAt: desktop?.lastEventAt || session?.last_progress_at || session?.updated_at || binding.updatedAt,
-      originator: desktop?.originator || '当前聊天',
+      cwd: binding.workingDirectory || codexSession?.cwd || '',
+      lastActiveAt: codexSession?.lastEventAt || session?.last_progress_at || session?.updated_at || binding.updatedAt,
+      originator: codexSession?.originator || '当前聊天',
+      bridgeSessionId: session?.id || binding.bridgeSessionId,
+      creatorKind: codexSession ? resolveCreatorKind(codexSource || {}) : 'bridge',
+      codexSource,
+      executionProvider: bridgeSessionExecutionProvider(session),
     };
   }
 
-  desktop(session: DesktopSessionSummary, binding?: ChannelBinding, options: ThreadTitleOptions = {}): ThreadDisplayInfo {
+  codex(session: CodexSessionSummary, binding?: ChannelBinding, options: ThreadTitleOptions = {}): ThreadDisplayInfo {
     const bindingDisplay = binding ? this.binding(binding, options) : null;
+    const linkedBridgeSession = binding
+      ? this.store.getSession(binding.bridgeSessionId) || undefined
+      : findVisibleBridgeSessionByCodexThread(this.store, session.threadId);
+    const linkedForTitle = linkedBridgeSession && !linkedBridgeSession.codex_title?.trim()
+      ? { ...linkedBridgeSession, codex_title: session.title }
+      : linkedBridgeSession;
+    const summary = buildCodexThreadDisplaySummary(session, linkedForTitle);
     const title = this.resolveTitle({
-      sessionName: binding ? this.store.getSession(binding.codepilotSessionId)?.name : undefined,
-      sessionId: binding?.codepilotSessionId,
+      sessionName: linkedForTitle ? getBridgeSessionDisplayTitle(linkedForTitle) : undefined,
+      sessionId: linkedForTitle?.id || binding?.bridgeSessionId,
       threadId: session.threadId,
-      desktopTitle: session.title,
+      codexTitle: linkedBridgeSession?.codex_title || session.title,
       fallback: session.cwd || session.threadId.slice(0, 8),
     });
     return {
@@ -138,75 +109,41 @@ export class ThreadDisplayService {
       threadId: session.threadId,
       cwd: session.cwd || bindingDisplay?.cwd || '',
       lastActiveAt: session.lastEventAt || bindingDisplay?.lastActiveAt,
-      originator: session.originator || bindingDisplay?.originator || 'Codex Desktop',
+      originator: session.originator || bindingDisplay?.originator || 'Codex Native',
+      bridgeSessionId: bindingDisplay?.bridgeSessionId || linkedBridgeSession?.id,
+      creatorKind: summary.creatorKind,
+      codexSource: summary.codexSource,
+      executionProvider: bindingDisplay?.executionProvider || summary.executionProvider,
     };
   }
 
   thread(threadId: string, sessionId?: string | null, options: ThreadTitleOptions = {}): ThreadDisplayInfo {
-    const session = sessionId ? this.store.getSession(sessionId) : null;
-    const desktop = getDesktopSessionByThreadIdSafe(threadId, 'thread display thread') || null;
+    const session = sessionId
+      ? this.store.getSession(sessionId)
+      : findVisibleBridgeSessionByCodexThread(this.store, threadId) || null;
+    const codexSession = getCodexSessionByThreadIdSafe(threadId, 'thread display thread') || null;
+    const sessionForTitle = session && !session.codex_title?.trim() && codexSession?.title
+      ? { ...session, codex_title: codexSession.title }
+      : session;
     const title = this.resolveTitle({
-      sessionName: session?.name,
+      sessionName: sessionForTitle ? getBridgeSessionDisplayTitle(sessionForTitle) : undefined,
       sessionId: session?.id,
       threadId,
-      desktopTitle: desktop?.title,
-      fallback: desktop?.cwd || threadId.slice(0, 8),
+      codexTitle: session?.codex_title || codexSession?.title,
+      fallback: codexSession?.cwd || threadId.slice(0, 8),
     });
+    const codexSource = codexSession ? codexSessionSource(codexSession) : undefined;
     return {
       title: formatResolvedThreadTitle(title, options),
       threadId,
-      cwd: session?.working_directory || desktop?.cwd || '',
-      lastActiveAt: desktop?.lastEventAt || session?.last_progress_at || session?.updated_at,
-      originator: desktop?.originator || 'Codex Desktop',
+      cwd: session?.working_directory || codexSession?.cwd || '',
+      lastActiveAt: codexSession?.lastEventAt || session?.last_progress_at || session?.updated_at,
+      originator: codexSession?.originator || 'Codex Native',
+      bridgeSessionId: session?.id,
+      creatorKind: codexSession ? resolveCreatorKind(codexSource || {}) : (session ? 'bridge' : 'native'),
+      codexSource,
+      executionProvider: bridgeSessionExecutionProvider(session),
     };
-  }
-
-  decorateDesktopSessions(
-    desktopSessions: DesktopSessionSummary[],
-    channelType?: string,
-    chatId?: string,
-  ): DesktopSessionSummary[] {
-    const bindingByThreadId = new Map<string, ChannelBinding>();
-    if (channelType && chatId) {
-      for (const binding of listBindingsForChat(this.store, channelType, chatId)) {
-        const threadId = this.bindingThreadId(binding);
-        if (threadId) bindingByThreadId.set(threadId, binding);
-      }
-    }
-
-    return desktopSessions.map((session) => ({
-      ...session,
-      title: this.desktop(session, bindingByThreadId.get(session.threadId)).title,
-    }));
-  }
-
-  desktopBindingStates(channelType: string, chatId: string): DesktopThreadCardBindingState[] {
-    return listBindingsForChat(this.store, channelType, chatId)
-      .map((binding) => {
-        const display = this.binding(binding);
-        return {
-          threadId: display.threadId,
-          bindingId: binding.id,
-          active: binding.active !== false,
-          title: display.title,
-        };
-      })
-      .filter((state) => state.threadId);
-  }
-
-  boundThreadCardItems(channelType: string, chatId: string): BoundThreadCardItem[] {
-    return listBindingsForChat(this.store, channelType, chatId).map((binding) => {
-      const display = this.binding(binding);
-      return {
-        title: display.title,
-        cwd: display.cwd,
-        lastActiveAt: display.lastActiveAt,
-        threadId: display.threadId,
-        bindingId: binding.id,
-        active: binding.active !== false,
-        originator: display.originator,
-      };
-    });
   }
 
   resolveBoundBindingSelection(bindings: ChannelBinding[], raw: string): BindingSelection {
@@ -228,8 +165,8 @@ export class ThreadDisplayService {
     const bindingMatches = bindings.filter((binding) => (
       binding.id.toLowerCase() === lowerToken
       || binding.id.toLowerCase().startsWith(lowerToken)
-      || binding.codepilotSessionId.toLowerCase() === lowerToken
-      || binding.codepilotSessionId.toLowerCase().startsWith(lowerToken)
+      || binding.bridgeSessionId.toLowerCase() === lowerToken
+      || binding.bridgeSessionId.toLowerCase().startsWith(lowerToken)
     ));
     if (bindingMatches.length > 1) return { ambiguous: true };
     if (bindingMatches.length === 1) return { binding: bindingMatches[0] };
@@ -239,7 +176,7 @@ export class ThreadDisplayService {
     return { binding: nameMatches[0] };
   }
 
-  selectDesktopThread(raw: string, displayedThreads: DesktopSessionSummary[]): DesktopThreadSelection {
+  selectCodexThread(raw: string, displayedThreads: CodexSessionSummary[]): CodexThreadSelection {
     const token = raw.trim();
     const lowerToken = token.toLowerCase();
     const index = /^\d+$/.test(token) ? Number(token) : null;
@@ -263,60 +200,37 @@ export class ThreadDisplayService {
   }
 
   renameBinding(binding: ChannelBinding, name: string): void {
-    const session = this.store.getSession(binding.codepilotSessionId);
+    const session = this.store.getSession(binding.bridgeSessionId);
     if (!session) throw new Error('Session not found.');
     this.store.updateSession(session.id, { name });
-    this.updateUiSessionName(`session:${session.id}`, name);
-    const threadId = this.bindingThreadId(binding);
-    if (threadId) this.updateUiSessionName(`desktop:${threadId}`, name);
   }
 
   private resolveTitle(options: {
     sessionName?: string | null;
     sessionId?: string;
     threadId?: string;
-    desktopTitle?: string | null;
+    codexTitle?: string | null;
     fallback: string;
   }): string {
     return options.sessionName?.trim()
-      || (options.sessionId ? this.getUiSessionName(`session:${options.sessionId}`) : '')
-      || (options.threadId ? this.getUiSessionName(`desktop:${options.threadId}`) : '')
-      || options.desktopTitle?.trim()
+      || options.codexTitle?.trim()
       || options.fallback.trim()
       || '未命名线程';
-  }
-
-  private getUiSessionName(targetKey: string): string {
-    return this.readUiSessionMeta()[targetKey]?.name?.trim() || '';
-  }
-
-  private updateUiSessionName(targetKey: string, name: string | undefined): void {
-    const meta = this.readUiSessionMeta();
-    const trimmed = name?.trim();
-    if (!trimmed) {
-      delete meta[targetKey];
-    } else {
-      meta[targetKey] = { ...(meta[targetKey] || {}), name: trimmed };
-    }
-    fs.mkdirSync(path.dirname(this.uiSessionMetaPath), { recursive: true });
-    fs.writeFileSync(this.uiSessionMetaPath, JSON.stringify(meta, null, 2));
-  }
-
-  private readUiSessionMeta(): Record<string, UiSessionMetaEntry> {
-    if (this.uiSessionMeta) return this.uiSessionMeta;
-    try {
-      this.uiSessionMeta = JSON.parse(fs.readFileSync(this.uiSessionMetaPath, 'utf-8')) as Record<string, UiSessionMetaEntry>;
-    } catch {
-      this.uiSessionMeta = {};
-    }
-    return this.uiSessionMeta;
   }
 }
 
 function formatResolvedThreadTitle(value: string, options: ThreadTitleOptions): string {
-  const withoutDesktopPrefix = stripDesktopSessionPrefix(value);
-  const title = options.stripInternalPrefix ? stripInternalSessionPrefix(withoutDesktopPrefix) : withoutDesktopPrefix;
-  return stripDesktopSessionPrefix(title);
+  const withoutLegacyPrefix = stripLegacySessionPrefix(value);
+  const title = options.stripInternalPrefix ? stripInternalSessionPrefix(withoutLegacyPrefix) : withoutLegacyPrefix;
+  return stripLegacySessionPrefix(title);
+}
+
+function codexSessionSource(session: CodexSessionSummary): CodexSourceSummary {
+  return {
+    originator: session.originator || undefined,
+    source: session.source || undefined,
+    cliVersion: session.cliVersion || undefined,
+  };
 }
 
 function stripInternalSessionPrefix(value: string): string {

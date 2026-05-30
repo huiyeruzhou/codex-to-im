@@ -88,14 +88,10 @@ export interface BridgeSession {
   preferred_mode?: ChannelBinding['mode'];
   system_prompt?: string;
   provider_id?: string;
-  /** Legacy resume/thread id. Kept for persisted data compatibility. */
-  sdk_session_id?: string;
-  /** Codex SDK resume thread id used by IM-initiated conversations. */
+  /** Codex thread id used to resume this local session. */
   codex_thread_id?: string;
-  /** Codex Desktop thread id used by desktop reuse and mirror delivery. */
-  desktop_thread_id?: string;
-  /** Explicit owner of the current persisted thread identity. */
-  thread_origin?: 'bridge' | 'desktop';
+  /** Original title read from the linked Codex thread. User-facing rename lives in name. */
+  codex_title?: string;
   reasoning_effort?: CodexReasoningEffort;
   codex_provider?: 'sdk' | 'tmux';
   codex_sandbox_mode?: CodexSandboxMode;
@@ -186,7 +182,7 @@ export interface OutboundRefInput {
   channelProvider?: string;
   channelAlias?: string;
   chatId: string;
-  codepilotSessionId: string;
+  bridgeSessionId: string;
   platformMessageId: string;
   purpose: string;
 }
@@ -199,8 +195,7 @@ export interface UpsertChannelBindingInput {
   chatId: string;
   chatUserId?: string;
   chatDisplayName?: string;
-  codepilotSessionId: string;
-  sdkSessionId?: string;
+  bridgeSessionId: string;
   workingDirectory: string;
   model: string;
   mode?: string;
@@ -212,7 +207,7 @@ export interface UpsertChannelDefaultTargetInput {
   channelType: string;
   channelProvider?: string;
   channelAlias?: string;
-  targetKey: string;
+  bridgeSessionId: string;
 }
 
 /**
@@ -237,7 +232,7 @@ export interface BridgeStore {
   // ── Sessions ──
   getSession(id: string): BridgeSession | null;
   listSessions(): BridgeSession[];
-  findSessionBySdkSessionId(sdkSessionId: string): BridgeSession | null;
+  findSessionByCodexThreadId(codexThreadId: string): BridgeSession | null;
   createSession(
     name: string,
     model: string,
@@ -266,8 +261,8 @@ export interface BridgeStore {
   releaseSessionLock(sessionId: string, lockId: string): void;
   setSessionRuntimeStatus(sessionId: string, status: string): void;
 
-  // ── SDK session ──
-  updateSdkSessionId(sessionId: string, sdkSessionId: string): void;
+  // ── Codex thread ──
+  updateSessionCodexThreadId(sessionId: string, codexThreadId: string): void;
   updateSessionModel(sessionId: string, model: string): void;
   syncSdkTasks(sessionId: string, todos: unknown): void;
 
@@ -300,7 +295,7 @@ export interface BridgeStore {
 export interface StreamChatParams {
   prompt: string;
   sessionId: string;
-  sdkSessionId?: string;
+  codexThreadId?: string;
   model?: string;
   forceModel?: boolean;
   sandboxMode?: CodexSandboxMode;

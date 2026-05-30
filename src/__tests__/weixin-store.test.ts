@@ -12,7 +12,7 @@ import {
   setWeixinAccountEnabled,
   upsertWeixinAccount,
   upsertWeixinContextToken,
-} from '../weixin-store.js';
+} from '../weixin/store.js';
 
 const DATA_DIR = path.join(CTI_HOME, 'data');
 const ACCOUNTS_PATH = path.join(DATA_DIR, 'weixin-accounts.json');

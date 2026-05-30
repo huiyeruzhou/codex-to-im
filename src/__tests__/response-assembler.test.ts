@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  assembleDesktopFinalResponse,
+  assembleCodexFinalResponse,
   assembleSdkFinalResponse,
   mergeFinalResponses,
   stripFinalOnlyBlocksForStreaming,
@@ -36,27 +36,27 @@ describe('response-assembler', () => {
     ]);
   });
 
-  it('uses desktop final text as primary while preserving SDK attachments', () => {
+  it('uses Codex final text as primary while preserving SDK attachments', () => {
     const sdk = assembleSdkFinalResponse({
       text: 'SDK 回复',
       attachments: [{ kind: 'file', path: 'D:\\work\\sdk.txt' }],
     });
-    const desktop = assembleDesktopFinalResponse({
+    const codexFinal = assembleCodexFinalResponse({
       text: [
-        '桌面最终回复',
-        '<cti-send>{"type":"image","path":"D:\\\\work\\\\desktop.png"}</cti-send>',
+        'Codex 最终回复',
+        '<cti-send>{"type":"image","path":"D:\\\\work\\\\codex.png"}</cti-send>',
       ].join('\n'),
     });
 
-    const merged = mergeFinalResponses(desktop, sdk);
+    const merged = mergeFinalResponses(codexFinal, sdk);
 
-    assert.equal(merged.text, '桌面最终回复');
-    assert.equal(merged.source, 'desktop_task_complete');
+    assert.equal(merged.text, 'Codex 最终回复');
+    assert.equal(merged.source, 'codex_task_complete');
     assert.deepEqual(merged.attachments, [
       { kind: 'file', path: 'D:\\work\\sdk.txt' },
       {
         kind: 'image',
-        path: 'D:\\work\\desktop.png',
+        path: 'D:\\work\\codex.png',
         caption: undefined,
         name: undefined,
       },

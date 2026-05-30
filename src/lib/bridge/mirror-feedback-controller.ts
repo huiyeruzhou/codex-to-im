@@ -11,11 +11,11 @@ import {
   formatMirrorMessage,
 } from './mirror-formatters.js';
 import type {
-  DesktopMirrorTurnState,
-  FinalizedDesktopMirrorTurn,
+  CodexMirrorTurnState,
+  FinalizedCodexMirrorTurn,
   MirrorTurnHooks,
 } from './mirror-turns.js';
-import type { DesktopMirrorSubscription } from './mirror-subscription-state.js';
+import type { CodexMirrorSubscription } from './mirror-subscription-state.js';
 import {
   stripOutboundArtifactBlocksForStreaming,
 } from './outbound-artifacts.js';
@@ -28,7 +28,7 @@ import {
 } from './stream-feedback-controller.js';
 import { buildStreamContextTags } from './streaming-metadata.js';
 import {
-  assembleDesktopFinalResponse,
+  assembleCodexFinalResponse,
 } from './turns/response-assembler.js';
 import {
   deliverFinalResponse,
@@ -56,27 +56,27 @@ export interface MirrorFeedbackControllerDeps {
 }
 
 export interface MirrorFeedbackController {
-  hooks: MirrorTurnHooks<DesktopMirrorSubscription>;
+  hooks: MirrorTurnHooks<CodexMirrorSubscription>;
   refreshMirrorStreamingStatus(
-    subscription: DesktopMirrorSubscription,
+    subscription: CodexMirrorSubscription,
     nowMs?: number,
     config?: MirrorStructuredStreamStatusConfig,
   ): void;
   stopMirrorStreaming(
-    subscription: DesktopMirrorSubscription,
+    subscription: CodexMirrorSubscription,
     status?: 'completed' | 'interrupted',
   ): void;
   deliverMirrorTurns(
-    subscription: DesktopMirrorSubscription,
-    turns: FinalizedDesktopMirrorTurn[],
+    subscription: CodexMirrorSubscription,
+    turns: FinalizedCodexMirrorTurn[],
   ): Promise<{ deliveredCount: number; error?: unknown }>;
 }
 
 function createMirrorStreamFeedbackTarget(
-  subscription: DesktopMirrorSubscription,
-  turnState: DesktopMirrorTurnState,
+  subscription: CodexMirrorSubscription,
+  turnState: CodexMirrorTurnState,
   adapter: BaseChannelAdapter,
-  startMirrorStreaming: (subscription: DesktopMirrorSubscription, turnState: DesktopMirrorTurnState) => void,
+  startMirrorStreaming: (subscription: CodexMirrorSubscription, turnState: CodexMirrorTurnState) => void,
 ) {
   return {
     adapter,
@@ -92,7 +92,7 @@ function createMirrorStreamFeedbackTarget(
 export function createMirrorFeedbackController(
   deps: MirrorFeedbackControllerDeps,
 ): MirrorFeedbackController {
-  function getMirrorStreamingAdapter(subscription: DesktopMirrorSubscription): BaseChannelAdapter | null {
+  function getMirrorStreamingAdapter(subscription: CodexMirrorSubscription): BaseChannelAdapter | null {
     const adapter = deps.getAdapter(subscription.channelType);
     if (!adapter || !adapter.isRunning()) return null;
     if (getChannelProviderKey(subscription.channelType) !== 'feishu') return null;
@@ -103,10 +103,10 @@ export function createMirrorFeedbackController(
   }
 
   function getMirrorStreamingText(
-    subscription: DesktopMirrorSubscription,
-    turnState: DesktopMirrorTurnState,
+    subscription: CodexMirrorSubscription,
+    turnState: CodexMirrorTurnState,
   ): string {
-    const baseTitle = deps.getThreadTitle(subscription.threadId, subscription.sessionId, subscription.bindingId)?.trim() || '桌面线程';
+    const baseTitle = deps.getThreadTitle(subscription.threadId, subscription.sessionId, subscription.bindingId)?.trim() || 'Codex thread';
     const markdown = getFeedbackParseMode(subscription.channelType) === 'Markdown';
     const rendered = formatMirrorMessage(
       baseTitle,
@@ -119,29 +119,35 @@ export function createMirrorFeedbackController(
     return rendered || buildMirrorTitle(baseTitle, markdown);
   }
 
-  function getMirrorStreamMetadata(subscription: DesktopMirrorSubscription) {
+  function getMirrorStreamMetadata(subscription: CodexMirrorSubscription) {
     return {
-      title: deps.getThreadTitle(subscription.threadId, subscription.sessionId, subscription.bindingId)?.trim() || '桌面线程',
+      title: deps.getThreadTitle(subscription.threadId, subscription.sessionId, subscription.bindingId)?.trim() || 'Codex thread',
       tags: buildStreamContextTags({
         bindingId: subscription.bindingId,
         fallbackId: subscription.sessionId,
+        bridgeSessionId: subscription.sessionId,
+        codexThreadId: subscription.threadId,
+        creatorKind: 'desktop',
         source: 'mirror',
       }),
     };
   }
 
-  function getMirrorPlainTextTitle(subscription: DesktopMirrorSubscription, baseTitle: string): string {
+  function getMirrorPlainTextTitle(subscription: CodexMirrorSubscription, baseTitle: string): string {
     const tags = buildStreamContextTags({
       bindingId: subscription.bindingId,
       fallbackId: subscription.sessionId,
+      bridgeSessionId: subscription.sessionId,
+      codexThreadId: subscription.threadId,
+      creatorKind: 'desktop',
       source: 'mirror',
     });
     return tags.length > 0 ? `${baseTitle}  ${tags.join(' ')}` : baseTitle;
   }
 
   function startMirrorStreaming(
-    subscription: DesktopMirrorSubscription,
-    turnState: DesktopMirrorTurnState,
+    subscription: CodexMirrorSubscription,
+    turnState: CodexMirrorTurnState,
   ): void {
     const adapter = getMirrorStreamingAdapter(subscription);
     if (!adapter || turnState.streamStarted) return;
@@ -159,16 +165,16 @@ export function createMirrorFeedbackController(
   }
 
   function createStreamTarget(
-    subscription: DesktopMirrorSubscription,
-    turnState: DesktopMirrorTurnState,
+    subscription: CodexMirrorSubscription,
+    turnState: CodexMirrorTurnState,
     adapter: BaseChannelAdapter,
   ) {
     return createMirrorStreamFeedbackTarget(subscription, turnState, adapter, startMirrorStreaming);
   }
 
   function pushMirrorStreamingStatus(
-    subscription: DesktopMirrorSubscription,
-    turnState: DesktopMirrorTurnState,
+    subscription: CodexMirrorSubscription,
+    turnState: CodexMirrorTurnState,
     options: {
       nowMs?: number;
       lastResponseAgeMs?: number | null;
@@ -220,7 +226,7 @@ export function createMirrorFeedbackController(
   }
 
   function refreshMirrorStreamingStatus(
-    subscription: DesktopMirrorSubscription,
+    subscription: CodexMirrorSubscription,
     nowMs = Date.now(),
     config: MirrorStructuredStreamStatusConfig,
   ): void {
@@ -249,8 +255,8 @@ export function createMirrorFeedbackController(
   }
 
   function updateMirrorStreaming(
-    subscription: DesktopMirrorSubscription,
-    turnState: DesktopMirrorTurnState,
+    subscription: CodexMirrorSubscription,
+    turnState: CodexMirrorTurnState,
   ): void {
     const adapter = getMirrorStreamingAdapter(subscription);
     if (!adapter) return;
@@ -262,8 +268,8 @@ export function createMirrorFeedbackController(
   }
 
   function updateMirrorToolProgress(
-    subscription: DesktopMirrorSubscription,
-    turnState: DesktopMirrorTurnState,
+    subscription: CodexMirrorSubscription,
+    turnState: CodexMirrorTurnState,
   ): void {
     const adapter = getMirrorStreamingAdapter(subscription);
     if (!adapter) return;
@@ -275,8 +281,8 @@ export function createMirrorFeedbackController(
   }
 
   function updateMirrorTaskProgress(
-    subscription: DesktopMirrorSubscription,
-    turnState: DesktopMirrorTurnState,
+    subscription: CodexMirrorSubscription,
+    turnState: CodexMirrorTurnState,
   ): void {
     const adapter = getMirrorStreamingAdapter(subscription);
     if (!adapter) return;
@@ -288,8 +294,8 @@ export function createMirrorFeedbackController(
   }
 
   function updateMirrorStatusProgress(
-    subscription: DesktopMirrorSubscription,
-    turnState: DesktopMirrorTurnState,
+    subscription: CodexMirrorSubscription,
+    turnState: CodexMirrorTurnState,
   ): void {
     const adapter = getMirrorStreamingAdapter(subscription);
     if (!adapter) return;
@@ -297,7 +303,7 @@ export function createMirrorFeedbackController(
   }
 
   function stopMirrorStreaming(
-    subscription: DesktopMirrorSubscription,
+    subscription: CodexMirrorSubscription,
     status: 'completed' | 'interrupted' = 'interrupted',
   ): void {
     const adapter = getMirrorStreamingAdapter(subscription);
@@ -311,17 +317,17 @@ export function createMirrorFeedbackController(
   }
 
   async function deliverMirrorTurn(
-    subscription: DesktopMirrorSubscription,
-    turn: FinalizedDesktopMirrorTurn,
+    subscription: CodexMirrorSubscription,
+    turn: FinalizedCodexMirrorTurn,
   ): Promise<void> {
     const adapter = deps.getAdapter(subscription.channelType);
     if (!adapter || !adapter.isRunning()) return;
 
-    const baseTitle = deps.getThreadTitle(subscription.threadId, subscription.sessionId, subscription.bindingId)?.trim() || '桌面线程';
+    const baseTitle = deps.getThreadTitle(subscription.threadId, subscription.sessionId, subscription.bindingId)?.trim() || 'Codex thread';
     const plainTextTitle = getMirrorPlainTextTitle(subscription, baseTitle);
     const responseParseMode = getFeedbackParseMode(subscription.channelType);
     const markdown = responseParseMode === 'Markdown';
-    const rawFinalResponse = assembleDesktopFinalResponse({ text: turn.text });
+    const rawFinalResponse = assembleCodexFinalResponse({ text: turn.text });
     const attachments = rawFinalResponse.attachments;
     const cleanTurnText = rawFinalResponse.text;
     const renderedTextBase = formatMirrorMessage(plainTextTitle, turn.userText, cleanTurnText, markdown);
@@ -333,10 +339,7 @@ export function createMirrorFeedbackController(
       ? appendMirrorTimeoutNotice(renderedStreamTextBase || buildMirrorTitle(baseTitle, markdown), markdown)
       : renderedStreamTextBase;
     const text = renderedText ? renderFeedbackText(renderedText, responseParseMode) : '';
-    const streamText = renderFeedbackText(
-      renderedStreamText || buildMirrorTitle(baseTitle, markdown),
-      responseParseMode,
-    );
+    const streamText = renderedStreamText || buildMirrorTitle(baseTitle, markdown);
     const address = {
       channelType: subscription.channelType,
       chatId: subscription.chatId,
@@ -344,11 +347,15 @@ export function createMirrorFeedbackController(
 
     if (getChannelProviderKey(subscription.channelType) === 'feishu' && typeof adapter.onStreamEnd === 'function') {
       try {
-        const finalized = await adapter.onStreamEnd(
-          subscription.chatId,
+        const finalized = await finalizeStreamFeedback(
+          {
+            adapter,
+            channelType: subscription.channelType,
+            chatId: subscription.chatId,
+            streamKey: turn.streamKey,
+          },
           turn.status,
           streamText,
-          turn.streamKey,
         );
         if (finalized) {
           if (attachments.length > 0) {
@@ -359,7 +366,7 @@ export function createMirrorFeedbackController(
                 sessionId: subscription.sessionId,
                 deliverResponse: deps.deliverResponse,
               },
-              assembleDesktopFinalResponse({ attachments }),
+              assembleCodexFinalResponse({ attachments }),
               { skipText: true },
             );
             if (!attachmentResult.ok) {
@@ -374,7 +381,7 @@ export function createMirrorFeedbackController(
       }
     }
 
-    const finalResponse = assembleDesktopFinalResponse({
+    const finalResponse = assembleCodexFinalResponse({
       text,
       attachments,
     });
@@ -404,8 +411,8 @@ export function createMirrorFeedbackController(
   }
 
   async function deliverMirrorTurns(
-    subscription: DesktopMirrorSubscription,
-    turns: FinalizedDesktopMirrorTurn[],
+    subscription: CodexMirrorSubscription,
+    turns: FinalizedCodexMirrorTurn[],
   ): Promise<{ deliveredCount: number; error?: unknown }> {
     let deliveredCount = 0;
     for (const turn of turns.slice(0, deps.eventBatchLimit)) {

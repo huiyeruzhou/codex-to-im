@@ -1,7 +1,7 @@
 import './test-setup.js';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { pollLoginQrStatus, startLoginQr } from '../adapters/weixin/weixin-api.js';
+import { pollLoginQrStatus, startLoginQr } from '../lib/bridge/adapters/weixin/weixin-api.js';
 
 describe('weixin-api QR login endpoints', () => {
   const originalFetch = globalThis.fetch;

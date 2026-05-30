@@ -7,9 +7,9 @@ import path from 'node:path';
 import type { BridgeStore } from '../lib/bridge/host.js';
 import { CTI_HOME } from '../config.js';
 import { initBridgeContext } from '../lib/bridge/context.js';
-import { WeixinAdapter } from '../adapters/weixin-adapter.js';
-import { MessageItemType } from '../adapters/weixin/weixin-types.js';
-import { upsertWeixinAccount } from '../weixin-store.js';
+import { WeixinAdapter } from '../lib/bridge/adapters/weixin-adapter.js';
+import { MessageItemType } from '../lib/bridge/adapters/weixin/weixin-types.js';
+import { upsertWeixinAccount } from '../weixin/store.js';
 
 const DATA_DIR = path.join(CTI_HOME, 'data');
 const ACCOUNTS_PATH = path.join(DATA_DIR, 'weixin-accounts.json');

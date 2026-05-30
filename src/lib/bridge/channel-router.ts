@@ -1,5 +1,5 @@
 /**
- * Channel Router — resolves IM addresses to CodePilot sessions.
+ * Channel Router — resolves IM addresses to BridgeSessions.
  *
  * When a message arrives from an IM channel, the router finds or creates
  * the corresponding ChannelBinding (and underlying chat_session).
@@ -7,7 +7,7 @@
 
 import type { ChannelAddress, ChannelBinding, ChannelType } from './types.js';
 import { getBridgeContext } from './context.js';
-import { bindAddressToTarget, bindStoreToSdkSession, bindStoreToSession } from '../../session-bindings.js';
+import { SessionRegistryService } from './session-registry.js';
 import { getOrCreateDraftSession } from '../../internal-sessions.js';
 import { recordBindingChange } from './binding-audit.js';
 
@@ -17,10 +17,11 @@ import { recordBindingChange } from './binding-audit.js';
  */
 export function resolve(address: ChannelAddress): ChannelBinding {
   const { store } = getBridgeContext();
+  const registry = new SessionRegistryService(store);
   const existing = store.getChannelBinding(address.channelType, address.chatId);
   if (existing) {
     // Verify the linked session still exists; if not, create a new one
-    const session = store.getSession(existing.codepilotSessionId);
+    const session = store.getSession(existing.bridgeSessionId);
     if (session) {
       const updates: Partial<ChannelBinding> = {};
       if (address.userId && address.userId !== existing.chatUserId) {
@@ -49,14 +50,17 @@ export function resolve(address: ChannelAddress): ChannelBinding {
   const channelDefaultTarget = store.getChannelDefaultTarget(address.channelType);
   if (channelDefaultTarget) {
     try {
-      const created = bindAddressToTarget(store, address, channelDefaultTarget.targetKey);
+      const created = registry.bindChatToBridgeSession(address, channelDefaultTarget.bridgeSessionId);
+      if (!created) {
+        throw new Error('Session not found.');
+      }
       store.deleteChannelDefaultTarget(address.channelType);
       recordBindingChange(store, {
         action: 'auto_create_prebound',
         address,
         fromBinding: null,
         toBinding: created,
-        reason: `channel default target ${channelDefaultTarget.targetKey}`,
+        reason: `channel default bridge session ${channelDefaultTarget.bridgeSessionId}`,
       });
       return created;
     } catch (error) {
@@ -76,7 +80,7 @@ export function resolve(address: ChannelAddress): ChannelBinding {
     fromBinding: null,
     toBinding: created,
     reason: channelDefaultTarget
-      ? `channel default target ${channelDefaultTarget.targetKey} was unavailable`
+      ? `channel default bridge session ${channelDefaultTarget.bridgeSessionId} was unavailable`
       : 'no existing binding',
   });
   return created;
@@ -113,8 +117,7 @@ export function createBinding(
     chatId: address.chatId,
     chatUserId: address.userId,
     chatDisplayName: address.displayName,
-    codepilotSessionId: session.id,
-    sdkSessionId: '',
+    bridgeSessionId: session.id,
     workingDirectory: session.working_directory,
     model: session.model,
     mode: session.preferred_mode || (workingDirectory ? 'code' : 'ask'),
@@ -122,39 +125,27 @@ export function createBinding(
 }
 
 /**
- * Bind an IM chat to an existing CodePilot session.
+ * Bind an IM chat to an existing BridgeSession.
  */
 export function bindToSession(
   address: ChannelAddress,
-  codepilotSessionId: string,
+  bridgeSessionId: string,
   opts?: { active?: boolean },
 ): ChannelBinding | null {
-  return bindStoreToSession(
-    getBridgeContext().store,
-    address.channelType,
-    address.chatId,
-    codepilotSessionId,
-    {
-      chatUserId: address.userId,
-      chatDisplayName: address.displayName,
-      active: opts?.active,
-    },
-  );
+  return new SessionRegistryService(getBridgeContext().store)
+    .bindChatToBridgeSession(address, bridgeSessionId, opts);
 }
 
 /**
- * Bind an IM chat to an existing SDK thread, importing it into the bridge store on demand.
+ * Bind an IM chat to an existing Codex thread, importing it into the bridge store on demand.
  */
-export function bindToSdkSession(
+export function bindToCodexThread(
   address: ChannelAddress,
-  sdkSessionId: string,
-  opts?: { workingDirectory?: string; model?: string; displayName?: string; active?: boolean },
+  codexThreadId: string,
+  opts?: { workingDirectory?: string; model?: string; displayName?: string; name?: string; codexTitle?: string; active?: boolean },
 ): ChannelBinding {
-  return bindStoreToSdkSession(getBridgeContext().store, address.channelType, address.chatId, sdkSessionId, {
-    ...opts,
-    chatUserId: address.userId,
-    chatDisplayName: address.displayName,
-  });
+  return new SessionRegistryService(getBridgeContext().store)
+    .importCodexThreadForChat(address, codexThreadId, opts);
 }
 
 /**
@@ -162,7 +153,7 @@ export function bindToSdkSession(
  */
 export function updateBinding(
   id: string,
-  updates: Partial<Pick<ChannelBinding, 'sdkSessionId' | 'workingDirectory' | 'model' | 'mode' | 'active'>>,
+  updates: Partial<Pick<ChannelBinding, 'workingDirectory' | 'model' | 'mode' | 'active'>>,
 ): void {
   getBridgeContext().store.updateChannelBinding(id, updates);
 }

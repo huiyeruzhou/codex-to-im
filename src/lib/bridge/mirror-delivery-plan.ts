@@ -1,18 +1,18 @@
-import type { DesktopMirrorRecord } from '../../desktop-sessions.js';
-import type { FinalizedDesktopMirrorTurn } from './mirror-turns.js';
+import type { CodexMirrorRecord } from '../../codex/session-index.js';
+import type { FinalizedCodexMirrorTurn } from './mirror-turns.js';
 
 export interface MirrorDeliveryPlanSubscription {
   sessionId: string;
-  bufferedRecords: DesktopMirrorRecord[];
+  bufferedRecords: CodexMirrorRecord[];
 }
 
 export interface BuildMirrorDeliveryPlanOptions<
   TSubscription extends MirrorDeliveryPlanSubscription,
 > {
   blocked: boolean;
-  filterSuppressedRecords: (sessionId: string, records: DesktopMirrorRecord[]) => DesktopMirrorRecord[];
-  flushTimedOutTurn: (subscription: TSubscription) => FinalizedDesktopMirrorTurn | null;
-  consumeBufferedTurns: (subscription: TSubscription) => FinalizedDesktopMirrorTurn[];
+  filterSuppressedRecords: (sessionId: string, records: CodexMirrorRecord[]) => CodexMirrorRecord[];
+  flushTimedOutTurn: (subscription: TSubscription) => FinalizedCodexMirrorTurn | null;
+  consumeBufferedTurns: (subscription: TSubscription) => FinalizedCodexMirrorTurn[];
 }
 
 export interface MirrorDeliveryPlan {
@@ -20,12 +20,12 @@ export interface MirrorDeliveryPlan {
     | 'mirror reconcile active task'
     | 'mirror reconcile no finalized turns'
     | 'mirror reconcile delivered turns';
-  finalizedTurns: FinalizedDesktopMirrorTurn[];
+  finalizedTurns: FinalizedCodexMirrorTurn[];
 }
 
 export function buildMirrorDeliveryPlan<TSubscription extends MirrorDeliveryPlanSubscription>(
   subscription: TSubscription,
-  deliverableRecords: DesktopMirrorRecord[],
+  deliverableRecords: CodexMirrorRecord[],
   options: BuildMirrorDeliveryPlanOptions<TSubscription>,
 ): MirrorDeliveryPlan {
   if (deliverableRecords.length > 0) {

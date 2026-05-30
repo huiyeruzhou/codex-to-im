@@ -40,7 +40,7 @@ describe('markdownToPlainText', () => {
   });
 
   it('decodes escaped angle brackets in markdown headers', () => {
-    const plain = markdownToPlainText('**&lt;Current Thread&gt; codex:**\n\nDesktop answer');
-    assert.equal(plain, '<Current Thread> codex:\n\nDesktop answer');
+    const plain = markdownToPlainText('**&lt;Current Thread&gt; codex:**\n\nCodex answer');
+    assert.equal(plain, '<Current Thread> codex:\n\nCodex answer');
   });
 });

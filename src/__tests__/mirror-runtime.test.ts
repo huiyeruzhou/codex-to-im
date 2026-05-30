@@ -5,7 +5,6 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { initBridgeContext } from '../lib/bridge/context.js';
 import { createMirrorRuntime } from '../lib/bridge/mirror-runtime.js';
 import {
   consumeBufferedMirrorTurns,
@@ -16,27 +15,12 @@ import {
 
 const MIRROR_TEST_BUFFER_TIMEOUT_MS = 10 * 60_000;
 
-const noopLlm = {
-  streamChat() {
-    return new ReadableStream({
-      start(controller) {
-        controller.close();
-      },
-    });
-  },
-};
-
-const noopPermissions = {
-  resolvePendingPermission: () => false,
-};
-
 describe('mirror-runtime pending deliveries', () => {
   let runtime: ReturnType<typeof createMirrorRuntime> | null = null;
 
   afterEach(() => {
     runtime?.clearMirrorSubscriptions();
     runtime = null;
-    delete (globalThis as Record<string, unknown>).__bridge_context__;
   });
 
   it('retries queued finalized turns even when the mirror file has no new bytes', async () => {
@@ -48,29 +32,19 @@ describe('mirror-runtime pending deliveries', () => {
       id: 'binding-1',
       channelType: 'feishu-default',
       chatId: 'chat-1',
-      codepilotSessionId: 'session-1',
-      sdkSessionId: 'thread-1',
+      bridgeSessionId: 'session-1',
       active: true,
     }];
     const session = {
       id: 'session-1',
-      sdk_session_id: 'thread-1',
-      desktop_thread_id: 'thread-1',
-      thread_origin: 'desktop',
+      codex_thread_id: 'thread-1',
       mirror_last_event_at: null,
     };
     const store = {
       listChannelBindings: () => bindings,
       getSession: (sessionId: string) => (sessionId === session.id ? session : null),
-      updateSdkSessionId: () => {},
+      updateSessionCodexThreadId: () => {},
     };
-    initBridgeContext({
-      store: store as never,
-      llm: noopLlm as never,
-      permissions: noopPermissions as never,
-      lifecycle: {},
-    });
-
     const state = {
       running: true,
       adapters: new Map([
@@ -92,7 +66,10 @@ describe('mirror-runtime pending deliveries', () => {
     }, {
       nowIso: () => '2026-04-21T10:00:00.000Z',
       describeUnknownError: (error) => (error instanceof Error ? error.message : String(error)),
-      getDesktopSessionByThreadIdSafe: (threadId) => (
+      listChannelBindings: () => bindings,
+      getSession: store.getSession,
+      clearSessionCodexThreadId: store.updateSessionCodexThreadId,
+      getCodexSessionByThreadIdSafe: (threadId) => (
         threadId === 'thread-1'
           ? {
               id: threadId,
@@ -176,29 +153,19 @@ describe('mirror-runtime pending deliveries', () => {
       id: 'binding-1',
       channelType: 'feishu-default',
       chatId: 'chat-1',
-      codepilotSessionId: 'session-1',
-      sdkSessionId: 'thread-1',
+      bridgeSessionId: 'session-1',
       active: true,
     }];
     const session = {
       id: 'session-1',
-      sdk_session_id: 'thread-1',
-      desktop_thread_id: 'thread-1',
-      thread_origin: 'desktop',
+      codex_thread_id: 'thread-1',
       mirror_last_event_at: null,
     };
     const store = {
       listChannelBindings: () => bindings,
       getSession: (sessionId: string) => (sessionId === session.id ? session : null),
-      updateSdkSessionId: () => {},
+      updateSessionCodexThreadId: () => {},
     };
-    initBridgeContext({
-      store: store as never,
-      llm: noopLlm as never,
-      permissions: noopPermissions as never,
-      lifecycle: {},
-    });
-
     const state = {
       running: true,
       adapters: new Map([
@@ -219,7 +186,10 @@ describe('mirror-runtime pending deliveries', () => {
     }, {
       nowIso: () => '2026-04-21T10:00:00.000Z',
       describeUnknownError: (error) => (error instanceof Error ? error.message : String(error)),
-      getDesktopSessionByThreadIdSafe: (threadId) => (
+      listChannelBindings: () => bindings,
+      getSession: store.getSession,
+      clearSessionCodexThreadId: store.updateSessionCodexThreadId,
+      getCodexSessionByThreadIdSafe: (threadId) => (
         threadId === 'thread-1'
           ? {
               id: threadId,
@@ -299,29 +269,19 @@ describe('mirror-runtime pending deliveries', () => {
       id: 'binding-1',
       channelType: 'feishu-default',
       chatId: 'chat-1',
-      codepilotSessionId: 'session-1',
-      sdkSessionId: 'thread-1',
+      bridgeSessionId: 'session-1',
       active: true,
     }];
     const session = {
       id: 'session-1',
-      sdk_session_id: 'thread-1',
-      desktop_thread_id: 'thread-1',
-      thread_origin: 'desktop',
+      codex_thread_id: 'thread-1',
       mirror_last_event_at: null,
     };
     const store = {
       listChannelBindings: () => bindings,
       getSession: (sessionId: string) => (sessionId === session.id ? session : null),
-      updateSdkSessionId: () => {},
+      updateSessionCodexThreadId: () => {},
     };
-    initBridgeContext({
-      store: store as never,
-      llm: noopLlm as never,
-      permissions: noopPermissions as never,
-      lifecycle: {},
-    });
-
     const state = {
       running: true,
       adapters: new Map([
@@ -343,7 +303,10 @@ describe('mirror-runtime pending deliveries', () => {
     }, {
       nowIso: () => '2026-04-21T10:00:00.000Z',
       describeUnknownError: (error) => (error instanceof Error ? error.message : String(error)),
-      getDesktopSessionByThreadIdSafe: (threadId) => (
+      listChannelBindings: () => bindings,
+      getSession: store.getSession,
+      clearSessionCodexThreadId: store.updateSessionCodexThreadId,
+      getCodexSessionByThreadIdSafe: (threadId) => (
         threadId === 'thread-1'
           ? {
               id: threadId,
@@ -393,7 +356,7 @@ describe('mirror-runtime pending deliveries', () => {
         type: 'event_msg',
         payload: {
           type: 'task_started',
-          turn_id: 'desktop-turn',
+          turn_id: 'codex-turn',
         },
       }),
       JSON.stringify({
@@ -401,8 +364,8 @@ describe('mirror-runtime pending deliveries', () => {
         type: 'event_msg',
         payload: {
           type: 'task_complete',
-          turn_id: 'desktop-turn',
-          last_agent_message: 'desktop answer',
+          turn_id: 'codex-turn',
+          last_agent_message: 'codex answer',
         },
       }),
     ].join('\n') + '\n', 'utf-8');
@@ -416,7 +379,7 @@ describe('mirror-runtime pending deliveries', () => {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   });
 
-  it('logs each unknown desktop mirror event kind at most once per subscription', async () => {
+  it('logs each unknown Codex mirror event kind at most once per subscription', async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-mirror-runtime-'));
     const filePath = path.join(tempRoot, 'rollout.jsonl');
     fs.writeFileSync(filePath, '', 'utf-8');
@@ -425,29 +388,19 @@ describe('mirror-runtime pending deliveries', () => {
       id: 'binding-1',
       channelType: 'feishu-default',
       chatId: 'chat-1',
-      codepilotSessionId: 'session-1',
-      sdkSessionId: 'thread-1',
+      bridgeSessionId: 'session-1',
       active: true,
     }];
     const session = {
       id: 'session-1',
-      sdk_session_id: 'thread-1',
-      desktop_thread_id: 'thread-1',
-      thread_origin: 'desktop',
+      codex_thread_id: 'thread-1',
       mirror_last_event_at: null,
     };
     const store = {
       listChannelBindings: () => bindings,
       getSession: (sessionId: string) => (sessionId === session.id ? session : null),
-      updateSdkSessionId: () => {},
+      updateSessionCodexThreadId: () => {},
     };
-    initBridgeContext({
-      store: store as never,
-      llm: noopLlm as never,
-      permissions: noopPermissions as never,
-      lifecycle: {},
-    });
-
     const state = {
       running: true,
       adapters: new Map([
@@ -467,7 +420,10 @@ describe('mirror-runtime pending deliveries', () => {
     }, {
       nowIso: () => '2026-04-21T10:00:00.000Z',
       describeUnknownError: (error) => (error instanceof Error ? error.message : String(error)),
-      getDesktopSessionByThreadIdSafe: (threadId) => (
+      listChannelBindings: () => bindings,
+      getSession: store.getSession,
+      clearSessionCodexThreadId: store.updateSessionCodexThreadId,
+      getCodexSessionByThreadIdSafe: (threadId) => (
         threadId === 'thread-1'
           ? {
               id: threadId,

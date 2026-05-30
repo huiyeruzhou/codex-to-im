@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import type { DesktopMirrorRecord } from '../desktop-sessions.js';
-import { buildUiHistoryEntriesFromDesktopRecords } from '../ui-session-history.js';
+import type { CodexMirrorRecord } from '../codex/session-index.js';
+import { buildUiHistoryEntriesFromCodexRecords } from '../ui/session-history.js';
 
-test('buildUiHistoryEntriesFromDesktopRecords keeps all major mirror events visible', () => {
-  const records: DesktopMirrorRecord[] = [
+test('buildUiHistoryEntriesFromCodexRecords keeps all major mirror events visible', () => {
+  const records: CodexMirrorRecord[] = [
     {
       signature: '1',
       type: 'message',
@@ -73,7 +73,7 @@ test('buildUiHistoryEntriesFromDesktopRecords keeps all major mirror events visi
     },
   ];
 
-  const entries = buildUiHistoryEntriesFromDesktopRecords(records);
+  const entries = buildUiHistoryEntriesFromCodexRecords(records);
 
   assert.deepEqual(
     entries.map((entry) => ({ role: entry.role, content: entry.content })),
@@ -93,8 +93,8 @@ test('buildUiHistoryEntriesFromDesktopRecords keeps all major mirror events visi
   );
 });
 
-test('buildUiHistoryEntriesFromDesktopRecords marks failed tools and aborted tasks', () => {
-  const records: DesktopMirrorRecord[] = [
+test('buildUiHistoryEntriesFromCodexRecords marks failed tools and aborted tasks', () => {
+  const records: CodexMirrorRecord[] = [
     {
       signature: '1',
       type: 'tool_finished',
@@ -113,7 +113,7 @@ test('buildUiHistoryEntriesFromDesktopRecords marks failed tools and aborted tas
     },
   ];
 
-  const entries = buildUiHistoryEntriesFromDesktopRecords(records);
+  const entries = buildUiHistoryEntriesFromCodexRecords(records);
 
   assert.deepEqual(
     entries.map((entry) => ({ role: entry.role, content: entry.content })),

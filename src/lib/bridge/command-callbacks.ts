@@ -1,4 +1,11 @@
 const COMMAND_CALLBACK_PREFIX = 'cti-command:';
+export const THREAD_SELECT_CALLBACK_PREFIX = 'cti-thread-select:';
+export const THREAD_SELECT_ACTION_CALLBACK_PREFIX = 'cti-thread-action:';
+export const AUTO_TASK_SELECT_CALLBACK_PREFIX = 'cti-auto-select:';
+export const AUTO_TASK_ACTION_CALLBACK_PREFIX = 'cti-auto-action:';
+
+export type AutoTaskCardAction = 'rm' | 'set1';
+export type ThreadCardScope = 'global' | 'bound';
 
 export interface ParsedCommandCallback {
   commandText: string;
@@ -30,4 +37,16 @@ export function parseCommandCallbackData(callbackData: string): ParsedCommandCal
   } catch {
     return null;
   }
+}
+
+export function buildThreadCardUpdateKey(scope: ThreadCardScope, channelType: string, chatId: string): string {
+  return `thread-card:${scope}:${channelType}:${chatId}`;
+}
+
+export function buildThreadActionCallbackData(scope: ThreadCardScope, action: 'bind' | 'rm' | 'use'): string {
+  return `${THREAD_SELECT_ACTION_CALLBACK_PREFIX}${scope}:${action}`;
+}
+
+export function buildAutoTaskActionCallbackData(action: AutoTaskCardAction): string {
+  return `${AUTO_TASK_ACTION_CALLBACK_PREFIX}${action}`;
 }

@@ -8,10 +8,11 @@ import path from 'node:path';
 import { CONFIG_PATH, CONFIG_V2_PATH, CTI_HOME } from '../config.js';
 import { JsonFileStore } from '../store.js';
 import { initBridgeContext } from '../lib/bridge/context.js';
-import { handleBridgeCommand } from '../lib/bridge/command-dispatch.js';
+import { handleBridgeCommand } from '../lib/bridge/command.js';
 import { buildCommandCallbackData, parseCommandCallbackData } from '../lib/bridge/command-callbacks.js';
 import * as router from '../lib/bridge/channel-router.js';
-import { getThreadTableMessageRecord } from '../lib/bridge/thread-table-message-pins.js';
+import { getThreadTableMessageRecord } from '../lib/bridge/command/thread-table-message-pins.js';
+import { listAutoTasks } from '../lib/bridge/auto-tasks.js';
 import type { OutboundRichCard } from '../lib/bridge/types.js';
 
 const DATA_DIR = path.join(CTI_HOME, 'data');
@@ -141,7 +142,7 @@ describe('command-dispatch', () => {
     const binding = store.getChannelBinding(address.channelType, address.chatId);
     assert.ok(binding);
     assert.equal(binding?.mode, 'normal');
-    const session = binding ? store.getSession(binding.codepilotSessionId) : null;
+    const session = binding ? store.getSession(binding.bridgeSessionId) : null;
     assert.equal(session?.session_type, 'draft');
     assert.match(sent[0] || '', /已切换到临时草稿线程/);
   });
@@ -159,14 +160,13 @@ describe('command-dispatch', () => {
     const address = { channelType: 'feishu-default', chatId: 'chat-prebound-status', displayName: 'Prebound Chat' } as const;
     const session = store.createSession('prebound-session', 'test-model', undefined, '/tmp/prebound-status');
     store.updateSession(session.id, {
-      sdk_session_id: 'codex-thread-prebound',
       codex_thread_id: 'codex-thread-prebound',
     });
     store.upsertChannelDefaultTarget({
       channelType: 'feishu-default',
       channelProvider: 'feishu',
       channelAlias: '飞书',
-      targetKey: `session:${session.id}`,
+      bridgeSessionId: session.id,
     });
 
     await handleBridgeCommand(
@@ -186,7 +186,7 @@ describe('command-dispatch', () => {
 
     const binding = store.getChannelBinding(address.channelType, address.chatId);
     assert.ok(binding);
-    assert.equal(binding?.codepilotSessionId, session.id);
+    assert.equal(binding?.bridgeSessionId, session.id);
     assert.equal(store.getChannelDefaultTarget(address.channelType), null);
     assert.match(sent[0] || '', /当前会话/);
     assert.match(sent[0] || '', /prebound-session/);
@@ -234,7 +234,7 @@ describe('command-dispatch', () => {
           lastStreamUiErrorAt: null,
           lastStreamUiError: null,
           streamUiConsecutiveFailures: 0,
-          sdkSessionId: null,
+          codexThreadId: null,
           processProbe: null,
         }),
         diagnoseAllActiveSessions: async () => [],
@@ -244,7 +244,7 @@ describe('command-dispatch', () => {
     const response = sent[0] || '';
     assert.match(response, /当前会话健康检查/);
     assert.doesNotMatch(response, /检查时间/);
-    assert.match(response, new RegExp(binding.codepilotSessionId));
+    assert.match(response, new RegExp(binding.bridgeSessionId));
     assert.match(response, /长时运行，待观察/);
     assert.match(response, /shell_command/);
   });
@@ -293,7 +293,7 @@ describe('command-dispatch', () => {
             lastStreamUiErrorAt: null,
             lastStreamUiError: null,
             streamUiConsecutiveFailures: 0,
-            sdkSessionId: null,
+            codexThreadId: null,
             processProbe: null,
           };
         },
@@ -442,7 +442,7 @@ describe('command-dispatch', () => {
       } as any,
       '/thread 0',
       {
-        getActiveTask: (sessionId) => sessionId === initialBinding.codepilotSessionId ? activeTask : undefined,
+        getActiveTask: (sessionId) => sessionId === initialBinding.bridgeSessionId ? activeTask : undefined,
         diagnoseSessionHealth: async () => null,
         diagnoseAllActiveSessions: async () => [],
       },
@@ -451,8 +451,8 @@ describe('command-dispatch', () => {
     assert.match(sent.at(-1) || '', /当前会话仍在运行/);
     assert.match(sent.at(-1) || '', /--force/);
     assert.equal(
-      store.getChannelBinding(address.channelType, address.chatId)?.codepilotSessionId,
-      initialBinding.codepilotSessionId,
+      store.getChannelBinding(address.channelType, address.chatId)?.bridgeSessionId,
+      initialBinding.bridgeSessionId,
     );
 
     await handleBridgeCommand(
@@ -464,14 +464,14 @@ describe('command-dispatch', () => {
       } as any,
       '/thread 0 --force',
       {
-        getActiveTask: (sessionId) => sessionId === initialBinding.codepilotSessionId ? activeTask : undefined,
+        getActiveTask: (sessionId) => sessionId === initialBinding.bridgeSessionId ? activeTask : undefined,
         diagnoseSessionHealth: async () => null,
         diagnoseAllActiveSessions: async () => [],
       },
     );
 
     const forcedBinding = store.getChannelBinding(address.channelType, address.chatId);
-    assert.notEqual(forcedBinding?.codepilotSessionId, initialBinding.codepilotSessionId);
+    assert.notEqual(forcedBinding?.bridgeSessionId, initialBinding.bridgeSessionId);
     assert.equal(forcedBinding?.mode, 'normal');
     assert.match(sent.at(-1) || '', /已切换到临时草稿线程/);
     assert.ok(readAuditSummaries().some((summary) => (
@@ -494,7 +494,7 @@ describe('command-dispatch', () => {
     };
     const address = { channelType: 'feishu', chatId: 'chat-stop-stale' } as const;
     const binding = router.createBinding(address, 'D:\\workspace\\stop-stale');
-    store.updateSession(binding.codepilotSessionId, {
+    store.updateSession(binding.bridgeSessionId, {
       runtime_status: 'idle',
       health_status: 'suspected_stream_ui_stall',
       health_reason: '任务仍在继续，但流式 UI 刷新请求已长时间未完成，疑似卡住。',
@@ -523,11 +523,11 @@ describe('command-dispatch', () => {
     );
 
     assert.deepEqual(forcedStops, [{
-      sessionId: binding.codepilotSessionId,
+      sessionId: binding.bridgeSessionId,
       detail: '用户执行 /stop，已停止当前任务。',
     }]);
     assert.deepEqual(healthEnds, [{
-      sessionId: binding.codepilotSessionId,
+      sessionId: binding.bridgeSessionId,
       outcome: 'aborted',
       detail: '用户执行 /stop，已停止当前任务。',
     }]);
@@ -579,7 +579,7 @@ describe('command-dispatch', () => {
       },
     );
     assert.match(sent.at(-1) || '', /当前聊天绑定/);
-    assert.match(sent.at(-1) || '', /#\s+标题\s+目录\s+上一次活动\s+binding_id\s+thread_id\s+source\s+命令/);
+    assert.match(sent.at(-1) || '', /#\s+标题\s+目录\s+上一次活动\s+binding_id\s+thread_id\s+Creator\s+命令/);
     assert.match(sent.at(-1) || '', /first/);
     assert.match(sent.at(-1) || '', /second/);
     assert.equal(richCards.at(-1)?.title, '当前聊天绑定（2）');
@@ -590,7 +590,7 @@ describe('command-dispatch', () => {
       'last_active',
       'binding_id',
       'thread_id',
-      'source',
+      'creator',
       'command',
     ]);
     assert.deepEqual(
@@ -702,8 +702,8 @@ describe('command-dispatch', () => {
     const address = { channelType: 'feishu', chatId: 'chat-t-name' } as const;
     const first = router.createBinding(address, 'D:\\workspace\\first-name');
     const second = router.createBinding(address, 'D:\\workspace\\second-name');
-    store.updateSession(first.codepilotSessionId, { name: '前端修复' });
-    store.updateSession(second.codepilotSessionId, { name: '后端修复' });
+    store.updateSession(first.bridgeSessionId, { name: '前端修复' });
+    store.updateSession(second.bridgeSessionId, { name: '后端修复' });
 
     const deps = {
       getActiveTask: () => undefined,
@@ -740,7 +740,7 @@ describe('command-dispatch', () => {
     assert.match(sent.at(-1) || '', /已移除绑定线程/);
 
     const duplicate = router.createBinding(address, 'D:\\workspace\\duplicate-name');
-    store.updateSession(duplicate.codepilotSessionId, { name: '前端修复' });
+    store.updateSession(duplicate.bridgeSessionId, { name: '前端修复' });
 
     await handleBridgeCommand(
       adapter,
@@ -754,6 +754,144 @@ describe('command-dispatch', () => {
     );
 
     assert.match(sent.at(-1) || '', /匹配到多个绑定线程/);
+  });
+
+  it('creates, lists, and removes /auto tasks on the current bridge session', async () => {
+    const store = initTestContext();
+    const sent: string[] = [];
+    const richCards: OutboundRichCard[] = [];
+    const started: string[] = [];
+    const stopped: string[] = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      send: async (message: { text: string; richCard?: OutboundRichCard }) => {
+        sent.push(message.text);
+        if (message.richCard) richCards.push(message.richCard);
+        return { ok: true, messageId: `reply-auto-${sent.length}` };
+      },
+    };
+    const address = { channelType: 'feishu', chatId: 'chat-auto' } as const;
+    const first = router.createBinding(address, 'D:\\workspace\\auto-first');
+    const second = router.createBinding(address, 'D:\\workspace\\auto-second');
+    const scriptPath = path.join(os.tmpdir(), `cti-auto-${Date.now()}.sh`);
+    fs.writeFileSync(scriptPath, '#!/usr/bin/env bash\nprintf "check progress\\n"\n', 'utf-8');
+    fs.chmodSync(scriptPath, 0o755);
+
+    const deps = {
+      getActiveTask: () => undefined,
+      diagnoseSessionHealth: async () => null,
+      diagnoseAllActiveSessions: async () => [],
+      startAutoTask: (taskId: string) => { started.push(taskId); },
+      stopAutoTask: (taskId: string) => { stopped.push(taskId); },
+    };
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: `/auto new ${scriptPath} 3`,
+        messageId: 'incoming-auto-new',
+      } as any,
+      `/auto new ${scriptPath} 3`,
+      deps,
+    );
+
+    const secondTasks = listAutoTasks({ bridgeSessionId: second.bridgeSessionId, includeCompleted: true });
+    assert.equal(secondTasks.length, 1);
+    assert.equal(secondTasks[0].bridgeSessionId, second.bridgeSessionId);
+    assert.equal((secondTasks[0] as any).bindingId, undefined);
+    assert.deepEqual(started, [secondTasks[0].id]);
+    assert.match(sent.at(-1) || '', /已创建自动化任务/);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/auto ls',
+        messageId: 'incoming-auto-ls',
+      } as any,
+      '/auto ls',
+      deps,
+    );
+
+    assert.match(sent.at(-1) || '', /当前聊天自动化任务/);
+    assert.match(sent.at(-1) || '', /session codex-id/);
+    assert.equal(richCards.at(-1)?.template, 'green');
+    assert.equal(richCards.at(-1)?.title, '当前聊天自动化任务（1）');
+    assert.deepEqual(richCards.at(-1)?.table?.columns.map((column) => column.name), [
+      'index',
+      'session_title',
+      'script_path',
+      'created_at',
+      'triggered_count',
+      'last_triggered_at',
+      'times',
+      'codex_id',
+      'command',
+    ]);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/t use 1',
+        messageId: 'incoming-auto-switch',
+      } as any,
+      '/t use 1',
+      deps,
+    );
+    assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, first.id);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/auto ls',
+        messageId: 'incoming-auto-ls-first',
+      } as any,
+      '/auto ls',
+      deps,
+    );
+    assert.match(sent.at(-1) || '', /当前聊天自动化任务/);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/auto set 1 2',
+        messageId: 'incoming-auto-set',
+      } as any,
+      '/auto set 1 2',
+      deps,
+    );
+    assert.match(sent.at(-1) || '', /已更新自动化任务次数/);
+    assert.equal(listAutoTasks({ bridgeSessionId: second.bridgeSessionId, includeCompleted: true })[0].times, 2);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/t use 2',
+        messageId: 'incoming-auto-switch-back',
+      } as any,
+      '/t use 2',
+      deps,
+    );
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/auto rm 1',
+        messageId: 'incoming-auto-rm',
+      } as any,
+      '/auto rm 1',
+      deps,
+    );
+
+    assert.equal(listAutoTasks({ bridgeSessionId: second.bridgeSessionId, includeCompleted: true }).length, 0);
+    assert.deepEqual(stopped, [secondTasks[0].id]);
+    assert.match(sent.at(-1) || '', /已删除自动化任务/);
   });
 
   it('maps /stop to C-c for a running tmux provider mirror turn', async () => {
@@ -774,7 +912,7 @@ describe('command-dispatch', () => {
     };
     const address = { channelType: 'feishu', chatId: 'chat-stop-tmux-provider' } as const;
     const binding = router.createBinding(address, 'D:\\workspace\\stop-tmux-provider');
-    store.updateSession(binding.codepilotSessionId, {
+    store.updateSession(binding.bridgeSessionId, {
       codex_provider: 'tmux',
       tmux_session_name: 'alpha',
       mirror_status: 'watching',
@@ -849,7 +987,7 @@ describe('command-dispatch', () => {
       },
     );
 
-    assert.equal(store.getSession(binding.codepilotSessionId)?.name, 'Bridge: chat-rename');
+    assert.equal(store.getSession(binding.bridgeSessionId)?.name, 'Bridge: chat-rename');
     assert.match(sent[0] || '', /名称不能是纯数字/);
 
     await handleBridgeCommand(
@@ -867,12 +1005,11 @@ describe('command-dispatch', () => {
       },
     );
 
-    assert.equal(store.getSession(binding.codepilotSessionId)?.name, '前端修复');
+    assert.equal(store.getSession(binding.bridgeSessionId)?.name, '前端修复');
     assert.match(sent[1] || '', /当前线程已重命名/);
     assert.match(sent[1] || '', /binding_id/);
     assert.equal(richCards.length, 0);
-    const meta = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'ui-session-meta.json'), 'utf-8'));
-    assert.equal(meta[`session:${binding.codepilotSessionId}`]?.name, '前端修复');
+    assert.equal(fs.existsSync(path.join(DATA_DIR, 'ui-session-meta.json')), false);
   });
 
   it('prints file content with /cat and escapes embedded fences', async () => {
@@ -1009,7 +1146,7 @@ describe('command-dispatch', () => {
       );
       const binding = store.getChannelBinding(address.channelType, address.chatId);
       assert.ok(binding);
-      const session = binding ? store.getSession(binding.codepilotSessionId) : null;
+      const session = binding ? store.getSession(binding.bridgeSessionId) : null;
       assert.equal(session?.tmux_session_name, 'alpha');
       assert.match(sent.at(-1) || '', /已绑定 tmux session/);
       assert.match(sent.at(-1) || '', /```sh/);
@@ -1027,7 +1164,7 @@ describe('command-dispatch', () => {
         '/tmux-set lines 120',
         deps,
       );
-      const updatedSession = binding ? store.getSession(binding.codepilotSessionId) : null;
+      const updatedSession = binding ? store.getSession(binding.bridgeSessionId) : null;
       assert.equal(updatedSession?.tmux_capture_lines, 120);
       assert.doesNotMatch(sent.at(-1) || '', /真实 tmux 底层命令/);
 
@@ -1041,7 +1178,7 @@ describe('command-dispatch', () => {
         '/tmux-set enter on',
         deps,
       );
-      const autoEnterSession = binding ? store.getSession(binding.codepilotSessionId) : null;
+      const autoEnterSession = binding ? store.getSession(binding.bridgeSessionId) : null;
       assert.equal(autoEnterSession?.tmux_auto_enter, true);
       assert.match(sent.at(-1) || '', /自动回车.*on/s);
 
@@ -1085,7 +1222,7 @@ describe('command-dispatch', () => {
         '/tmux-set enter off',
         deps,
       );
-      const autoEnterOffSession = binding ? store.getSession(binding.codepilotSessionId) : null;
+      const autoEnterOffSession = binding ? store.getSession(binding.bridgeSessionId) : null;
       assert.equal(autoEnterOffSession?.tmux_auto_enter, false);
 
       const beforeAutoEnterOffLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
@@ -1142,7 +1279,7 @@ describe('command-dispatch', () => {
       const tempLinesResponse = sent.at(-1) || '';
       assert.match(tempLinesResponse, /展示行数.*42/s);
       assert.match(tempLinesResponse, /tmux capture-pane -t alpha -p -S -42/);
-      const afterTempLinesSession = binding ? store.getSession(binding.codepilotSessionId) : null;
+      const afterTempLinesSession = binding ? store.getSession(binding.bridgeSessionId) : null;
       assert.equal(afterTempLinesSession?.tmux_capture_lines, 120);
 
       await handleBridgeCommand(

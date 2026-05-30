@@ -1,6 +1,6 @@
 import type { ActiveBridgeTurn, BridgeTurnTerminalRecord } from './turn-types.js';
 
-export interface DesktopTerminalClaimResult {
+export interface CodexTerminalClaimResult {
   claimed: boolean;
   turn?: ActiveBridgeTurn;
 }
@@ -15,7 +15,7 @@ export interface TurnCoordinatorDeps {
 export interface TurnCoordinator {
   registerInteractiveTurn(turn: ActiveBridgeTurn): void;
   getActiveTurn(sessionId: string): ActiveBridgeTurn | undefined;
-  claimDesktopTerminal(record: BridgeTurnTerminalRecord): Promise<DesktopTerminalClaimResult>;
+  claimCodexTerminal(record: BridgeTurnTerminalRecord): Promise<CodexTerminalClaimResult>;
   releaseTurn(turnId: string): void;
   releaseSessionTurn(sessionId: string, turnId?: string): void;
   clear(): void;
@@ -32,14 +32,14 @@ export function createTurnCoordinator(deps: TurnCoordinatorDeps = {}): TurnCoord
     return activeTurnsBySession.get(sessionId);
   }
 
-  async function claimDesktopTerminal(
+  async function claimCodexTerminal(
     terminal: BridgeTurnTerminalRecord,
-  ): Promise<DesktopTerminalClaimResult> {
+  ): Promise<CodexTerminalClaimResult> {
     const turn = activeTurnsBySession.get(terminal.sessionId);
-    if (!turn || turn.kind !== 'im_desktop_reuse') {
+    if (!turn || turn.kind !== 'im_codex_reuse') {
       return { claimed: false };
     }
-    if (turn.desktopThreadId && turn.desktopThreadId !== terminal.desktopThreadId) {
+    if (turn.codexThreadId && turn.codexThreadId !== terminal.codexThreadId) {
       return { claimed: false };
     }
 
@@ -69,7 +69,7 @@ export function createTurnCoordinator(deps: TurnCoordinatorDeps = {}): TurnCoord
   return {
     registerInteractiveTurn,
     getActiveTurn,
-    claimDesktopTerminal,
+    claimCodexTerminal,
     releaseTurn,
     releaseSessionTurn,
     clear,

@@ -102,7 +102,7 @@ describe('buildFinalCardJson', () => {
 describe('buildRichCardContent', () => {
   it('renders command sections and callback buttons', () => {
     const cardJson = buildRichCardContent({
-      title: '最近 1 条桌面会话',
+      title: '最近 1 条本地 Codex 会话',
       subtitle: '点击按钮或发送纯文本命令。',
       sections: [{
         title: '1. Project A',
@@ -120,7 +120,7 @@ describe('buildRichCardContent', () => {
     }, 'chat-1');
 
     const parsed = JSON.parse(cardJson) as any;
-    assert.equal(parsed.header.title.content, '最近 1 条桌面会话');
+    assert.equal(parsed.header.title.content, '最近 1 条本地 Codex 会话');
     const content = JSON.stringify(parsed);
     assert.match(content, /Project A/);
     assert.match(content, /column_set/);
@@ -134,7 +134,7 @@ describe('buildRichCardContent', () => {
 
   it('compresses long rich-card lists in the card body', () => {
     const cardJson = buildRichCardContent({
-      title: '桌面会话',
+      title: '本地 Codex 会话',
       maxSections: 2,
       sections: [
         { title: '1. A', fields: [['目录', '/repo/a']] },

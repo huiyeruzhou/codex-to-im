@@ -16,30 +16,39 @@ import type {
 import type { BaseChannelAdapter } from './channel-adapter.js';
 import type { BridgeSession, PermissionLinkRecord } from './host.js';
 import { inspect } from 'node:util';
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 // Side-effect import: triggers self-registration of all adapter factories
 import './adapters/index.js';
 import * as router from './channel-router.js';
 import * as broker from './permission-broker.js';
 import { getBridgeContext } from './context.js';
-import type { DesktopMirrorRecord } from '../../desktop-sessions.js';
+import type { CodexMirrorRecord } from '../../codex/session-index.js';
 import {
   sanitizeInput,
 } from './security/validators.js';
 import {
-  buildDesktopThreadsCommandResponse,
-  formatCommandDateTime,
-  formatMirrorStatus,
-  formatRuntimeStatus,
   normalizeReasoningEffort,
-  parseDesktopThreadListArgs,
+  normalizeSandboxMode,
+} from '../../runtime-options.js';
+import {
   resolveCommandAlias,
-  THREAD_SELECT_ACTION_CALLBACK_PREFIX,
-  THREAD_SELECT_CALLBACK_PREFIX,
   isBridgeCommandText,
   toModelPromptText,
-  toUserVisibleBindingError,
+  handleBridgeCommand,
+  buildGlobalStatusResponse,
+} from './command.js';
+import {
   toUserVisibleCommandError,
-} from './command-helpers.js';
+} from './command-errors.js';
+import {
+  buildCommandCallbackData,
+  parseCommandCallbackData,
+  AUTO_TASK_ACTION_CALLBACK_PREFIX,
+  AUTO_TASK_SELECT_CALLBACK_PREFIX,
+  type AutoTaskCardAction,
+  THREAD_SELECT_ACTION_CALLBACK_PREFIX,
+  THREAD_SELECT_CALLBACK_PREFIX,
+} from './command-callbacks.js';
 import {
   appendMirrorTimeoutNotice,
   buildInteractiveStreamKey,
@@ -53,7 +62,7 @@ import {
   consumeMirrorRecords as consumeMirrorRecordsBase,
   flushTimedOutMirrorTurn as flushTimedOutMirrorTurnBase,
   hasPendingMirrorWork as hasPendingMirrorWorkBase,
-  type FinalizedDesktopMirrorTurn,
+  type FinalizedCodexMirrorTurn,
 } from './mirror-turns.js';
 import {
   abortMirrorSuppression as abortMirrorSuppressionBase,
@@ -65,7 +74,7 @@ import {
   type MirrorSuppressionState,
   type MirrorSuppressionStore,
 } from './mirror-suppression.js';
-import { type DesktopMirrorSubscription } from './mirror-subscription-state.js';
+import { type CodexMirrorSubscription } from './mirror-subscription-state.js';
 import {
   buildAdapterConfigFingerprint,
 } from './adapter-sync-plan.js';
@@ -76,19 +85,28 @@ import {
 import {
   formatBindingChatLabel,
 } from './bridge-channel-runtime.js';
-import { parseCommandCallbackData } from './command-callbacks.js';
 import {
   formatDisplayedModel,
-  getDesktopSessionByThreadIdSafe,
+  getCodexSessionByThreadIdSafe,
   resolveDisplayedModel,
   resolveNewWorkingDirectory,
   resolveNewSessionWorkingDirectory,
 } from './bridge-session-support.js';
-import { buildGlobalStatusResponse, handleBridgeCommand } from './command-dispatch.js';
 import { ThreadDisplayService } from './thread-display-resolver.js';
 import {
   runInteractiveMessage,
-} from './interactive-message-runner.js';
+} from './interactive-turn/runner.js';
+import {
+  resolveInteractiveTurnEnvironment as resolveInteractiveTurnEnvironmentBase,
+  resolveInteractiveTurnRuntimeSettings,
+} from './interactive-turn/turn-environment.js';
+import {
+  getAutoTask,
+  listAutoTasks,
+  pauseAutoTasksForSession,
+  updateAutoTask,
+  type AutoTask,
+} from './auto-tasks.js';
 import {
   createInteractiveRuntime,
   type BridgeInteractiveRuntimeState,
@@ -101,9 +119,10 @@ import {
 import { probeCodexThreadProcess } from './session-health-process.js';
 import { createSessionHealthRuntime } from './session-health-runtime.js';
 import { deliverBridgeNotice, deliverResponse } from './feedback-delivery.js';
-import { routeDesktopRecords } from './turns/desktop-terminal-router.js';
+import { routeCodexRecords } from './turns/local-codex-terminal-router.js';
 import { createTurnCoordinator } from './turns/turn-coordinator.js';
 import type { BridgeTurnTerminalRecord } from './turns/turn-types.js';
+import { consumeSseEvents } from './sse-stream-decoder.js';
 
 const GLOBAL_KEY = '__bridge_manager__';
 const DANGLING_MIRROR_THREAD_RETRY_LIMIT = 3;
@@ -114,18 +133,19 @@ const MIRROR_WATCH_DEBOUNCE_MS = 350;
 const MIRROR_EVENT_BATCH_LIMIT = 8;
 const MIRROR_SUPPRESSION_WINDOW_MS = 4_000;
 const MIRROR_PROMPT_MATCH_GRACE_MS = 120_000;
-// When IM drives a Desktop thread, Desktop task_complete is the canonical
+// When IM drives a Codex thread, Codex task_complete is the canonical
 // final source. If the SDK stream finishes first, wait for the terminal JSONL
 // record before falling back to the SDK response.
 const DESKTOP_TERMINAL_FINALIZATION_TIMEOUT_MS = 30_000;
 const MIRROR_STREAM_STATUS_IDLE_START_MS = 180_000;
 const MIRROR_STREAM_STATUS_HEARTBEAT_MS = 10_000;
 const TMUX_SCREEN_STOP_CALLBACK_PREFIX = 'tmux-screen:stop:';
-// Timeout after the last desktop event before we flush a buffered mirror turn
+// Timeout after the last Codex event before we flush a buffered mirror turn
 // without seeing task_complete. This is an internal mirror buffer guard, not an
 // IM idle reminder. Active streaming turns never use this fallback timeout.
 const MIRROR_TURN_BUFFER_TIMEOUT_MS = 10 * 60_000;
 const STARTUP_NOTICE_TITLE = 'Bridge 已启动';
+const AUTO_SCRIPT_OUTPUT_LIMIT = 64_000;
 
 // ── Streaming preview helpers ──────────────────────────────────
 
@@ -203,12 +223,20 @@ interface BridgeManagerState extends BridgeAdapterRuntimeState, BridgeInteractiv
   reconcileTimer: NodeJS.Timeout | null;
   mirrorPollTimer: NodeJS.Timeout | null;
   mirrorWakeTimer: NodeJS.Timeout | null;
-  mirrorSubscriptions: Map<string, DesktopMirrorSubscription>;
+  mirrorSubscriptions: Map<string, CodexMirrorSubscription>;
   mirrorSyncInFlight: boolean;
   mirrorSuppressUntil: Map<string, MirrorSuppressionState[]>;
   mirrorIgnoredTurnIds: Map<string, Map<string, number>>;
   threadCardSelections: Map<string, string>;
+  autoTaskSelections: Map<string, string>;
+  autoTaskRuntimes: Map<string, AutoTaskRuntimeState>;
   autoStartChecked: boolean;
+}
+
+interface AutoTaskRuntimeState {
+  abortController: AbortController;
+  bridgeSessionId: string;
+  child: ChildProcessWithoutNullStreams | null;
 }
 
 function getState(): BridgeManagerState {
@@ -230,6 +258,8 @@ function getState(): BridgeManagerState {
       mirrorSuppressUntil: new Map(),
       mirrorIgnoredTurnIds: new Map(),
       threadCardSelections: new Map(),
+      autoTaskSelections: new Map(),
+      autoTaskRuntimes: new Map(),
       queuedCounts: new Map(),
       sessionLocks: new Map(),
       autoStartChecked: false,
@@ -257,6 +287,12 @@ function getState(): BridgeManagerState {
   if (!g[GLOBAL_KEY].threadCardSelections) {
     g[GLOBAL_KEY].threadCardSelections = new Map();
   }
+  if (!g[GLOBAL_KEY].autoTaskSelections) {
+    g[GLOBAL_KEY].autoTaskSelections = new Map();
+  }
+  if (!g[GLOBAL_KEY].autoTaskRuntimes) {
+    g[GLOBAL_KEY].autoTaskRuntimes = new Map();
+  }
   if (!Object.prototype.hasOwnProperty.call(g[GLOBAL_KEY], 'mirrorSyncInFlight')) {
     g[GLOBAL_KEY].mirrorSyncInFlight = false;
   }
@@ -268,21 +304,21 @@ const INTERACTIVE_RUNTIME = createInteractiveRuntime(getState, {
   nowIso,
 });
 
-function formatDesktopTerminalDetail(terminal: BridgeTurnTerminalRecord): string {
+function formatCodexTerminalDetail(terminal: BridgeTurnTerminalRecord): string {
   if (terminal.outcome === 'aborted') {
-    return '检测到桌面线程已停止当前任务。';
+    return '检测到 Codex thread已停止当前任务。';
   }
   if (terminal.outcome === 'failed') {
-    return '检测到桌面线程当前任务执行失败。';
+    return '检测到 Codex thread当前任务执行失败。';
   }
-  return '检测到桌面线程已完成当前任务。';
+  return '检测到 Codex thread已完成当前任务。';
 }
 
 const TURN_COORDINATOR = createTurnCoordinator({
   finalizeTerminalTurn: (turn, terminal) => INTERACTIVE_RUNTIME.finalizeTerminalActiveTask(
     turn.sessionId,
     terminal.outcome,
-    formatDesktopTerminalDetail(terminal),
+    formatCodexTerminalDetail(terminal),
     terminal.text,
   ),
 });
@@ -342,8 +378,8 @@ function isMirrorSuppressed(sessionId: string): boolean {
 
 function filterSuppressedMirrorRecords(
   sessionId: string,
-  records: DesktopMirrorRecord[],
-): DesktopMirrorRecord[] {
+  records: CodexMirrorRecord[],
+): CodexMirrorRecord[] {
   return filterSuppressedMirrorRecordsBase(
     getMirrorSuppressionStore(),
     sessionId,
@@ -419,8 +455,8 @@ function getMirrorStructuredStreamStatusConfig(): {
 function getMirrorThreadTitle(threadId: string, sessionId?: string): string | null {
   const { store } = getBridgeContext();
   const session = sessionId ? store.getSession(sessionId) : null;
-  const desktop = getDesktopSessionByThreadIdSafe(threadId, 'mirror title');
-  if (!session && !desktop) return null;
+  const codexSession = getCodexSessionByThreadIdSafe(threadId, 'mirror title');
+  if (!session && !codexSession) return null;
   return new ThreadDisplayService(store).thread(threadId, sessionId, { stripInternalPrefix: true }).title;
 }
 
@@ -434,7 +470,7 @@ const MIRROR_FEEDBACK = createMirrorFeedbackController({
 });
 
 function refreshMirrorStreamingStatus(
-  subscription: DesktopMirrorSubscription,
+  subscription: CodexMirrorSubscription,
   nowMs = Date.now(),
   config: MirrorStructuredStreamStatusConfig = getMirrorStructuredStreamStatusConfig(),
 ): void {
@@ -448,15 +484,15 @@ function refreshActiveMirrorStreamingStatuses(nowMs = Date.now()): void {
 }
 
 function stopMirrorStreaming(
-  subscription: DesktopMirrorSubscription,
+  subscription: CodexMirrorSubscription,
   status: 'completed' | 'interrupted' = 'interrupted',
 ): void {
   MIRROR_FEEDBACK.stopMirrorStreaming(subscription, status);
 }
 
 async function deliverMirrorTurns(
-  subscription: DesktopMirrorSubscription,
-  turns: FinalizedDesktopMirrorTurn[],
+  subscription: CodexMirrorSubscription,
+  turns: FinalizedCodexMirrorTurn[],
 ): Promise<{ deliveredCount: number; error?: unknown }> {
   return MIRROR_FEEDBACK.deliverMirrorTurns(subscription, turns);
 }
@@ -464,30 +500,30 @@ async function deliverMirrorTurns(
 const MIRROR_TURN_HOOKS = MIRROR_FEEDBACK.hooks;
 
 function consumeMirrorRecords(
-  subscription: DesktopMirrorSubscription,
-  records: DesktopMirrorRecord[],
-): FinalizedDesktopMirrorTurn[] {
+  subscription: CodexMirrorSubscription,
+  records: CodexMirrorRecord[],
+): FinalizedCodexMirrorTurn[] {
   return consumeMirrorRecordsBase(subscription, records, MIRROR_TURN_HOOKS);
 }
 
 function flushTimedOutMirrorTurn(
-  subscription: DesktopMirrorSubscription,
+  subscription: CodexMirrorSubscription,
   nowMs = Date.now(),
-): FinalizedDesktopMirrorTurn | null {
+): FinalizedCodexMirrorTurn | null {
   if (subscription.pendingTurn?.streamStarted) {
     return null;
   }
   return flushTimedOutMirrorTurnBase(subscription, MIRROR_TURN_BUFFER_TIMEOUT_MS, nowMs);
 }
 
-function hasPendingMirrorWork(subscription: DesktopMirrorSubscription): boolean {
+function hasPendingMirrorWork(subscription: CodexMirrorSubscription): boolean {
   return hasPendingMirrorWorkBase(subscription);
 }
 
 function consumeBufferedMirrorTurns(
-  subscription: DesktopMirrorSubscription,
+  subscription: CodexMirrorSubscription,
   nowMs = Date.now(),
-): FinalizedDesktopMirrorTurn[] {
+): FinalizedCodexMirrorTurn[] {
   const timeoutMs = subscription.pendingTurn?.streamStarted
     ? Number.POSITIVE_INFINITY
     : MIRROR_TURN_BUFFER_TIMEOUT_MS;
@@ -502,13 +538,18 @@ const MIRROR_RUNTIME = createMirrorRuntime(getState, {
 }, {
   nowIso,
   describeUnknownError,
-  getDesktopSessionByThreadIdSafe,
+  listChannelBindings: () => getBridgeContext().store.listChannelBindings(),
+  getSession: (sessionId) => getBridgeContext().store.getSession(sessionId),
+  clearSessionCodexThreadId: (sessionId) => {
+    getBridgeContext().store.updateSessionCodexThreadId(sessionId, '');
+  },
+  getCodexSessionByThreadIdSafe,
   syncMirrorSessionStateSafe,
   filterSuppressedMirrorRecords,
   observeSessionHealthRecords: (sessionId, threadId, records) => {
-    SESSION_HEALTH_RUNTIME.observeDesktopMirrorRecords(sessionId, threadId, records);
+    SESSION_HEALTH_RUNTIME.observeCodexMirrorRecords(sessionId, threadId, records);
   },
-  routeDesktopRecords: (sessionId, threadId, records) => routeDesktopRecords(
+  routeCodexRecords: (sessionId, threadId, records) => routeCodexRecords(
     sessionId,
     threadId,
     records,
@@ -543,7 +584,7 @@ const ADAPTER_RUNTIME = createAdapterRuntime(getState, {
   handleMessage,
   processWithSessionLock: (sessionId, fn) => INTERACTIVE_RUNTIME.processWithSessionLock(sessionId, fn),
   isNumericPermissionShortcut,
-  resolveSessionIdForMessage: (msg) => router.resolve(msg.address).codepilotSessionId,
+  resolveSessionIdForMessage: (msg) => router.resolve(msg.address).bridgeSessionId,
 });
 
 /**
@@ -611,6 +652,7 @@ export async function start(): Promise<void> {
   void reconcileMirrorSubscriptions().catch((err) => {
     console.error('[bridge-manager] Initial mirror reconcile failed:', describeUnknownError(err));
   });
+  startPersistedAutoTasks();
 
   console.log(`[bridge-manager] Bridge started with ${startedCount} adapter(s)`);
   void deliverStartupNotifications().catch((err) => {
@@ -653,6 +695,7 @@ export async function stop(): Promise<void> {
     task.abortController.abort();
   }
   state.activeTasks.clear();
+  stopAllAutoTasks();
   state.mirrorSuppressUntil.clear();
   state.mirrorIgnoredTurnIds.clear();
   state.queuedCounts.clear();
@@ -742,7 +785,7 @@ async function deliverStartupNotifications(): Promise<void> {
       channelAddressFromBinding(binding),
       text,
       {
-        sessionId: binding.codepilotSessionId,
+        sessionId: binding.bridgeSessionId,
         audit: false,
       },
     ).catch((err) => {
@@ -755,6 +798,310 @@ async function deliverStartupNotifications(): Promise<void> {
   }
 
   await Promise.all(tasks);
+}
+
+function startPersistedAutoTasks(): void {
+  const tasks = listAutoTasks({ includeCompleted: false })
+    .filter((task) => task.status === 'running' && task.triggeredCount < task.times);
+  for (const task of tasks) {
+    startAutoTask(task.id);
+  }
+}
+
+function startAutoTask(taskId: string): void {
+  const state = getState();
+  if (state.autoTaskRuntimes.has(taskId)) return;
+  const task = getAutoTask(taskId);
+  if (!task || task.status !== 'running' || task.triggeredCount >= task.times) return;
+
+  const abortController = new AbortController();
+  state.autoTaskRuntimes.set(taskId, {
+    abortController,
+    bridgeSessionId: task.bridgeSessionId,
+    child: null,
+  });
+  void runAutoTaskLoop(taskId, abortController).finally(() => {
+    state.autoTaskRuntimes.delete(taskId);
+  });
+}
+
+function stopAutoTask(taskId: string): void {
+  const runtime = getState().autoTaskRuntimes.get(taskId);
+  if (!runtime) return;
+  runtime.abortController.abort();
+  runtime.child?.kill();
+  void INTERACTIVE_RUNTIME.forceStopSession(
+    runtime.bridgeSessionId,
+    '自动化任务已删除，正在中止后台触发。',
+  ).catch((error) => {
+    console.error('[bridge-manager] Failed to stop auto task interactive turn:', describeUnknownError(error));
+  });
+}
+
+function stopAllAutoTasks(): void {
+  for (const taskId of Array.from(getState().autoTaskRuntimes.keys())) {
+    stopAutoTask(taskId);
+  }
+  getState().autoTaskRuntimes.clear();
+}
+
+async function runAutoTaskLoop(taskId: string, abortController: AbortController): Promise<void> {
+  while (!abortController.signal.aborted) {
+    const task = getAutoTask(taskId);
+    if (!task || task.status !== 'running') return;
+    if (task.triggeredCount >= task.times) {
+      updateAutoTask(task.id, { status: 'completed' });
+      return;
+    }
+
+    const session = getBridgeContext().store.getSession(task.bridgeSessionId);
+    if (!session) {
+      updateAutoTask(task.id, {
+        status: 'failed',
+        lastError: `Bridge session 不存在：${task.bridgeSessionId}`,
+      });
+      return;
+    }
+
+    let scriptResult: AutoScriptRunResult;
+    try {
+      scriptResult = await runAutoScript(task, session, abortController);
+    } catch (error) {
+      if (abortController.signal.aborted) return;
+      const detail = describeUnknownError(error);
+      updateAutoTask(task.id, { status: 'failed', lastError: detail });
+      await deliverAutoTaskNotice(task, `自动化脚本执行失败：\n\n${detail}`);
+      return;
+    }
+
+    if (abortController.signal.aborted) return;
+    if (scriptResult.exitCode !== 0) {
+      const detail = [
+        `exit_code: ${scriptResult.exitCode}`,
+        scriptResult.stderr.trim() ? `stderr:\n${scriptResult.stderr.trim()}` : null,
+      ].filter(Boolean).join('\n\n');
+      updateAutoTask(task.id, { status: 'failed', lastError: detail });
+      await deliverAutoTaskNotice(task, `自动化脚本执行失败：\n\n${detail}`);
+      return;
+    }
+
+    const rawPrompt = scriptResult.stdout.trim();
+    if (!rawPrompt) {
+      updateAutoTask(task.id, { status: 'failed', lastError: '脚本没有输出 stdout，无法构造 Codex prompt。' });
+      await deliverAutoTaskNotice(task, '自动化脚本没有输出 stdout，无法构造 Codex prompt。');
+      return;
+    }
+
+    const { text: prompt, truncated } = sanitizeInput(rawPrompt, AUTO_SCRIPT_OUTPUT_LIMIT);
+    const nextTriggeredCount = task.triggeredCount + 1;
+    updateAutoTask(task.id, {
+      triggeredCount: nextTriggeredCount,
+      lastTriggeredAt: nowIso(),
+      lastError: truncated ? '脚本 stdout 过长，已截断后发送给 Codex。' : undefined,
+    });
+
+    try {
+      await runAutoTaskPrompt(task, session, prompt, nextTriggeredCount, abortController);
+    } catch (error) {
+      if (abortController.signal.aborted) return;
+      const detail = describeUnknownError(error);
+      updateAutoTask(task.id, { status: 'failed', lastError: detail });
+      await deliverAutoTaskNotice(task, `自动化任务触发 Codex 失败：\n\n${detail}`);
+      return;
+    }
+
+    if (abortController.signal.aborted) return;
+    if (nextTriggeredCount >= task.times) {
+      updateAutoTask(task.id, { status: 'completed' });
+      return;
+    }
+  }
+}
+
+interface AutoScriptRunResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+}
+
+async function runAutoScript(
+  task: AutoTask,
+  session: BridgeSession,
+  abortController: AbortController,
+): Promise<AutoScriptRunResult> {
+  return await new Promise((resolve, reject) => {
+    const runtime = getState().autoTaskRuntimes.get(task.id);
+    const child = spawn(task.scriptPath, [], {
+      cwd: session.working_directory || process.cwd(),
+      env: process.env,
+      windowsHide: true,
+    });
+    if (runtime) runtime.child = child;
+
+    let stdout = '';
+    let stderr = '';
+    const onAbort = () => {
+      child.kill();
+    };
+    const cleanup = () => {
+      abortController.signal.removeEventListener('abort', onAbort);
+      if (runtime) runtime.child = null;
+    };
+    const appendLimited = (current: string, chunk: Buffer): string => (
+      (current + chunk.toString('utf-8')).slice(-AUTO_SCRIPT_OUTPUT_LIMIT)
+    );
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdout = appendLimited(stdout, chunk);
+    });
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr = appendLimited(stderr, chunk);
+    });
+    child.on('error', (error) => {
+      cleanup();
+      reject(error);
+    });
+    child.on('close', (code) => {
+      cleanup();
+      resolve({ stdout, stderr, exitCode: code });
+    });
+
+    abortController.signal.addEventListener('abort', onAbort, { once: true });
+    if (abortController.signal.aborted) {
+      onAbort();
+    }
+  });
+}
+
+async function runAutoTaskPrompt(
+  task: AutoTask,
+  session: BridgeSession,
+  prompt: string,
+  triggeredCount: number,
+  abortController: AbortController,
+): Promise<void> {
+  const adapter = getState().adapters.get(task.channelType);
+  if (!adapter?.isRunning()) {
+    updateAutoTask(task.id, {
+      status: 'failed',
+      lastError: `通道未运行：${task.channelType}`,
+    });
+    return;
+  }
+
+  const address = autoTaskAddress(task);
+  const syntheticBinding = buildAutoTaskBinding(task, session);
+  const messageId = `auto:${task.id}:${triggeredCount}`;
+  const msg: InboundMessage = {
+    address,
+    text: prompt,
+    messageId,
+    timestamp: Date.now(),
+  };
+  const displayService = new ThreadDisplayService(getBridgeContext().store);
+
+  await runInteractiveMessage(adapter, msg, prompt, undefined, {
+    registerInteractiveTask: (taskState) => INTERACTIVE_RUNTIME.registerInteractiveTask(taskState),
+    registerBridgeTurn: (turn) => TURN_COORDINATOR.registerInteractiveTurn(turn),
+    resetMirrorSessionForInteractiveRun,
+    isCurrentInteractiveTask: (sessionId, taskStateId) => INTERACTIVE_RUNTIME.isCurrentInteractiveTask(sessionId, taskStateId),
+    touchInteractiveTask: (sessionId, taskStateId) => INTERACTIVE_RUNTIME.touchInteractiveTask(sessionId, taskStateId),
+    recordInteractiveHealthStart: (sessionId, detail) => SESSION_HEALTH_RUNTIME.recordInteractiveStart(sessionId, detail),
+    recordInteractiveHealthProgress: (sessionId, type, detail) => SESSION_HEALTH_RUNTIME.recordInteractiveProgress(sessionId, type, detail),
+    recordInteractiveHealthTool: (sessionId, toolId, toolName, status) => {
+      SESSION_HEALTH_RUNTIME.recordToolState(sessionId, toolId, toolName, status);
+    },
+    recordInteractiveStreamUiSnapshot: (sessionId, snapshot) => {
+      SESSION_HEALTH_RUNTIME.recordStructuredStreamUi(sessionId, snapshot);
+    },
+    recordInteractiveHealthEnd: (sessionId, outcome, detail) => SESSION_HEALTH_RUNTIME.recordInteractiveEnd(sessionId, outcome, detail),
+    beginMirrorSuppression,
+    abortMirrorSuppression,
+    settleMirrorSuppression,
+    releaseInteractiveTask: (sessionId, taskStateId) => INTERACTIVE_RUNTIME.releaseInteractiveTask(sessionId, taskStateId),
+    releaseBridgeTurn: (sessionId, taskStateId) => TURN_COORDINATOR.releaseSessionTurn(sessionId, taskStateId),
+    deliverResponse: (targetAdapter, targetAddress, responseText, sessionId, _replyToMessageId, attachments) => (
+      deliverResponse(targetAdapter, targetAddress, responseText, sessionId, undefined, attachments)
+    ),
+    persistCodexThreadUpdate,
+    resolveSdkConversationRuntime: () => ({
+      store: getBridgeContext().store,
+      llm: getBridgeContext().llm,
+      consumeSseEvents,
+      normalizeSandboxMode,
+      normalizeReasoningEffort,
+    }),
+    resolveInteractiveTurnEnvironment: (_address, targetMessageId) => (
+      resolveInteractiveTurnEnvironmentBase(address, targetMessageId, {
+        resolveBinding: () => syntheticBinding,
+        getBridgeSession: (sessionId) => getBridgeContext().store.getSession(sessionId),
+        codexThreadExists: (threadId) => Boolean(getCodexSessionByThreadIdSafe(threadId, 'auto task classify')),
+      })
+    ),
+    resolveInteractiveTurnRuntimeSettings: (channelType) => resolveInteractiveTurnRuntimeSettings(
+      channelType,
+      (key) => getBridgeContext().store.getSetting(key),
+    ),
+    forwardPermissionRequest: broker.forwardPermissionRequest,
+    buildStopCallbackData: (sessionId) => buildCommandCallbackData('/stop', sessionId),
+    resolveInteractiveTurnDisplayInfo: () => displayService.binding(syntheticBinding, { stripInternalPrefix: true }),
+    listInteractiveTurnBindings: (channelType) => getBridgeContext().store.listChannelBindings(channelType),
+    codexTerminalFinalizationTimeoutMs: DESKTOP_TERMINAL_FINALIZATION_TIMEOUT_MS,
+    nowMs: () => Date.now(),
+  });
+
+  if (abortController.signal.aborted) {
+    await INTERACTIVE_RUNTIME.forceStopSession(
+      task.bridgeSessionId,
+      '自动化任务已中止。',
+    );
+  }
+}
+
+function buildAutoTaskBinding(task: AutoTask, session: BridgeSession): ChannelBinding {
+  const timestamp = nowIso();
+  return {
+    id: `auto:${task.id}`,
+    channelType: task.channelType,
+    channelProvider: task.channelProvider,
+    channelAlias: task.channelAlias,
+    chatId: task.chatId,
+    chatUserId: task.chatUserId,
+    chatDisplayName: task.chatDisplayName,
+    bridgeSessionId: task.bridgeSessionId,
+    workingDirectory: session.working_directory,
+    model: session.model,
+    mode: session.preferred_mode || 'normal',
+    active: true,
+    createdAt: task.createdAt || timestamp,
+    updatedAt: timestamp,
+  };
+}
+
+function autoTaskAddress(task: AutoTask): ChannelAddress {
+  return {
+    channelType: task.channelType,
+    channelProvider: task.channelProvider,
+    channelAlias: task.channelAlias,
+    chatId: task.chatId,
+    userId: task.chatUserId,
+    displayName: task.chatDisplayName,
+  };
+}
+
+async function deliverAutoTaskNotice(task: AutoTask, text: string): Promise<void> {
+  const adapter = getState().adapters.get(task.channelType);
+  if (!adapter?.isRunning()) return;
+  await deliverBridgeNotice(adapter, autoTaskAddress(task), text, {
+    sessionId: task.bridgeSessionId,
+    audit: true,
+  });
+}
+
+function handleBindingRemovedForAutoTasks(binding: ChannelBinding): void {
+  const paused = pauseAutoTasksForSession(binding.bridgeSessionId);
+  for (const task of paused) {
+    stopAutoTask(task.id);
+  }
 }
 
 /**
@@ -788,11 +1135,20 @@ function findBindingForCallbackSession(
 ): ChannelBinding | null {
   const { store } = getBridgeContext();
   return store.listChannelBindings(channelType).find((binding) => (
-    binding.chatId === chatId && binding.codepilotSessionId === sessionId
+    binding.chatId === chatId && binding.bridgeSessionId === sessionId
   )) || null;
 }
 
 function threadSelectionKey(msg: InboundMessage): string {
+  return [
+    msg.address.channelType,
+    msg.address.chatId,
+    msg.address.userId || '',
+    msg.callbackMessageId || msg.messageId || '',
+  ].join(':');
+}
+
+function autoTaskSelectionKey(msg: InboundMessage): string {
   return [
     msg.address.channelType,
     msg.address.chatId,
@@ -808,6 +1164,21 @@ function parseThreadSelectCallback(callbackData: string): string | null | undefi
   } catch {
     return null;
   }
+}
+
+function parseAutoTaskSelectCallback(callbackData: string): string | null | undefined {
+  if (!callbackData.startsWith(AUTO_TASK_SELECT_CALLBACK_PREFIX)) return undefined;
+  try {
+    return decodeURIComponent(callbackData.slice(AUTO_TASK_SELECT_CALLBACK_PREFIX.length)).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function parseAutoTaskActionCallback(callbackData: string): AutoTaskCardAction | null | undefined {
+  if (!callbackData.startsWith(AUTO_TASK_ACTION_CALLBACK_PREFIX)) return undefined;
+  const raw = callbackData.slice(AUTO_TASK_ACTION_CALLBACK_PREFIX.length).trim();
+  return raw === 'rm' || raw === 'set1' ? raw : null;
 }
 
 function parseThreadSelectActionCallback(callbackData: string): {
@@ -863,6 +1234,42 @@ async function handleMessage(
 
   // Handle callback queries (permission buttons and interactive command cards)
   if (msg.callbackData) {
+    const selectedAutoTaskId = parseAutoTaskSelectCallback(msg.callbackData);
+    if (selectedAutoTaskId !== undefined) {
+      if (!selectedAutoTaskId) {
+        await deliverBridgeNotice(adapter, msg.address, '这个下拉选项无效，请刷新后重试。');
+      } else {
+        getState().autoTaskSelections.set(autoTaskSelectionKey(msg), selectedAutoTaskId);
+        await adapter.answerCallback?.(msg.messageId, '已选择');
+      }
+      ack();
+      return;
+    }
+
+    const autoTaskAction = parseAutoTaskActionCallback(msg.callbackData);
+    if (autoTaskAction !== undefined) {
+      if (!autoTaskAction) {
+        await deliverBridgeNotice(adapter, msg.address, '这个按钮的操作无效，请刷新后重试。');
+        ack();
+        return;
+      }
+      const taskId = getState().autoTaskSelections.get(autoTaskSelectionKey(msg));
+      if (!taskId) {
+        await deliverBridgeNotice(adapter, msg.address, '请先在下拉列表中选择一个自动化任务，再点击操作按钮。');
+        ack();
+        return;
+      }
+      const commandText = autoTaskAction === 'set1' ? '/auto set' : '/auto rm';
+      await handleCommand(
+        adapter,
+        { ...msg, text: commandText, callbackData: undefined },
+        commandText,
+        { selectedAutoTaskId: taskId, selectedAutoTaskAction: autoTaskAction },
+      );
+      ack();
+      return;
+    }
+
     const selectedThreadId = parseThreadSelectCallback(msg.callbackData);
     if (selectedThreadId !== undefined) {
       if (!selectedThreadId) {
@@ -884,7 +1291,7 @@ async function handleMessage(
       }
       const threadId = getState().threadCardSelections.get(threadSelectionKey(msg));
       if (!threadId) {
-        await deliverBridgeNotice(adapter, msg.address, '请先在下拉列表中选择一个桌面会话，再点击绑定、解绑或激活。');
+        await deliverBridgeNotice(adapter, msg.address, '请先在下拉列表中选择一个本地 Codex 会话，再点击绑定、解绑或激活。');
         ack();
         return;
       }
@@ -1006,7 +1413,7 @@ async function handleMessage(
       const currentBinding = store.getChannelBinding(msg.address.channelType, msg.address.chatId);
       const pendingLinks = getPendingPermissionLinksForCurrentSession(
         msg.address.chatId,
-        currentBinding?.codepilotSessionId,
+        currentBinding?.bridgeSessionId,
       );
       if (pendingLinks.length === 1) {
         const actionMap: Record<string, string> = { '1': 'allow', '2': 'allow_session', '3': 'deny' };
@@ -1046,7 +1453,7 @@ async function handleMessage(
   const modelText = toModelPromptText(rawText);
 
   const tmuxProviderBinding = store.getChannelBinding(msg.address.channelType, msg.address.chatId);
-  const tmuxProviderSession = tmuxProviderBinding ? store.getSession(tmuxProviderBinding.codepilotSessionId) : null;
+  const tmuxProviderSession = tmuxProviderBinding ? store.getSession(tmuxProviderBinding.bridgeSessionId) : null;
   if (tmuxProviderSession?.codex_provider === 'tmux') {
     if (hasAttachments) {
       await deliverBridgeNotice(adapter, msg.address, '当前处于 tmux Provider，普通附件不会自动转发到 Codex TUI。请先发送 `/provider sdk`，或在 Codex TUI 内自行读取本地文件。', {
@@ -1132,6 +1539,7 @@ async function handleMessage(
   if (!text && !hasAttachments) { ack(); return; }
 
   try {
+    const displayService = new ThreadDisplayService(store);
     await runInteractiveMessage(adapter, msg, text, hasAttachments ? msg.attachments : undefined, {
       registerInteractiveTask: (task) => INTERACTIVE_RUNTIME.registerInteractiveTask(task),
       registerBridgeTurn: (turn) => TURN_COORDINATOR.registerInteractiveTurn(turn),
@@ -1153,8 +1561,30 @@ async function handleMessage(
       releaseInteractiveTask: (sessionId, taskId) => INTERACTIVE_RUNTIME.releaseInteractiveTask(sessionId, taskId),
       releaseBridgeTurn: (sessionId, taskId) => TURN_COORDINATOR.releaseSessionTurn(sessionId, taskId),
       deliverResponse,
-      persistSdkSessionUpdate,
-      desktopTerminalFinalizationTimeoutMs: DESKTOP_TERMINAL_FINALIZATION_TIMEOUT_MS,
+      persistCodexThreadUpdate,
+      resolveSdkConversationRuntime: () => ({
+        store,
+        llm: getBridgeContext().llm,
+        consumeSseEvents,
+        normalizeSandboxMode,
+        normalizeReasoningEffort,
+      }),
+      resolveInteractiveTurnEnvironment: (address, messageId) => {
+        return resolveInteractiveTurnEnvironmentBase(address, messageId, {
+          resolveBinding: (targetAddress) => router.resolve(targetAddress),
+          getBridgeSession: (sessionId) => store.getSession(sessionId),
+          codexThreadExists: (threadId) => Boolean(getCodexSessionByThreadIdSafe(threadId, 'interactive turn classify')),
+        });
+      },
+      resolveInteractiveTurnRuntimeSettings: (channelType) => resolveInteractiveTurnRuntimeSettings(
+        channelType,
+        (key) => store.getSetting(key),
+      ),
+      forwardPermissionRequest: broker.forwardPermissionRequest,
+      buildStopCallbackData: (sessionId) => buildCommandCallbackData('/stop', sessionId),
+      resolveInteractiveTurnDisplayInfo: (binding) => displayService.binding(binding, { stripInternalPrefix: true }),
+      listInteractiveTurnBindings: (channelType) => store.listChannelBindings(channelType),
+      codexTerminalFinalizationTimeoutMs: DESKTOP_TERMINAL_FINALIZATION_TIMEOUT_MS,
     });
   } finally {
     ack();
@@ -1168,7 +1598,13 @@ async function handleCommand(
   adapter: BaseChannelAdapter,
   msg: InboundMessage,
   text: string,
-  options: { scopedBinding?: ChannelBinding | null; threadCardRefreshScope?: 'global' | 'bound' | null; threadCardSelectedId?: string | null } = {},
+  options: {
+    scopedBinding?: ChannelBinding | null;
+    threadCardRefreshScope?: 'global' | 'bound' | null;
+    threadCardSelectedId?: string | null;
+    selectedAutoTaskId?: string | null;
+    selectedAutoTaskAction?: AutoTaskCardAction | null;
+  } = {},
 ): Promise<void> {
   await handleBridgeCommand(adapter, msg, text, {
     getActiveTask: (sessionId) => INTERACTIVE_RUNTIME.getActiveTask(sessionId),
@@ -1180,29 +1616,34 @@ async function handleCommand(
     scopedBinding: options.scopedBinding,
     threadCardRefreshScope: options.threadCardRefreshScope,
     threadCardSelectedId: options.threadCardSelectedId,
+    selectedAutoTaskId: options.selectedAutoTaskId,
+    selectedAutoTaskAction: options.selectedAutoTaskAction,
+    startAutoTask,
+    stopAutoTask,
+    onBindingRemoved: handleBindingRemovedForAutoTasks,
   });
 }
 
-// ── SDK Session Update Logic ─────────────────────────────────
+// ── Codex Thread Update Logic ────────────────────────────────
 
 /**
- * Compute the sdkSessionId value to persist after a conversation result.
+ * Compute the codex_thread_id value to persist after a conversation result.
  * Returns the new value to write, or null if no update is needed.
  *
  * Rules:
- * - If result has sdkSessionId AND no error → save the new ID
+   * - If result has a Codex thread id AND no error → save the new ID
  * - If result has a transient Codex resume/process-exit error → keep the
  *   current ID so the next turn stays in the same Codex thread.
- * - If result has another error (regardless of sdkSessionId) → clear to empty string
+   * - If result has another error (regardless of Codex thread id) → clear to empty string
  * - Otherwise → no update needed
  */
-export function computeSdkSessionUpdate(
-  sdkSessionId: string | null | undefined,
+export function computeCodexThreadUpdate(
+  codexThreadId: string | null | undefined,
   hasError: boolean,
   errorMessage?: string | null,
 ): string | null {
-  if (sdkSessionId && !hasError) {
-    return sdkSessionId;
+  if (codexThreadId && !hasError) {
+    return codexThreadId;
   }
   if (hasError) {
     if (isTransientCodexResumeError(errorMessage)) {
@@ -1220,17 +1661,24 @@ function isTransientCodexResumeError(message: string | null | undefined): boolea
     || normalized.includes('reconnecting...');
 }
 
-function persistSdkSessionUpdate(
+function persistCodexThreadUpdate(
   sessionId: string,
-  sdkSessionId: string | null | undefined,
+  codexThreadId: string | null | undefined,
   hasError: boolean,
   errorMessage?: string | null,
 ): void {
-  const update = computeSdkSessionUpdate(sdkSessionId, hasError, errorMessage);
+  const update = computeCodexThreadUpdate(codexThreadId, hasError, errorMessage);
   if (update === null) {
     return;
   }
-  getBridgeContext().store.updateSdkSessionId(sessionId, update);
+  const { store } = getBridgeContext();
+  store.updateSessionCodexThreadId(sessionId, update);
+  if (update) {
+    const codexSession = getCodexSessionByThreadIdSafe(update, 'persist codex title');
+    if (codexSession?.title) {
+      store.updateSession(sessionId, { codex_title: codexSession.title }, { touch: false });
+    }
+  }
 }
 
 function resetStateForTests(): void {
@@ -1243,6 +1691,8 @@ function resetStateForTests(): void {
   ADAPTER_RUNTIME.clearWarningCache();
   state.loopAborts.clear();
   state.activeTasks.clear();
+  stopAllAutoTasks();
+  state.autoTaskSelections.clear();
   clearMirrorSubscriptions();
   state.mirrorSuppressUntil.clear();
   state.mirrorIgnoredTurnIds.clear();
@@ -1277,17 +1727,9 @@ export const _testOnly = {
   resolveCommandAlias,
   isBridgeCommandText,
   toModelPromptText,
-  parseDesktopThreadListArgs,
-  buildDesktopThreadsCommandResponse,
-  formatCommandDateTime,
-  toUserVisibleBindingError,
-  toUserVisibleCommandError,
-  normalizeReasoningEffort,
   resolveDisplayedModel,
   formatDisplayedModel,
   formatBindingChatLabel,
-  formatRuntimeStatus,
-  formatMirrorStatus,
   formatMirrorUserText,
   formatMirrorMessage,
   buildInteractiveStreamKey,
@@ -1305,8 +1747,8 @@ export const _testOnly = {
   beginMirrorSuppression,
   abortMirrorSuppression,
   settleMirrorSuppression,
-  persistSdkSessionUpdate,
-  computeSdkSessionUpdate,
+  persistCodexThreadUpdate,
+  computeCodexThreadUpdate,
   deliverStartupNotifications,
   resetStateForTests,
 };

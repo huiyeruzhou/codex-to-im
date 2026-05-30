@@ -42,7 +42,7 @@ describe('session-health-runtime', () => {
     runtime.recordInteractiveStart(session.id);
     runtime.recordToolState(session.id, 'call-1', 'shell_command', 'running');
     store.updateSession(session.id, {
-      sdk_session_id: '019d861c-0e5b-7792-9303-2aa082a28093',
+      codex_thread_id: '019d861c-0e5b-7792-9303-2aa082a28093',
       last_progress_at: new Date(Date.now() - (31 * 60 * 1000)).toISOString(),
       active_tool_started_at: new Date(Date.now() - (31 * 60 * 1000)).toISOString(),
     });
@@ -110,7 +110,7 @@ describe('session-health-runtime', () => {
 
     runtime.recordInteractiveStart(session.id);
     store.updateSession(session.id, {
-      sdk_session_id: '019d861c-0e5b-7792-9303-2aa082a28093',
+      codex_thread_id: '019d861c-0e5b-7792-9303-2aa082a28093',
       last_progress_at: new Date(Date.now() - (45 * 60 * 1000)).toISOString(),
       last_progress_type: 'message',
     });
@@ -281,7 +281,7 @@ describe('session-health-runtime', () => {
     assert.equal(refreshed?.stream_ui_consecutive_failures, undefined);
   });
 
-  it('updates completion state from mirrored desktop records', () => {
+  it('updates completion state from mirrored Codex records', () => {
     const store = new JsonFileStore(makeSettings());
     const session = store.createSession('Health Mirror', 'test-model', undefined, 'D:\\workspace\\health-mirror', 'code');
     const runtime = createSessionHealthRuntime({
@@ -289,7 +289,7 @@ describe('session-health-runtime', () => {
       nowIso: () => '2026-04-13T12:30:00.000Z',
     });
 
-    runtime.observeDesktopMirrorRecords(session.id, 'thread-1', [
+    runtime.observeCodexMirrorRecords(session.id, 'thread-1', [
       {
         signature: 'task-start',
         type: 'task_started',
@@ -321,7 +321,7 @@ describe('session-health-runtime', () => {
 
     const refreshed = store.getSession(session.id);
     assert.equal(refreshed?.health_status, 'completed');
-    assert.match(refreshed?.health_reason || '', /桌面线程已完成/);
+    assert.match(refreshed?.health_reason || '', /Codex thread已完成/);
   });
 
   it('treats mirror reasoning and plan updates as active progress', () => {
@@ -332,7 +332,7 @@ describe('session-health-runtime', () => {
       nowIso: () => '2026-04-13T12:30:00.000Z',
     });
 
-    runtime.observeDesktopMirrorRecords(session.id, 'thread-1', [
+    runtime.observeCodexMirrorRecords(session.id, 'thread-1', [
       {
         signature: 'task-start',
         type: 'task_started',
@@ -365,7 +365,7 @@ describe('session-health-runtime', () => {
     assert.match(refreshed?.health_reason || '', /执行中 1 项/);
   });
 
-  it('updates aborted state from mirrored desktop records', () => {
+  it('updates aborted state from mirrored Codex records', () => {
     const store = new JsonFileStore(makeSettings());
     const session = store.createSession('Health Mirror Abort', 'test-model', undefined, 'D:\\workspace\\health-mirror-abort', 'code');
     const runtime = createSessionHealthRuntime({
@@ -373,7 +373,7 @@ describe('session-health-runtime', () => {
       nowIso: () => '2026-04-13T12:30:00.000Z',
     });
 
-    runtime.observeDesktopMirrorRecords(session.id, 'thread-1', [
+    runtime.observeCodexMirrorRecords(session.id, 'thread-1', [
       {
         signature: 'task-start',
         type: 'task_started',
@@ -431,7 +431,7 @@ describe('session-health-runtime', () => {
     store.updateSession(session.id, {
       runtime_status: 'running',
       health_status: 'completed',
-      health_reason: '检测到桌面线程已完成当前任务。',
+      health_reason: '检测到 Codex thread已完成当前任务。',
       last_progress_at: '2026-04-13T12:00:00.000Z',
       last_progress_type: 'task_completed',
     });
@@ -441,7 +441,7 @@ describe('session-health-runtime', () => {
 
     const refreshed = store.getSession(session.id);
     assert.equal(refreshed?.health_status, 'completed');
-    assert.equal(refreshed?.health_reason, '检测到桌面线程已完成当前任务。');
+    assert.equal(refreshed?.health_reason, '检测到 Codex thread已完成当前任务。');
     assert.equal(refreshed?.last_progress_type, 'task_completed');
     assert.equal(refreshed?.active_tool_name, undefined);
   });

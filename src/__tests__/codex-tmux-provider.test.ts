@@ -13,7 +13,7 @@ import {
   isTruthyEnv,
   parsePositiveIntEnv,
   shouldUseCodexTmuxTui,
-} from '../codex-tmux-provider.js';
+} from '../codex/tmux-provider.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -110,7 +110,7 @@ describe('codex-tmux-provider', () => {
       const args = buildCodexTuiArgs({
         prompt: 'hello',
         sessionId: 'bridge-session',
-        sdkSessionId: '019e46bc-f466-71d3-a186-a2ce89051958',
+        codexThreadId: '019e46bc-f466-71d3-a186-a2ce89051958',
         model: 'gpt-5-codex',
         forceModel: true,
         sandboxMode: 'workspace-write',

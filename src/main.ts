@@ -19,6 +19,7 @@ import { JsonFileStore } from './store.js';
 import { PendingPermissions } from './permission-gateway.js';
 import { setupLogger } from './logger.js';
 import { releaseBridgeInstanceLock, tryAcquireBridgeInstanceLock } from './bridge-instance-lock.js';
+import { runStartupStorageMigrations } from './storage-migrations.js';
 
 const RUNTIME_DIR = path.join(CTI_HOME, 'runtime');
 const STATUS_FILE = path.join(RUNTIME_DIR, 'status.json');
@@ -40,7 +41,7 @@ const PROXY_ENV_KEYS = [
 ];
 
 async function resolveProvider(pendingPerms: PendingPermissions): Promise<LLMProvider> {
-  const { CodexRoutingProvider } = await import('./codex-routing-provider.js');
+  const { CodexRoutingProvider } = await import('./codex/routing-provider.js');
   return new CodexRoutingProvider(pendingPerms);
 }
 
@@ -114,6 +115,7 @@ async function main(): Promise<void> {
     instanceLockHeld = false;
   };
 
+  runStartupStorageMigrations();
   const config = loadConfig();
   setupLogger();
 

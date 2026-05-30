@@ -2,12 +2,12 @@ import type { OutboundAttachment } from '../types.js';
 
 export type BridgeTurnKind =
   | 'im_sdk'
-  | 'im_desktop_reuse'
-  | 'desktop_mirror';
+  | 'im_codex_reuse'
+  | 'codex_mirror';
 
-export type BridgeTurnOrigin = 'im' | 'desktop';
-export type BridgeTurnProgressSource = 'sdk_stream' | 'desktop_jsonl';
-export type BridgeTurnFinalSource = 'sdk_result' | 'desktop_task_complete';
+export type BridgeTurnOrigin = 'im' | 'codex';
+export type BridgeTurnProgressSource = 'sdk_stream' | 'codex_jsonl';
+export type BridgeTurnFinalSource = 'sdk_result' | 'codex_task_complete';
 
 export interface ActiveBridgeTurn {
   id: string;
@@ -17,7 +17,6 @@ export interface ActiveBridgeTurn {
   progressSource: BridgeTurnProgressSource;
   finalSource: BridgeTurnFinalSource;
   codexThreadId?: string;
-  desktopThreadId?: string;
   requestMessageId?: string;
   streamKey?: string;
   startedAt: number;
@@ -27,11 +26,10 @@ export interface BridgeTurnClassification {
   kind: BridgeTurnKind;
   sessionId: string;
   codexThreadId?: string;
-  desktopThreadId?: string;
-  desktopAvailable: boolean;
+  codexThreadAvailable: boolean;
   reason:
-    | 'desktop_thread'
-    | 'desktop_thread_missing'
+    | 'codex_thread'
+    | 'codex_thread_missing'
     | 'bridge_thread'
     | 'new_bridge_thread';
 }
@@ -47,7 +45,7 @@ export interface FinalizedBridgeResponse {
 export interface BridgeTurnTerminalRecord {
   turnId?: string;
   sessionId: string;
-  desktopThreadId: string;
+  codexThreadId: string;
   text: string;
   outcome: 'completed' | 'failed' | 'aborted';
   timestamp: string;

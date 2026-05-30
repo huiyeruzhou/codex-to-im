@@ -22,6 +22,7 @@ import type {
 } from './lib/bridge/host.js';
 import type { ChannelBinding, ChannelBindingMode, ChannelDefaultTarget, ChannelType } from './lib/bridge/types.js';
 import { CTI_HOME, configToSettings, findChannelInstance, loadConfig } from './config.js';
+import { runStartupStorageMigrations } from './storage-migrations.js';
 
 const DATA_DIR = path.join(CTI_HOME, 'data');
 const MESSAGES_DIR = path.join(DATA_DIR, 'messages');
@@ -126,8 +127,7 @@ function bindingChatKey(binding: Pick<ChannelBinding, 'channelType' | 'chatId'>)
 
 function bindingTargetMatches(binding: ChannelBinding, data: UpsertChannelBindingInput): boolean {
   if (binding.channelType !== data.channelType || binding.chatId !== data.chatId) return false;
-  if (binding.codepilotSessionId === data.codepilotSessionId) return true;
-  return Boolean(data.sdkSessionId && binding.sdkSessionId === data.sdkSessionId);
+  return binding.bridgeSessionId === data.bridgeSessionId;
 }
 
 function compareBindingUpdatedAtDesc(a: ChannelBinding, b: ChannelBinding): number {
@@ -185,6 +185,7 @@ export class JsonFileStore implements BridgeStore {
     this.dynamicSettings = options?.dynamicSettings === true;
     ensureDir(DATA_DIR);
     ensureDir(MESSAGES_DIR);
+    runStartupStorageMigrations({ logger: false });
     this.loadAll();
   }
 
@@ -231,22 +232,7 @@ export class JsonFileStore implements BridgeStore {
       path.join(DATA_DIR, 'sessions.json'),
       {},
     );
-    let changed = false;
-    const normalized = new Map<string, BridgeSession>();
-    for (const [id, session] of Object.entries(sessions)) {
-      const codexThreadId = session.codex_thread_id?.trim();
-      const legacyThreadId = session.sdk_session_id?.trim() || session.desktop_thread_id?.trim();
-      if (!codexThreadId && legacyThreadId) {
-        normalized.set(id, { ...session, codex_thread_id: legacyThreadId });
-        changed = true;
-      } else {
-        normalized.set(id, session);
-      }
-    }
-    this.sessions = normalized;
-    if (changed) {
-      this.persistSessions();
-    }
+    this.sessions = new Map(Object.entries(sessions));
   }
 
   private reloadBindings(): void {
@@ -444,8 +430,7 @@ export class JsonFileStore implements BridgeStore {
     if (existing) {
       const updated: ChannelBinding = {
         ...existing,
-        codepilotSessionId: data.codepilotSessionId,
-        sdkSessionId: data.sdkSessionId ?? existing.sdkSessionId,
+        bridgeSessionId: data.bridgeSessionId,
         channelProvider: data.channelProvider ?? existing.channelProvider,
         channelAlias: data.channelAlias ?? existing.channelAlias,
         chatUserId: data.chatUserId ?? existing.chatUserId,
@@ -470,8 +455,7 @@ export class JsonFileStore implements BridgeStore {
       chatId: data.chatId,
       chatUserId: data.chatUserId,
       chatDisplayName: data.chatDisplayName,
-      codepilotSessionId: data.codepilotSessionId,
-      sdkSessionId: data.sdkSessionId ?? '',
+      bridgeSessionId: data.bridgeSessionId,
       workingDirectory: data.workingDirectory,
       model: data.model,
       mode: normalizeStoredMode(data.mode || this.getSetting('bridge_default_mode') || 'normal'),
@@ -522,7 +506,7 @@ export class JsonFileStore implements BridgeStore {
     if (existing) {
       const updated: ChannelDefaultTarget = {
         ...existing,
-        targetKey: data.targetKey,
+        bridgeSessionId: data.bridgeSessionId,
         channelProvider: data.channelProvider ?? existing.channelProvider,
         channelAlias: data.channelAlias ?? existing.channelAlias,
         updatedAt: now(),
@@ -537,7 +521,7 @@ export class JsonFileStore implements BridgeStore {
       channelType: data.channelType,
       channelProvider: data.channelProvider,
       channelAlias: data.channelAlias,
-      targetKey: data.targetKey,
+      bridgeSessionId: data.bridgeSessionId,
       createdAt: now(),
       updatedAt: now(),
     };
@@ -570,14 +554,12 @@ export class JsonFileStore implements BridgeStore {
     return Array.from(this.sessions.values());
   }
 
-  findSessionBySdkSessionId(sdkSessionId: string): BridgeSession | null {
+  findSessionByCodexThreadId(codexThreadId: string): BridgeSession | null {
     this.reloadSessions();
+    const normalized = codexThreadId.trim();
+    if (!normalized) return null;
     for (const session of this.sessions.values()) {
-      if (
-        session.sdk_session_id === sdkSessionId
-        || session.codex_thread_id === sdkSessionId
-        || session.desktop_thread_id === sdkSessionId
-      ) {
+      if (session.codex_thread_id === normalized) {
         return session;
       }
     }
@@ -649,7 +631,7 @@ export class JsonFileStore implements BridgeStore {
     this.reloadBindings();
     this.sessions.delete(sessionId);
     for (const [key, binding] of this.bindings) {
-      if (binding.codepilotSessionId === sessionId) {
+      if (binding.bridgeSessionId === sessionId) {
         this.bindings.delete(key);
       }
     }
@@ -737,33 +719,20 @@ export class JsonFileStore implements BridgeStore {
     this.persistSessions();
   }
 
-  // ── SDK Session ──
+  // ── Codex Thread ──
 
-  updateSdkSessionId(sessionId: string, sdkSessionId: string): void {
+  updateSessionCodexThreadId(sessionId: string, codexThreadId: string): void {
     this.reloadSessions();
-    this.reloadBindings();
     const s = this.sessions.get(sessionId);
     if (s) {
-      s.sdk_session_id = sdkSessionId;
-      if (sdkSessionId) {
-        s.codex_thread_id = sdkSessionId;
-        s.thread_origin = s.thread_origin || 'bridge';
+      if (codexThreadId) {
+        s.codex_thread_id = codexThreadId;
       } else {
         delete s.codex_thread_id;
-        if (s.thread_origin !== 'desktop') {
-          delete s.thread_origin;
-        }
       }
       s.updated_at = now();
       this.persistSessions();
     }
-    // Also update any bindings that reference this session
-    for (const [key, b] of this.bindings) {
-      if (b.codepilotSessionId === sessionId) {
-        this.bindings.set(key, { ...b, sdkSessionId, updatedAt: now() });
-      }
-    }
-    this.persistBindings();
   }
 
   updateSessionModel(sessionId: string, model: string): void {

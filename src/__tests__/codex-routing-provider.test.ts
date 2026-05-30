@@ -2,7 +2,7 @@ import './test-setup.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { CodexRoutingProvider } from '../codex-routing-provider.js';
+import { CodexRoutingProvider } from '../codex/routing-provider.js';
 
 function streamWithText(text: string): ReadableStream<string> {
   return new ReadableStream({

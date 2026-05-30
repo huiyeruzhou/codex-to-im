@@ -79,7 +79,7 @@ describe('JsonFileStore', () => {
       chatId: '123',
       chatUserId: 'user-1',
       chatDisplayName: 'Alice',
-      codepilotSessionId: 'sess-1',
+      bridgeSessionId: 'sess-1',
       workingDirectory: '/tmp',
       model: 'model-1',
       mode: 'code',
@@ -96,13 +96,13 @@ describe('JsonFileStore', () => {
       channelType: 'feishu-default',
       chatId: '123',
       chatDisplayName: 'Alice Cooper',
-      codepilotSessionId: 'sess-2',
+      bridgeSessionId: 'sess-2',
       workingDirectory: '/tmp/new',
       model: 'model-2',
       mode: 'yolo',
     });
     assert.notEqual(b2.id, b1.id);
-    assert.equal(b2.codepilotSessionId, 'sess-2');
+    assert.equal(b2.bridgeSessionId, 'sess-2');
     assert.equal(b2.mode, 'yolo');
     assert.equal(b2.chatUserId, undefined);
     assert.equal(b2.chatDisplayName, 'Alice Cooper');
@@ -118,7 +118,7 @@ describe('JsonFileStore', () => {
       chatId: '123',
       chatUserId: 'user-1b',
       chatDisplayName: 'Alice',
-      codepilotSessionId: 'sess-1',
+      bridgeSessionId: 'sess-1',
       workingDirectory: '/tmp/again',
       model: 'model-1b',
     });
@@ -132,14 +132,14 @@ describe('JsonFileStore', () => {
     const active = store.upsertChannelBinding({
       channelType: 'feishu-default',
       chatId: 'multi',
-      codepilotSessionId: 'sess-active',
+      bridgeSessionId: 'sess-active',
       workingDirectory: '/tmp/active',
       model: 'model-1',
     });
     const inactive = store.upsertChannelBinding({
       channelType: 'feishu-default',
       chatId: 'multi',
-      codepilotSessionId: 'sess-inactive',
+      bridgeSessionId: 'sess-inactive',
       workingDirectory: '/tmp/inactive',
       model: 'model-2',
       active: false,
@@ -156,7 +156,7 @@ describe('JsonFileStore', () => {
     const b = store.upsertChannelBinding({
       channelType: 'feishu-default',
       chatId: '456',
-      codepilotSessionId: 'sess-1',
+      bridgeSessionId: 'sess-1',
       workingDirectory: '/tmp',
       model: 'model-1',
     });
@@ -173,7 +173,7 @@ describe('JsonFileStore', () => {
     const binding = store.upsertChannelBinding({
       channelType: 'feishu-default',
       chatId: 'delete-binding',
-      codepilotSessionId: 'sess-1',
+      bridgeSessionId: 'sess-1',
       workingDirectory: '/tmp',
       model: 'model-1',
     });
@@ -188,14 +188,14 @@ describe('JsonFileStore', () => {
     store.upsertChannelBinding({
       channelType: 'feishu-default',
       chatId: '1',
-      codepilotSessionId: 's1',
+      bridgeSessionId: 's1',
       workingDirectory: '/tmp',
       model: 'm',
     });
     store.upsertChannelBinding({
       channelType: 'weixin-default',
       chatId: '2',
-      codepilotSessionId: 's2',
+      bridgeSessionId: 's2',
       workingDirectory: '/tmp',
       model: 'm',
     });
@@ -210,20 +210,20 @@ describe('JsonFileStore', () => {
       channelType: 'feishu-default',
       channelProvider: 'feishu',
       channelAlias: '飞书',
-      targetKey: 'session:sess-1',
+      bridgeSessionId: 'sess-1',
     });
     assert.ok(first.id);
-    assert.equal(first.targetKey, 'session:sess-1');
+    assert.equal(first.bridgeSessionId, 'sess-1');
 
     const updated = store.upsertChannelDefaultTarget({
       channelType: 'feishu-default',
-      targetKey: 'desktop:thread-2',
+      bridgeSessionId: 'sess-2',
     });
     assert.equal(updated.id, first.id);
-    assert.equal(updated.targetKey, 'desktop:thread-2');
+    assert.equal(updated.bridgeSessionId, 'sess-2');
 
     const reloaded = new JsonFileStore(makeSettings());
-    assert.equal(reloaded.getChannelDefaultTarget('feishu-default')?.targetKey, 'desktop:thread-2');
+    assert.equal(reloaded.getChannelDefaultTarget('feishu-default')?.bridgeSessionId, 'sess-2');
     assert.equal(reloaded.listChannelDefaultTargets().length, 1);
 
     reloaded.deleteChannelDefaultTarget('feishu-default');
@@ -267,7 +267,7 @@ describe('JsonFileStore', () => {
             id: 'legacy',
             channelType: 'feishu',
             chatId: 'oc_legacy',
-            codepilotSessionId: 'sess-legacy',
+            bridgeSessionId: 'sess-legacy',
             workingDirectory: '/tmp',
             model: 'gpt-5.4',
             mode: 'code',
@@ -300,6 +300,49 @@ describe('JsonFileStore', () => {
         fs.writeFileSync(CONFIG_V2_PATH, configBackup);
       }
     }
+  });
+
+  it('runs storage migrations before loading persisted data', () => {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(
+      path.join(DATA_DIR, 'sessions.json'),
+      JSON.stringify({
+        'session-old': {
+          id: 'session-old',
+          working_directory: '/tmp/old',
+          model: 'gpt-old',
+          sdk_session_id: 'old-thread-id',
+          thread_origin: 'bridge',
+        },
+      }, null, 2),
+    );
+    fs.writeFileSync(
+      path.join(DATA_DIR, 'bindings.json'),
+      JSON.stringify({
+        'binding-old': {
+          id: 'binding-old',
+          channelType: 'feishu-default',
+          chatId: 'chat-old',
+          bridgeSessionId: 'session-old',
+          sdkSessionId: 'old-thread-id',
+          workingDirectory: '/tmp/old',
+          model: 'gpt-old',
+          mode: 'normal',
+          active: true,
+          createdAt: '2026-05-28T00:00:00.000Z',
+          updatedAt: '2026-05-28T00:00:00.000Z',
+        },
+      }, null, 2),
+    );
+
+    const store = new JsonFileStore(makeSettings());
+    assert.equal(store.getSession('session-old')?.codex_thread_id, 'old-thread-id');
+    assert.equal((store.getSession('session-old') as unknown as { sdk_session_id?: string }).sdk_session_id, undefined);
+
+    const persistedBindings = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'bindings.json'), 'utf-8')) as Record<string, {
+      sdkSessionId?: string;
+    }>;
+    assert.equal(persistedBindings['binding-old'].sdkSessionId, undefined);
   });
 
   it('does not remap a real v2 channel instance whose id matches the provider name', () => {
@@ -352,7 +395,7 @@ describe('JsonFileStore', () => {
             channelProvider: 'feishu',
             channelAlias: '开开1号',
             chatId: 'oc_real_instance',
-            codepilotSessionId: 'sess-real',
+            bridgeSessionId: 'sess-real',
             workingDirectory: '/tmp',
             model: 'gpt-5.4',
             mode: 'code',
@@ -565,26 +608,23 @@ describe('JsonFileStore', () => {
     assert.equal(store.getChannelOffset('feishu:offset'), '12345');
   });
 
-  // ── SDK Session ──
+  // ── Codex Thread ──
 
-  it('updateSdkSessionId updates session and bindings', () => {
+  it('updateSessionCodexThreadId updates only the session thread identity', () => {
     const store = new JsonFileStore(makeSettings());
     const session = store.createSession('test', 'model', undefined, '/tmp');
     store.upsertChannelBinding({
       channelType: 'feishu-default',
       chatId: '1',
-      codepilotSessionId: session.id,
+      bridgeSessionId: session.id,
       workingDirectory: '/tmp',
       model: 'model',
     });
-    store.updateSdkSessionId(session.id, 'sdk-123');
+    store.updateSessionCodexThreadId(session.id, 'sdk-123');
     const binding = store.getChannelBinding('feishu-default', '1');
     const updated = store.getSession(session.id);
-    assert.equal(binding?.sdkSessionId, 'sdk-123');
-    assert.equal(updated?.sdk_session_id, 'sdk-123');
+    assert.equal(binding?.bridgeSessionId, session.id);
     assert.equal(updated?.codex_thread_id, 'sdk-123');
-    assert.equal(updated?.desktop_thread_id, undefined);
-    assert.equal(updated?.thread_origin, 'bridge');
   });
 
   it('updateSessionModel updates model', () => {
@@ -633,7 +673,7 @@ describe('JsonFileStore', () => {
     store.upsertChannelBinding({
       channelType: 'feishu-default',
       chatId: 'delete-me',
-      codepilotSessionId: session.id,
+      bridgeSessionId: session.id,
       workingDirectory: '/tmp',
       model: 'model',
     });

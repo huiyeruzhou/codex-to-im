@@ -57,7 +57,7 @@ function handleCompletedItem(
 
 describe('CodexProvider', () => {
   it('emits error when SDK init fails', async () => {
-    const { CodexProvider } = await import('../codex-provider.js');
+    const { CodexProvider } = await import('../codex/provider.js');
     const { PendingPermissions } = await import('../permission-gateway.js');
     const provider = new CodexProvider(new PendingPermissions());
 
@@ -83,7 +83,7 @@ describe('CodexProvider', () => {
   });
 
   it('maps agent_message item to text SSE event', async () => {
-    const { CodexProvider } = await import('../codex-provider.js');
+    const { CodexProvider } = await import('../codex/provider.js');
     const { PendingPermissions } = await import('../permission-gateway.js');
     const provider = new CodexProvider(new PendingPermissions());
 
@@ -105,7 +105,7 @@ describe('CodexProvider', () => {
   });
 
   it('maps command_execution item to tool_use + tool_result', async () => {
-    const { CodexProvider } = await import('../codex-provider.js');
+    const { CodexProvider } = await import('../codex/provider.js');
     const { PendingPermissions } = await import('../permission-gateway.js');
     const provider = new CodexProvider(new PendingPermissions());
 
@@ -136,7 +136,7 @@ describe('CodexProvider', () => {
   });
 
   it('marks non-zero exit code as error', async () => {
-    const { CodexProvider } = await import('../codex-provider.js');
+    const { CodexProvider } = await import('../codex/provider.js');
     const { PendingPermissions } = await import('../permission-gateway.js');
     const provider = new CodexProvider(new PendingPermissions());
 
@@ -159,7 +159,7 @@ describe('CodexProvider', () => {
   });
 
   it('maps file_change item correctly', async () => {
-    const { CodexProvider } = await import('../codex-provider.js');
+    const { CodexProvider } = await import('../codex/provider.js');
     const { PendingPermissions } = await import('../permission-gateway.js');
     const provider = new CodexProvider(new PendingPermissions());
 
@@ -186,7 +186,7 @@ describe('CodexProvider', () => {
   });
 
   it('maps mcp_tool_call item correctly', async () => {
-    const { CodexProvider } = await import('../codex-provider.js');
+    const { CodexProvider } = await import('../codex/provider.js');
     const { PendingPermissions } = await import('../permission-gateway.js');
     const provider = new CodexProvider(new PendingPermissions());
 
@@ -212,7 +212,7 @@ describe('CodexProvider', () => {
   });
 
   it('maps mcp_tool_call with structured_content', async () => {
-    const { CodexProvider } = await import('../codex-provider.js');
+    const { CodexProvider } = await import('../codex/provider.js');
     const { PendingPermissions } = await import('../permission-gateway.js');
     const provider = new CodexProvider(new PendingPermissions());
 
@@ -236,7 +236,7 @@ describe('CodexProvider', () => {
   });
 
   it('maps mcp_tool_call content blocks to readable text', async () => {
-    const { CodexProvider } = await import('../codex-provider.js');
+    const { CodexProvider } = await import('../codex/provider.js');
     const { PendingPermissions } = await import('../permission-gateway.js');
     const provider = new CodexProvider(new PendingPermissions());
 
@@ -266,7 +266,7 @@ describe('CodexProvider', () => {
   });
 
   it('maps todo_list item to task_update SSE event', async () => {
-    const { CodexProvider } = await import('../codex-provider.js');
+    const { CodexProvider } = await import('../codex/provider.js');
     const { PendingPermissions } = await import('../permission-gateway.js');
     const provider = new CodexProvider(new PendingPermissions());
 
@@ -291,7 +291,7 @@ describe('CodexProvider', () => {
     assert.equal(events[0].type, 'task_update');
     const payload = JSON.parse(events[0].data);
     assert.equal(payload.session_id, 'test-session');
-    assert.equal(payload.sdk_session_id, 'sdk-thread-1');
+    assert.equal(payload.codex_thread_id, 'sdk-thread-1');
     assert.deepEqual(payload.tasks, [
       { text: '第一步', status: 'completed' },
       { text: '第二步', status: 'in_progress' },
@@ -300,7 +300,7 @@ describe('CodexProvider', () => {
   });
 
   it('emits web_search tool_use only once across started and completed phases', async () => {
-    const { CodexProvider } = await import('../codex-provider.js');
+    const { CodexProvider } = await import('../codex/provider.js');
     const { PendingPermissions } = await import('../permission-gateway.js');
     const provider = new CodexProvider(new PendingPermissions());
 
@@ -338,7 +338,7 @@ describe('CodexProvider', () => {
   });
 
   it('maps reasoning item to status SSE event', async () => {
-    const { CodexProvider } = await import('../codex-provider.js');
+    const { CodexProvider } = await import('../codex/provider.js');
     const { PendingPermissions } = await import('../permission-gateway.js');
     const provider = new CodexProvider(new PendingPermissions());
 
@@ -362,7 +362,7 @@ describe('CodexProvider', () => {
   });
 
   it('skips empty agent_message', async () => {
-    const { CodexProvider } = await import('../codex-provider.js');
+    const { CodexProvider } = await import('../codex/provider.js');
     const { PendingPermissions } = await import('../permission-gateway.js');
     const provider = new CodexProvider(new PendingPermissions());
 
@@ -381,7 +381,7 @@ describe('CodexProvider', () => {
   });
 
   it('does not pass model by default and still attempts resume for persisted thread ids', async () => {
-    const { CodexProvider } = await import('../codex-provider.js');
+    const { CodexProvider } = await import('../codex/provider.js');
     const { PendingPermissions } = await import('../permission-gateway.js');
     const provider = new CodexProvider(new PendingPermissions());
 
@@ -415,7 +415,7 @@ describe('CodexProvider', () => {
     const stream = provider.streamChat({
       prompt: 'hello',
       sessionId: 'model-default-session',
-      sdkSessionId: 'old-sdk-session-id',
+      codexThreadId: 'old-sdk-session-id',
       model: 'legacy-model-name',
     });
 
@@ -429,7 +429,7 @@ describe('CodexProvider', () => {
   });
 
   it('maps reasoning output token usage from turn.completed events', async () => {
-    const { CodexProvider } = await import('../codex-provider.js');
+    const { CodexProvider } = await import('../codex/provider.js');
     const { PendingPermissions } = await import('../permission-gateway.js');
     const provider = new CodexProvider(new PendingPermissions());
 
@@ -470,7 +470,7 @@ describe('CodexProvider', () => {
   });
 
   it('passes the abort signal to runStreamed so /stop can cancel the active turn', async () => {
-    const { CodexProvider } = await import('../codex-provider.js');
+    const { CodexProvider } = await import('../codex/provider.js');
     const { PendingPermissions } = await import('../permission-gateway.js');
     const provider = new CodexProvider(new PendingPermissions());
 
@@ -529,7 +529,7 @@ describe('CodexProvider', () => {
     process.env.CTI_CODEX_TERMINAL_DRAIN_TIMEOUT_MS = '20';
 
     try {
-    const { CodexProvider } = await import('../codex-provider.js');
+    const { CodexProvider } = await import('../codex/provider.js');
     const { PendingPermissions } = await import('../permission-gateway.js');
     const provider = new CodexProvider(new PendingPermissions());
 
@@ -591,7 +591,7 @@ describe('CodexProvider', () => {
   });
 
   it('reuses the in-memory Codex thread even when the stored model is legacy-looking', async () => {
-    const { CodexProvider } = await import('../codex-provider.js');
+    const { CodexProvider } = await import('../codex/provider.js');
     const { PendingPermissions } = await import('../permission-gateway.js');
     const provider = new CodexProvider(new PendingPermissions());
 
@@ -624,7 +624,7 @@ describe('CodexProvider', () => {
     const stream = provider.streamChat({
       prompt: 'continue previous thread',
       sessionId: 'sticky-codex-session',
-      sdkSessionId: 'old-sdk-session-id',
+      codexThreadId: 'old-sdk-session-id',
       model: 'legacy-model-name',
     });
 
@@ -636,7 +636,7 @@ describe('CodexProvider', () => {
   });
 
   it('passes model only when forceModel=true', async () => {
-    const { CodexProvider } = await import('../codex-provider.js');
+    const { CodexProvider } = await import('../codex/provider.js');
     const { PendingPermissions } = await import('../permission-gateway.js');
     const provider = new CodexProvider(new PendingPermissions());
 
@@ -671,7 +671,7 @@ describe('CodexProvider', () => {
     const old = process.env.CTI_CODEX_SKIP_GIT_REPO_CHECK;
     process.env.CTI_CODEX_SKIP_GIT_REPO_CHECK = 'true';
     try {
-      const { CodexProvider } = await import('../codex-provider.js');
+      const { CodexProvider } = await import('../codex/provider.js');
       const { PendingPermissions } = await import('../permission-gateway.js');
       const provider = new CodexProvider(new PendingPermissions());
 
@@ -708,7 +708,7 @@ describe('CodexProvider', () => {
   });
 
   it('does not start a fresh thread when resume fails before any events', async () => {
-    const { CodexProvider } = await import('../codex-provider.js');
+    const { CodexProvider } = await import('../codex/provider.js');
     const { PendingPermissions } = await import('../permission-gateway.js');
     const provider = new CodexProvider(new PendingPermissions());
 
@@ -734,7 +734,7 @@ describe('CodexProvider', () => {
     const stream = provider.streamChat({
       prompt: 'retry test',
       sessionId: 'resume-retry-session',
-      sdkSessionId: 'codex-old-thread-id',
+      codexThreadId: 'codex-old-thread-id',
       model: 'gpt-5-codex',
     });
 
@@ -762,7 +762,7 @@ function makeFile(type: string, data: string, name = 'test-file', extra: Record<
 
 describe('CodexProvider image input', () => {
   it('builds local_image input array for text+image', async () => {
-    const { CodexProvider } = await import('../codex-provider.js');
+    const { CodexProvider } = await import('../codex/provider.js');
     const { PendingPermissions } = await import('../permission-gateway.js');
     const provider = new CodexProvider(new PendingPermissions());
 
@@ -806,7 +806,7 @@ describe('CodexProvider image input', () => {
   });
 
   it('passes plain string when no images attached', async () => {
-    const { CodexProvider } = await import('../codex-provider.js');
+    const { CodexProvider } = await import('../codex/provider.js');
     const { PendingPermissions } = await import('../permission-gateway.js');
     const provider = new CodexProvider(new PendingPermissions());
 
@@ -840,7 +840,7 @@ describe('CodexProvider image input', () => {
   });
 
   it('builds local_image input with multiple images, ignoring non-image files', async () => {
-    const { CodexProvider } = await import('../codex-provider.js');
+    const { CodexProvider } = await import('../codex/provider.js');
     const { PendingPermissions } = await import('../permission-gateway.js');
     const provider = new CodexProvider(new PendingPermissions());
 
@@ -884,7 +884,7 @@ describe('CodexProvider image input', () => {
   });
 
   it('reuses persisted local image paths when filePath is already present', async () => {
-    const { CodexProvider } = await import('../codex-provider.js');
+    const { CodexProvider } = await import('../codex/provider.js');
     const { PendingPermissions } = await import('../permission-gateway.js');
     const provider = new CodexProvider(new PendingPermissions());
 
@@ -928,7 +928,7 @@ describe('CodexProvider image input', () => {
   });
 
   it('passes sandboxMode and reasoning effort to the Codex thread', async () => {
-    const { CodexProvider } = await import('../codex-provider.js');
+    const { CodexProvider } = await import('../codex/provider.js');
     const { PendingPermissions } = await import('../permission-gateway.js');
     const provider = new CodexProvider(new PendingPermissions());
 
@@ -964,7 +964,7 @@ describe('CodexProvider image input', () => {
   });
 
   it('maps yolo mode to danger-full-access and never approval policy for SDK threads', async () => {
-    const { CodexProvider } = await import('../codex-provider.js');
+    const { CodexProvider } = await import('../codex/provider.js');
     const { PendingPermissions } = await import('../permission-gateway.js');
     const provider = new CodexProvider(new PendingPermissions());
 
@@ -998,7 +998,7 @@ describe('CodexProvider image input', () => {
   });
 
   it('logs a redacted Codex exec preview before starting a turn', async () => {
-    const { CodexProvider } = await import('../codex-provider.js');
+    const { CodexProvider } = await import('../codex/provider.js');
     const { PendingPermissions } = await import('../permission-gateway.js');
     const provider = new CodexProvider(new PendingPermissions());
 
@@ -1049,7 +1049,7 @@ describe('CodexProvider image input', () => {
 
 describe('CodexProvider error events', () => {
   it('reads message field from turn.failed event', async () => {
-    const { CodexProvider } = await import('../codex-provider.js');
+    const { CodexProvider } = await import('../codex/provider.js');
     const { PendingPermissions } = await import('../permission-gateway.js');
     const provider = new CodexProvider(new PendingPermissions());
 
@@ -1082,7 +1082,7 @@ describe('CodexProvider error events', () => {
   });
 
   it('normalizes reconnect-style turn failures to a user-visible resume hint', async () => {
-    const { CodexProvider } = await import('../codex-provider.js');
+    const { CodexProvider } = await import('../codex/provider.js');
     const { PendingPermissions } = await import('../permission-gateway.js');
     const provider = new CodexProvider(new PendingPermissions());
 
@@ -1118,7 +1118,7 @@ describe('CodexProvider error events', () => {
   });
 
   it('clears the cached thread id after a failed turn so the next message starts fresh', async () => {
-    const { CodexProvider } = await import('../codex-provider.js');
+    const { CodexProvider } = await import('../codex/provider.js');
     const { PendingPermissions } = await import('../permission-gateway.js');
     const provider = new CodexProvider(new PendingPermissions());
 
@@ -1190,7 +1190,7 @@ describe('CodexProvider error events', () => {
     process.env.CTI_CODEX_TERMINAL_DRAIN_TIMEOUT_MS = '20';
 
     try {
-      const { CodexProvider } = await import('../codex-provider.js');
+      const { CodexProvider } = await import('../codex/provider.js');
       const { PendingPermissions } = await import('../permission-gateway.js');
       const provider = new CodexProvider(new PendingPermissions());
 
@@ -1251,7 +1251,7 @@ describe('CodexProvider error events', () => {
   });
 
   it('suppresses Windows process cleanup parse noise after completed assistant content', async () => {
-    const { CodexProvider } = await import('../codex-provider.js');
+    const { CodexProvider } = await import('../codex/provider.js');
     const { PendingPermissions } = await import('../permission-gateway.js');
     const provider = new CodexProvider(new PendingPermissions());
 
@@ -1293,7 +1293,7 @@ describe('CodexProvider error events', () => {
   });
 
   it('keeps Windows process cleanup parse noise as an error before completed assistant content', async () => {
-    const { CodexProvider } = await import('../codex-provider.js');
+    const { CodexProvider } = await import('../codex/provider.js');
     const { PendingPermissions } = await import('../permission-gateway.js');
     const provider = new CodexProvider(new PendingPermissions());
 
@@ -1325,7 +1325,7 @@ describe('CodexProvider error events', () => {
   });
 
   it('reads message field from error event', async () => {
-    const { CodexProvider } = await import('../codex-provider.js');
+    const { CodexProvider } = await import('../codex/provider.js');
     const { PendingPermissions } = await import('../permission-gateway.js');
     const provider = new CodexProvider(new PendingPermissions());
 
@@ -1358,7 +1358,7 @@ describe('CodexProvider error events', () => {
   });
 
   it('falls back to default message when message field is absent', async () => {
-    const { CodexProvider } = await import('../codex-provider.js');
+    const { CodexProvider } = await import('../codex/provider.js');
     const { PendingPermissions } = await import('../permission-gateway.js');
     const provider = new CodexProvider(new PendingPermissions());
 

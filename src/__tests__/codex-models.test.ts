@@ -11,7 +11,7 @@ import {
   listCachedCodexModels,
   listSelectableCodexModels,
   readConfiguredCodexModel,
-} from '../codex-models.js';
+} from '../codex/models.js';
 
 describe('listCachedCodexModels', () => {
   it('returns an empty list when the cache file is missing', () => {

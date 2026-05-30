@@ -190,7 +190,7 @@ export async function deliver(
         store.insertOutboundRef({
           channelType: adapter.channelType,
           chatId: message.address.chatId,
-          codepilotSessionId: opts.sessionId,
+          bridgeSessionId: opts.sessionId,
           platformMessageId: result.messageId,
           purpose: message.inlineButtons ? 'permission' : 'response',
         });

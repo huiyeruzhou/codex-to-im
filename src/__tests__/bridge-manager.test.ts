@@ -11,7 +11,21 @@ import { getBridgeContext, initBridgeContext } from '../lib/bridge/context.js';
 import { _testOnly, start, stop } from '../lib/bridge/bridge-manager.js';
 import { BaseChannelAdapter, registerAdapterFactory } from '../lib/bridge/channel-adapter.js';
 import { buildCommandCallbackData } from '../lib/bridge/command-callbacks.js';
-import { buildDesktopThreadsCommandCard } from '../lib/bridge/command-formatters.js';
+import {
+  normalizeReasoningEffort,
+  parseCodexThreadListArgs,
+} from '../lib/bridge/command/aliases.js';
+import {
+  buildCodexThreadsCommandResponse,
+  buildCodexThreadsCommandCard,
+  formatCommandDateTime,
+  formatMirrorStatus,
+  formatRuntimeStatus,
+} from '../lib/bridge/command/presentation.js';
+import {
+  toUserVisibleBindingError,
+  toUserVisibleCommandError,
+} from '../lib/bridge/command-errors.js';
 import { createMirrorSubscription } from '../lib/bridge/mirror-subscription-state.js';
 import * as router from '../lib/bridge/channel-router.js';
 import type { LifecycleHooks, LLMProvider, PermissionGateway, StreamChatParams } from '../lib/bridge/host.js';
@@ -241,8 +255,8 @@ describe('bridge-manager resolveNewWorkingDirectory', () => {
         id: 'binding-1',
         channelType: 'feishu',
         chatId: 'chat-1',
-        codepilotSessionId: 'session-1',
-        sdkSessionId: '',
+        bridgeSessionId: 'session-1',
+        codexThreadId: '',
         workingDirectory: 'D:\\workspace\\project-a',
         model: 'test-model',
         mode: 'code',
@@ -279,8 +293,8 @@ describe('bridge-manager resolveNewWorkingDirectory', () => {
         id: 'binding-1',
         channelType: 'feishu',
         chatId: 'chat-1',
-        codepilotSessionId: 'session-1',
-        sdkSessionId: '',
+        bridgeSessionId: 'session-1',
+        codexThreadId: '',
         workingDirectory: 'D:\\codex-to-im\\runtime\\draft',
         model: 'test-model',
         mode: 'ask',
@@ -332,15 +346,15 @@ describe('bridge-manager resolveCommandAlias', () => {
     assert.equal(_testOnly.toModelPromptText('//'), '/');
   });
 
-  it('caps desktop thread list requests at 200 items', () => {
-    assert.deepEqual(_testOnly.parseDesktopThreadListArgs(''), { showAll: false, limit: 10 });
-    assert.deepEqual(_testOnly.parseDesktopThreadListArgs('all'), { showAll: true, limit: 200 });
-    assert.deepEqual(_testOnly.parseDesktopThreadListArgs('n 100'), { showAll: false, limit: 100 });
-    assert.deepEqual(_testOnly.parseDesktopThreadListArgs('n 500'), { showAll: false, limit: 200 });
+  it('caps Codex thread list requests at 200 items', () => {
+    assert.deepEqual(parseCodexThreadListArgs(''), { showAll: false, limit: 10 });
+    assert.deepEqual(parseCodexThreadListArgs('all'), { showAll: true, limit: 200 });
+    assert.deepEqual(parseCodexThreadListArgs('n 100'), { showAll: false, limit: 100 });
+    assert.deepEqual(parseCodexThreadListArgs('n 500'), { showAll: false, limit: 200 });
   });
 
-  it('renders desktop thread list titles with the actual displayed count', () => {
-    const response = _testOnly.buildDesktopThreadsCommandResponse(
+  it('renders Codex thread list titles with the actual displayed count', () => {
+    const response = buildCodexThreadsCommandResponse(
       [
         {
           threadId: 'thread-1',
@@ -367,13 +381,13 @@ describe('bridge-manager resolveCommandAlias', () => {
       false,
       10,
     );
-    assert.match(response, /^最近 2 条桌面会话/);
-    assert.match(response, /标题\s+目录\s+上一次活动\s+binding_id\s+thread_id\s+source\s+命令/);
-    assert.match(response, /Project A\s+D:\\workspace\\project-a\s+03\/31 \d\d:00\s+-\s+thread-1\s+Codex Desktop\s+\/t 1/);
+    assert.match(response, /^最近 2 条本地 Codex 会话/);
+    assert.match(response, /标题\s+目录\s+上一次活动\s+binding_id\s+thread_id\s+Creator\s+命令/);
+    assert.match(response, /Project A\s+D:\\workspace\\project-a\s+03\/31 \d\d:00\s+-\s+thread-1\s+Desktop\s+\/t 1/);
   });
 
   it('renders all-thread list titles with the actual displayed count', () => {
-    const response = _testOnly.buildDesktopThreadsCommandResponse(
+    const response = buildCodexThreadsCommandResponse(
       [
         {
           threadId: 'thread-1',
@@ -390,10 +404,10 @@ describe('bridge-manager resolveCommandAlias', () => {
       true,
       200,
     );
-    assert.match(response, /^桌面会话（当前显示 1 条，最多 200 条）/);
+    assert.match(response, /^本地 Codex 会话（当前显示 1 条，最多 200 条）/);
   });
 
-  it('does not build desktop thread rich cards above the card limit', () => {
+  it('does not build Codex thread rich cards above the card limit', () => {
     const sessions = Array.from({ length: 21 }, (_, index) => ({
       threadId: `thread-${index + 1}`,
       filePath: `/tmp/thread-${index + 1}.jsonl`,
@@ -405,8 +419,8 @@ describe('bridge-manager resolveCommandAlias', () => {
       activeEstimate: false,
     }));
 
-    assert.equal(buildDesktopThreadsCommandCard(sessions, false), null);
-    const card = buildDesktopThreadsCommandCard(sessions.slice(0, 20), false);
+    assert.equal(buildCodexThreadsCommandCard(sessions, false), null);
+    const card = buildCodexThreadsCommandCard(sessions.slice(0, 20), false);
     assert.equal(card?.table?.rows.length, 20);
     assert.equal(card?.selects?.[0]?.options.length, 20);
     assert.deepEqual(card?.table?.columns.map((column) => column.name), [
@@ -416,10 +430,10 @@ describe('bridge-manager resolveCommandAlias', () => {
       'last_active',
       'binding_id',
       'thread_id',
-      'source',
+      'creator',
       'command',
     ]);
-    const activeCard = buildDesktopThreadsCommandCard(sessions.slice(0, 2), false, undefined, [{
+    const activeCard = buildCodexThreadsCommandCard(sessions.slice(0, 2), false, undefined, [{
       threadId: 'thread-1',
       bindingId: 'binding-1',
       active: true,
@@ -433,14 +447,14 @@ describe('bridge-manager resolveCommandAlias', () => {
   });
 
   it('maps numeric reasoning aliases to supported effort levels', () => {
-    assert.equal(_testOnly.normalizeReasoningEffort('0'), null);
-    assert.equal(_testOnly.normalizeReasoningEffort('1'), 'minimal');
-    assert.equal(_testOnly.normalizeReasoningEffort('2'), 'low');
-    assert.equal(_testOnly.normalizeReasoningEffort('3'), 'medium');
-    assert.equal(_testOnly.normalizeReasoningEffort('4'), 'high');
-    assert.equal(_testOnly.normalizeReasoningEffort('5'), 'xhigh');
-    assert.equal(_testOnly.normalizeReasoningEffort('xhigh'), 'xhigh');
-    assert.equal(_testOnly.normalizeReasoningEffort('9'), null);
+    assert.equal(normalizeReasoningEffort('0'), null);
+    assert.equal(normalizeReasoningEffort('1'), 'minimal');
+    assert.equal(normalizeReasoningEffort('2'), 'low');
+    assert.equal(normalizeReasoningEffort('3'), 'medium');
+    assert.equal(normalizeReasoningEffort('4'), 'high');
+    assert.equal(normalizeReasoningEffort('5'), 'xhigh');
+    assert.equal(normalizeReasoningEffort('xhigh'), 'xhigh');
+    assert.equal(normalizeReasoningEffort('9'), null);
   });
 
   it('builds distinct stream keys for separate IM turns in the same session', () => {
@@ -505,7 +519,7 @@ describe('bridge-manager resolveCommandAlias', () => {
   });
 
   it('surfaces binding conflict errors to the user', () => {
-    const message = _testOnly.toUserVisibleBindingError(
+    const message = toUserVisibleBindingError(
       new Error('该会话已绑定到飞书聊天 oc_xxx。一个会话只能绑定一个聊天。'),
       '切换失败。',
     );
@@ -513,7 +527,7 @@ describe('bridge-manager resolveCommandAlias', () => {
   });
 
   it('falls back to the default binding error message for unknown failures', () => {
-    const message = _testOnly.toUserVisibleBindingError('boom', '切换失败。');
+    const message = toUserVisibleBindingError('boom', '切换失败。');
     assert.equal(message, '切换失败。');
   });
 
@@ -529,12 +543,12 @@ describe('bridge-manager resolveCommandAlias', () => {
   });
 
   it('maps unexpected /history failures to a user-visible hint', () => {
-    const message = _testOnly.toUserVisibleCommandError('/history', new Error('boom'));
+    const message = toUserVisibleCommandError('/history', new Error('boom'));
     assert.equal(message, '读取历史记录失败，请稍后重试。');
   });
 
   it('falls back to a generic user-visible error for other commands', () => {
-    const message = _testOnly.toUserVisibleCommandError('/model', new Error('boom'));
+    const message = toUserVisibleCommandError('/model', new Error('boom'));
     assert.equal(message, '/model 执行失败，请稍后重试。');
   });
 
@@ -592,7 +606,7 @@ describe('bridge-manager resolveCommandAlias', () => {
     const laterRecord = {
       type: 'message',
       role: 'user',
-      content: '桌面后续新消息',
+      content: 'Codex 后续新消息',
       signature: 'sig-later',
       timestamp: '2026-03-26T06:40:00.000Z',
     };
@@ -703,36 +717,36 @@ describe('bridge-manager status formatting', () => {
   });
 
   it('formats runtime states with queued counts', () => {
-    assert.equal(_testOnly.formatRuntimeStatus({ id: 's-1', working_directory: '', model: '', runtime_status: 'idle' }), '空闲');
-    assert.equal(_testOnly.formatRuntimeStatus({ id: 's-1', working_directory: '', model: '', runtime_status: 'running' }), '运行中');
+    assert.equal(formatRuntimeStatus({ id: 's-1', working_directory: '', model: '', runtime_status: 'idle' }), '空闲');
+    assert.equal(formatRuntimeStatus({ id: 's-1', working_directory: '', model: '', runtime_status: 'running' }), '运行中');
     assert.equal(
-      _testOnly.formatRuntimeStatus({ id: 's-1', working_directory: '', model: '', runtime_status: 'queued', queued_count: 2 }),
+      formatRuntimeStatus({ id: 's-1', working_directory: '', model: '', runtime_status: 'queued', queued_count: 2 }),
       '排队中（2）',
     );
   });
 
   it('formats mirror state summaries', () => {
-    assert.equal(_testOnly.formatMirrorStatus({ id: 's-1', working_directory: '', model: '', mirror_status: 'inactive' }), '未监听');
+    assert.equal(formatMirrorStatus({ id: 's-1', working_directory: '', model: '', mirror_status: 'inactive' }), '未监听');
     assert.equal(
-      _testOnly.formatMirrorStatus({ id: 's-1', working_directory: '', model: '', mirror_status: 'stale' }),
-      '待恢复（暂时没定位到桌面 thread 文件）',
+      formatMirrorStatus({ id: 's-1', working_directory: '', model: '', mirror_status: 'stale' }),
+      '待恢复（暂时没定位到本地 Codex thread 文件）',
     );
     assert.equal(
-      _testOnly.formatMirrorStatus({
+      formatMirrorStatus({
         id: 's-1',
         working_directory: '',
         model: '',
         mirror_status: 'watching',
         mirror_last_event_at: '2026-03-25T08:00:00.000Z',
       }),
-      `监听中 · 最近同步 ${_testOnly.formatCommandDateTime('2026-03-25T08:00:00.000Z')}`,
+      `监听中 · 最近同步 ${formatCommandDateTime('2026-03-25T08:00:00.000Z')}`,
     );
   });
 
   it('formats mirror event batches for IM delivery', () => {
-    const rendered = _testOnly.formatMirrorMessage('Current Thread', 'Desktop prompt', 'Desktop answer');
+    const rendered = _testOnly.formatMirrorMessage('Current Thread', 'Codex prompt', 'Codex answer');
 
-    assert.equal(rendered, '<Current Thread>\n\n我: Desktop prompt\n\ncodex: Desktop answer');
+    assert.equal(rendered, '<Current Thread>\n\n我: Codex prompt\n\ncodex: Codex answer');
   });
 
   it('returns an empty mirror message when there is no text', () => {
@@ -744,15 +758,15 @@ describe('bridge-manager status formatting', () => {
   it('formats markdown mirror headers with a combined user and codex layout', () => {
     const rendered = _testOnly.formatMirrorMessage(
       'Current Thread',
-      'Desktop prompt',
+      'Codex prompt',
       '- item 1\n- item 2',
       true,
     );
 
-    assert.equal(rendered, '**`<Current Thread>`**\n\n**我:** Desktop prompt\n\n**codex:**\n- item 1\n- item 2');
+    assert.equal(rendered, '**`<Current Thread>`**\n\n**我:** Codex prompt\n\n**codex:**\n- item 1\n- item 2');
   });
 
-  it('rewrites known wrapped desktop prompts into a compact user mirror label', () => {
+  it('rewrites known wrapped codex prompts into a compact user mirror label', () => {
     const wrapped = [
       '# Review findings:',
       '',
@@ -782,7 +796,7 @@ describe('bridge-manager status formatting', () => {
     assert.equal(_testOnly.formatMirrorUserText(unknownWrapped), unknownWrapped);
   });
 
-  it('buffers desktop user mirror text into the active turn instead of finalizing immediately', () => {
+  it('buffers Codex user mirror text into the active turn instead of finalizing immediately', () => {
     const subscription = {
       pendingTurn: null,
       sessionId: 'session-1',
@@ -794,7 +808,7 @@ describe('bridge-manager status formatting', () => {
         signature: 'user-1',
         type: 'message',
         role: 'user',
-        content: 'desktop prompt',
+        content: 'codex prompt',
         timestamp: '2026-03-25T08:00:00.000Z',
       },
     ]);
@@ -810,7 +824,7 @@ describe('bridge-manager status formatting', () => {
       lastStatusText: null,
       lastStatusAt: 0,
       statusNote: null,
-      userText: 'desktop prompt',
+      userText: 'codex prompt',
       lastAssistantText: null,
       lastCommentaryText: null,
       streamedText: '',
@@ -839,7 +853,7 @@ describe('bridge-manager status formatting', () => {
         signature: 'user',
         type: 'message',
         role: 'user',
-        content: 'desktop prompt',
+        content: 'codex prompt',
         timestamp: '2026-03-25T08:00:00.500Z',
         turnId: 'turn-1',
       },
@@ -870,7 +884,7 @@ describe('bridge-manager status formatting', () => {
     assert.deepEqual(finalized, [
       {
         streamKey: 'mirror:session-1:turn-1',
-        userText: 'desktop prompt',
+        userText: 'codex prompt',
         text: 'final answer',
         signature: 'complete',
         timestamp: '2026-03-25T08:00:03.000Z',
@@ -932,7 +946,7 @@ describe('bridge-manager status formatting', () => {
           signature: 'user',
           type: 'message',
           role: 'user',
-          content: 'desktop prompt',
+          content: 'codex prompt',
           timestamp: '2026-03-25T08:00:00.500Z',
           turnId: 'turn-1',
         },
@@ -940,9 +954,9 @@ describe('bridge-manager status formatting', () => {
 
       assert.equal(subscription.pendingTurn?.streamStarted, true);
       assert.deepEqual(streamEvents, [
-        'metadata:mirror:session-1:turn-1:桌面线程:binding_id:session-,mirror',
+        'metadata:mirror:session-1:turn-1:Codex thread:binding_id:session-,mirror',
         'start:mirror:session-1:turn-1',
-        'text:mirror:session-1:turn-1:我: desktop prompt\n\ncodex:',
+        'text:mirror:session-1:turn-1:我: codex prompt\n\ncodex:',
         'status:mirror:session-1:turn-1:处理中',
       ]);
     } finally {
@@ -950,7 +964,7 @@ describe('bridge-manager status formatting', () => {
     }
   });
 
-  it('normalizes wrapped desktop user prompts before opening a mirror stream card', () => {
+  it('normalizes wrapped Codex user prompts before opening a mirror stream card', () => {
     _testOnly.resetStateForTests();
     const state = (globalThis as unknown as Record<string, any>).__bridge_manager__;
     const streamEvents: string[] = [];
@@ -1005,7 +1019,7 @@ describe('bridge-manager status formatting', () => {
 
       assert.equal(subscription.pendingTurn?.userText, '（基于 Review findings）\nok,当前调整已经可以收尾了吗');
       assert.deepEqual(streamEvents, [
-        'metadata:mirror:session-1:turn-1:桌面线程:binding_id:session-,mirror',
+        'metadata:mirror:session-1:turn-1:Codex thread:binding_id:session-,mirror',
         'start:mirror:session-1:turn-1',
         'text:mirror:session-1:turn-1:我:\n（基于 Review findings）\nok,当前调整已经可以收尾了吗\n\ncodex:',
         'status:mirror:session-1:turn-1:处理中',
@@ -1044,7 +1058,7 @@ describe('bridge-manager status formatting', () => {
         signature: 'user',
         type: 'message',
         role: 'user',
-        content: 'desktop prompt',
+        content: 'codex prompt',
         timestamp: '2026-03-25T08:00:00.500Z',
         turnId: 'turn-1',
       },
@@ -1102,7 +1116,7 @@ describe('bridge-manager status formatting', () => {
 
     const result = await _testOnly.deliverMirrorTurns(subscription, [{
       streamKey: 'mirror:session-1:turn-1',
-      userText: 'desktop prompt',
+      userText: 'codex prompt',
       text: [
         '结果如下',
         '',
@@ -1162,7 +1176,7 @@ describe('bridge-manager status formatting', () => {
         lastResponseAt: '2026-03-25T08:04:40.000Z',
         lastStatusText: null,
         lastStatusAt: 0,
-        userText: 'desktop prompt',
+        userText: 'codex prompt',
         lastAssistantText: 'thinking',
         lastCommentaryText: null,
         streamedText: 'thinking',
@@ -1215,7 +1229,7 @@ describe('bridge-manager status formatting', () => {
         lastResponseAt: '2026-03-25T08:04:40.000Z',
         lastStatusText: null,
         lastStatusAt: 0,
-        userText: 'desktop prompt',
+        userText: 'codex prompt',
         lastAssistantText: 'thinking',
         lastCommentaryText: null,
         streamedText: 'thinking',
@@ -1260,7 +1274,7 @@ describe('bridge-manager status formatting', () => {
         signature: 'user',
         type: 'message',
         role: 'user',
-        content: 'desktop prompt',
+        content: 'codex prompt',
         timestamp: '2026-03-25T08:00:00.000Z',
       },
     ]);
@@ -1288,7 +1302,7 @@ describe('bridge-manager status formatting', () => {
     assert.deepEqual(finalized, [
       {
         streamKey: 'mirror:session-1:2026-03-25T08:00:00.000Z',
-        userText: 'desktop prompt',
+        userText: 'codex prompt',
         text: 'final answer',
         signature: 'complete',
         timestamp: '2026-03-25T08:00:03.000Z',
@@ -1406,7 +1420,7 @@ describe('bridge-manager status formatting', () => {
           signature: 'user-1',
           type: 'message',
           role: 'user',
-          content: 'desktop prompt',
+          content: 'codex prompt',
           timestamp: '2026-03-25T08:00:00.000Z',
         },
       ],
@@ -1429,7 +1443,7 @@ describe('bridge-manager status formatting', () => {
       lastStatusText: null,
       lastStatusAt: 0,
       statusNote: null,
-      userText: 'desktop prompt',
+      userText: 'codex prompt',
       lastAssistantText: null,
       lastCommentaryText: null,
       streamedText: '',
@@ -1509,7 +1523,7 @@ describe('bridge-manager status formatting', () => {
         lastResponseAt: '2026-03-25T08:00:00.000Z',
         lastStatusText: null,
         lastStatusAt: 0,
-        userText: 'desktop prompt',
+        userText: 'codex prompt',
         lastAssistantText: 'still running',
         lastCommentaryText: null,
         streamedText: 'still running',
@@ -1566,20 +1580,20 @@ describe('bridge-manager status formatting', () => {
         turnId: 'turn-1',
       },
       {
-        signature: 'desktop-commentary',
+        signature: 'codex-commentary',
         type: 'message',
         role: 'commentary',
-        content: '桌面旧任务还在继续思考',
+        content: 'Codex 旧任务还在继续思考',
         timestamp: '2026-03-25T08:00:03.000Z',
-        turnId: 'desktop-turn',
+        turnId: 'codex-turn',
       },
       {
-        signature: 'desktop-complete',
+        signature: 'codex-complete',
         type: 'task_complete',
         role: 'assistant',
-        content: '桌面旧任务完成',
+        content: 'Codex 旧任务完成',
         timestamp: '2026-03-25T08:00:03.500Z',
-        turnId: 'desktop-turn',
+        turnId: 'codex-turn',
       },
       {
         signature: 'assistant-self-final',
@@ -1601,25 +1615,25 @@ describe('bridge-manager status formatting', () => {
 
     assert.deepEqual(filtered, [
       {
-        signature: 'desktop-commentary',
+        signature: 'codex-commentary',
         type: 'message',
         role: 'commentary',
-        content: '桌面旧任务还在继续思考',
+        content: 'Codex 旧任务还在继续思考',
         timestamp: '2026-03-25T08:00:03.000Z',
-        turnId: 'desktop-turn',
+        turnId: 'codex-turn',
       },
       {
-        signature: 'desktop-complete',
+        signature: 'codex-complete',
         type: 'task_complete',
         role: 'assistant',
-        content: '桌面旧任务完成',
+        content: 'Codex 旧任务完成',
         timestamp: '2026-03-25T08:00:03.500Z',
-        turnId: 'desktop-turn',
+        turnId: 'codex-turn',
       },
     ]);
   });
 
-  it('releases later desktop mirror records after the IM-originated turn completes', () => {
+  it('releases later Codex mirror records after the IM-originated turn completes', () => {
     const sessionId = 'session-self-echo-next-batch';
     _testOnly.beginMirrorSuppression(sessionId, '来自 IM 的问题');
 
@@ -1659,17 +1673,17 @@ describe('bridge-manager status formatting', () => {
 
     const released = _testOnly.filterSuppressedMirrorRecords(sessionId, [
       {
-        signature: 'user-desktop',
+        signature: 'user-codex',
         type: 'message',
         role: 'user',
-        content: '来自桌面的新消息',
+        content: '来自 Codex的新消息',
         timestamp: '2026-03-25T08:00:05.000Z',
       },
       {
-        signature: 'assistant-desktop',
+        signature: 'assistant-codex',
         type: 'message',
         role: 'assistant',
-        content: '来自桌面的回复',
+        content: '来自 Codex的回复',
         timestamp: '2026-03-25T08:00:05.500Z',
       },
     ]);
@@ -1677,17 +1691,17 @@ describe('bridge-manager status formatting', () => {
     assert.deepEqual(suppressed, []);
     assert.deepEqual(released, [
       {
-        signature: 'user-desktop',
+        signature: 'user-codex',
         type: 'message',
         role: 'user',
-        content: '来自桌面的新消息',
+        content: '来自 Codex的新消息',
         timestamp: '2026-03-25T08:00:05.000Z',
       },
       {
-        signature: 'assistant-desktop',
+        signature: 'assistant-codex',
         type: 'message',
         role: 'assistant',
-        content: '来自桌面的回复',
+        content: '来自 Codex的回复',
         timestamp: '2026-03-25T08:00:05.500Z',
       },
     ]);
@@ -1830,12 +1844,12 @@ describe('bridge-manager status formatting', () => {
   });
 
   it('appends a timeout notice after the mirror content', () => {
-    const rendered = _testOnly.formatMirrorMessage('Current Thread', 'Desktop prompt', 'stale answer', true);
+    const rendered = _testOnly.formatMirrorMessage('Current Thread', 'Codex prompt', 'stale answer', true);
     const withNotice = _testOnly.appendMirrorTimeoutNotice(rendered, true);
 
     assert.equal(
       withNotice,
-      '**`<Current Thread>`**\n\n**我:** Desktop prompt\n\n**codex:** stale answer\n\n> 超时提醒：长时间没有收到新的桌面会话输出，本次流式同步已先结束；如果桌面后续继续产出内容，会重新开始新一轮同步。',
+      '**`<Current Thread>`**\n\n**我:** Codex prompt\n\n**codex:** stale answer\n\n> 超时提醒：长时间没有收到新的本地 Codex 会话输出，本次流式同步已先结束；如果 Codex 后续继续产出内容，会重新开始新一轮同步。',
     );
   });
 });
@@ -1867,13 +1881,13 @@ describe('bridge-manager stop handling', () => {
 
     const state = (globalThis as unknown as Record<string, any>).__bridge_manager__;
     const abortController = new AbortController();
-    state.activeTasks.set(binding.codepilotSessionId, {
+    state.activeTasks.set(binding.bridgeSessionId, {
       id: 'task-stop',
       abortController,
       adapter,
       address,
       streamKey: 'stream-stop',
-      sessionId: binding.codepilotSessionId,
+      sessionId: binding.bridgeSessionId,
       hasStreamingCards: false,
       structuredStreamUiActive: false,
       streamFinalized: false,
@@ -1889,7 +1903,7 @@ describe('bridge-manager stop handling', () => {
     });
 
     assert.equal(abortController.signal.aborted, true);
-    assert.equal(state.activeTasks.has(binding.codepilotSessionId), false);
+    assert.equal(state.activeTasks.has(binding.bridgeSessionId), false);
     assert.match(sent[0] || '', /旧会话「Bridge: chat-stop」任务已停止/);
   });
 
@@ -1909,7 +1923,7 @@ describe('bridge-manager stop handling', () => {
     const address = { channelType: 'feishu', chatId: 'chat-tmux-screen-callback' } as const;
     const store = getBridgeContext().store;
     const bindingA = router.createBinding(address, '/tmp/cti-tmux-screen-callback-a');
-    store.updateSession(bindingA.codepilotSessionId, { tmux_session_name: 'alpha' });
+    store.updateSession(bindingA.bridgeSessionId, { tmux_session_name: 'alpha' });
     let bindingB: ReturnType<typeof router.createBinding> | null = null;
 
     process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${oldPath}`;
@@ -1932,7 +1946,7 @@ describe('bridge-manager stop handling', () => {
         address,
         text: '',
         timestamp: Date.now(),
-        callbackData: `tmux-screen:stop:${encodeURIComponent(bindingA.codepilotSessionId)}`,
+        callbackData: `tmux-screen:stop:${encodeURIComponent(bindingA.bridgeSessionId)}`,
       });
 
       assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, bindingB.id);
@@ -1979,26 +1993,26 @@ describe('bridge-manager stop handling', () => {
     const state = (globalThis as unknown as Record<string, any>).__bridge_manager__;
     const abortA = new AbortController();
     const abortB = new AbortController();
-    state.activeTasks.set(bindingA.codepilotSessionId, {
+    state.activeTasks.set(bindingA.bridgeSessionId, {
       id: 'task-command-stop',
       abortController: abortA,
       adapter,
       address,
       streamKey: 'stream-command-stop',
-      sessionId: bindingA.codepilotSessionId,
+      sessionId: bindingA.bridgeSessionId,
       hasStreamingCards: true,
       structuredStreamUiActive: true,
       streamFinalized: false,
       uiEnded: false,
       mirrorSuppressionId: null,
     });
-    state.activeTasks.set(bindingB.codepilotSessionId, {
+    state.activeTasks.set(bindingB.bridgeSessionId, {
       id: 'task-command-stop-active',
       abortController: abortB,
       adapter,
       address,
       streamKey: 'stream-command-stop-active',
-      sessionId: bindingB.codepilotSessionId,
+      sessionId: bindingB.bridgeSessionId,
       hasStreamingCards: true,
       structuredStreamUiActive: true,
       streamFinalized: false,
@@ -2013,7 +2027,7 @@ describe('bridge-manager stop handling', () => {
       address,
       text: '',
       timestamp: Date.now(),
-      callbackData: buildCommandCallbackData('/stop', bindingA.codepilotSessionId),
+      callbackData: buildCommandCallbackData('/stop', bindingA.bridgeSessionId),
     });
 
     assert.equal(abortA.signal.aborted, true);
@@ -2050,7 +2064,7 @@ describe('bridge-manager stop handling', () => {
         timestamp: Date.now(),
       });
       const callbackData = sent.at(-1)?.richCard?.selects?.[0]?.options?.[0]?.callbackData;
-      assert.equal(callbackData, buildCommandCallbackData('/tmux-attach alpha', bindingB.codepilotSessionId));
+      assert.equal(callbackData, buildCommandCallbackData('/tmux-attach alpha', bindingB.bridgeSessionId));
 
       await _testOnly.handleMessage(adapter, {
         messageId: 'incoming-use-binding-a',
@@ -2068,8 +2082,8 @@ describe('bridge-manager stop handling', () => {
         callbackData,
       });
 
-      assert.equal(getBridgeContext().store.getSession(bindingB.codepilotSessionId)?.tmux_session_name, 'alpha');
-      assert.equal(getBridgeContext().store.getSession(bindingA.codepilotSessionId)?.tmux_session_name, undefined);
+      assert.equal(getBridgeContext().store.getSession(bindingB.bridgeSessionId)?.tmux_session_name, 'alpha');
+      assert.equal(getBridgeContext().store.getSession(bindingA.bridgeSessionId)?.tmux_session_name, undefined);
       assert.equal(getBridgeContext().store.getChannelBinding(address.channelType, address.chatId)?.id, bindingA.id);
     } finally {
       process.env.PATH = oldPath;
@@ -2182,7 +2196,7 @@ describe('bridge-manager mirror subscription recovery', () => {
     _testOnly.resetStateForTests();
   });
 
-  it('clears dangling sdk session ids after repeated missing desktop thread lookups', async () => {
+  it('clears dangling Codex thread ids after repeated missing Codex thread lookups', async () => {
     const store = new JsonFileStore(makeSettings());
     initBridgeContext({
       store,
@@ -2194,11 +2208,7 @@ describe('bridge-manager mirror subscription recovery', () => {
 
     const address = { channelType: 'feishu-default', chatId: 'chat-dangling' } as const;
     const binding = router.createBinding(address, 'D:\\workspace\\dangling');
-    store.updateSdkSessionId(binding.codepilotSessionId, 'missing-thread-id');
-    store.updateSession(binding.codepilotSessionId, {
-      desktop_thread_id: 'missing-thread-id',
-      thread_origin: 'desktop',
-    });
+    store.updateSessionCodexThreadId(binding.bridgeSessionId, 'missing-thread-id');
 
     const state = (globalThis as unknown as Record<string, any>).__bridge_manager__;
     state.running = true;
@@ -2211,13 +2221,12 @@ describe('bridge-manager mirror subscription recovery', () => {
     await _testOnly.reconcileMirrorSubscriptions();
     await _testOnly.reconcileMirrorSubscriptions();
 
-    assert.equal(store.getSession(binding.codepilotSessionId)?.sdk_session_id, 'missing-thread-id');
-    assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.sdkSessionId, 'missing-thread-id');
+    assert.equal(store.getSession(binding.bridgeSessionId)?.codex_thread_id, 'missing-thread-id');
+    assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.bridgeSessionId, binding.bridgeSessionId);
 
     await _testOnly.reconcileMirrorSubscriptions();
 
-    assert.equal(store.getSession(binding.codepilotSessionId)?.sdk_session_id || '', '');
-    assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.sdkSessionId || '', '');
+    assert.equal(store.getSession(binding.bridgeSessionId)?.codex_thread_id || '', '');
     assert.equal(state.mirrorSubscriptions.size, 0);
   });
 
@@ -2233,11 +2242,7 @@ describe('bridge-manager mirror subscription recovery', () => {
 
     const address = { channelType: 'feishu-default', chatId: 'chat-sync-failure' } as const;
     const binding = router.createBinding(address, 'D:\\workspace\\sync-failure');
-    store.updateSdkSessionId(binding.codepilotSessionId, 'missing-thread-id');
-    store.updateSession(binding.codepilotSessionId, {
-      desktop_thread_id: 'missing-thread-id',
-      thread_origin: 'desktop',
-    });
+    store.updateSessionCodexThreadId(binding.bridgeSessionId, 'missing-thread-id');
 
     const originalUpdateSession = store.updateSession.bind(store);
     (store as unknown as { updateSession: typeof store.updateSession }).updateSession = (() => {
@@ -2280,11 +2285,7 @@ describe('bridge-manager mirror subscription recovery', () => {
 
     const address = { channelType: 'feishu-default', chatId: 'chat-suspended' } as const;
     const binding = router.createBinding(address, 'D:\\workspace\\suspended');
-    store.updateSdkSessionId(binding.codepilotSessionId, 'thread-suspended');
-    store.updateSession(binding.codepilotSessionId, {
-      desktop_thread_id: 'thread-suspended',
-      thread_origin: 'desktop',
-    });
+    store.updateSessionCodexThreadId(binding.bridgeSessionId, 'thread-suspended');
 
     const state = (globalThis as unknown as Record<string, any>).__bridge_manager__;
     state.running = true;
@@ -2296,7 +2297,7 @@ describe('bridge-manager mirror subscription recovery', () => {
     state.mirrorSubscriptions.set(binding.id, {
       ...createMirrorSubscription({
         bindingId: binding.id,
-        sessionId: binding.codepilotSessionId,
+        sessionId: binding.bridgeSessionId,
         channelType: address.channelType,
         chatId: address.chatId,
         threadId: 'thread-suspended',
@@ -2325,11 +2326,11 @@ describe('bridge-manager mirror subscription recovery', () => {
     _testOnly.resetStateForTests();
 
     const address = { channelType: 'feishu-default', chatId: 'chat-mirror-multi' } as const;
-    const bindingA = router.bindToSdkSession(address, 'thread-mirror-a', {
+    const bindingA = router.bindToCodexThread(address, 'thread-mirror-a', {
       workingDirectory: 'D:\\workspace\\mirror-a',
       displayName: 'mirror-a',
     });
-    const bindingB = router.bindToSdkSession(address, 'thread-mirror-b', {
+    const bindingB = router.bindToCodexThread(address, 'thread-mirror-b', {
       workingDirectory: 'D:\\workspace\\mirror-b',
       displayName: 'mirror-b',
     });
@@ -2522,14 +2523,14 @@ describe('bridge-manager new session handling', () => {
 
     const state = (globalThis as unknown as Record<string, any>).__bridge_manager__;
     const abortController = new AbortController();
-    state.activeTasks.set(binding.codepilotSessionId, {
+    state.activeTasks.set(binding.bridgeSessionId, {
       id: 'task-old',
       abortController,
       adapter,
       address,
       requestMessageId: 'incoming-old',
       streamKey: 'stream-old',
-      sessionId: binding.codepilotSessionId,
+      sessionId: binding.bridgeSessionId,
       hasStreamingCards: false,
       structuredStreamUiActive: false,
       lastActivityAt: Date.now(),
@@ -2547,13 +2548,13 @@ describe('bridge-manager new session handling', () => {
 
     const updatedBinding = router.resolve(address);
     assert.equal(abortController.signal.aborted, false);
-    assert.notEqual(updatedBinding.codepilotSessionId, binding.codepilotSessionId);
-    assert.equal(state.activeTasks.get(binding.codepilotSessionId)?.id, 'task-old');
+    assert.notEqual(updatedBinding.bridgeSessionId, binding.bridgeSessionId);
+    assert.equal(state.activeTasks.get(binding.bridgeSessionId)?.id, 'task-old');
     assert.equal(sent.length, 1);
     assert.match(sent[0], /旧任务在运行，它不会被终止/);
   });
 
-  it('does not write an old task sdk session id back onto the current binding after /new', () => {
+  it('does not write an old task Codex thread id back onto the current binding after /new', () => {
     const store = new JsonFileStore(makeSettings());
     initBridgeContext({
       store,
@@ -2565,21 +2566,20 @@ describe('bridge-manager new session handling', () => {
 
     const address = { channelType: 'feishu', chatId: 'chat-new-binding' } as const;
     const oldBinding = router.createBinding(address, path.join(os.tmpdir(), 'cti-old-binding'));
-    const oldSessionId = oldBinding.codepilotSessionId;
+    const oldSessionId = oldBinding.bridgeSessionId;
 
     const newBinding = router.createBinding(address, path.join(os.tmpdir(), 'cti-new-binding'));
-    const newSessionId = newBinding.codepilotSessionId;
+    const newSessionId = newBinding.bridgeSessionId;
 
     assert.notEqual(newBinding.id, oldBinding.id);
     assert.notEqual(newSessionId, oldSessionId);
 
-    _testOnly.persistSdkSessionUpdate(oldSessionId, 'thread-old', false);
+    _testOnly.persistCodexThreadUpdate(oldSessionId, 'thread-old', false);
 
     const currentBinding = store.getChannelBinding(address.channelType, address.chatId);
-    assert.equal(store.getSession(oldSessionId)?.sdk_session_id, 'thread-old');
-    assert.equal(store.getSession(newSessionId)?.sdk_session_id || '', '');
-    assert.equal(currentBinding?.codepilotSessionId, newSessionId);
-    assert.equal(currentBinding?.sdkSessionId || '', '');
+    assert.equal(store.getSession(oldSessionId)?.codex_thread_id, 'thread-old');
+    assert.equal(store.getSession(newSessionId)?.codex_thread_id || '', '');
+    assert.equal(currentBinding?.bridgeSessionId, newSessionId);
     assert.equal(store.listChannelBindings().find((item) => item.id === oldBinding.id)?.active, false);
   });
 
@@ -2595,20 +2595,20 @@ describe('bridge-manager new session handling', () => {
 
     const address = { channelType: 'feishu', chatId: 'chat-resume-error' } as const;
     const binding = router.createBinding(address, path.join(os.tmpdir(), 'cti-resume-error'));
-    store.updateSdkSessionId(binding.codepilotSessionId, 'thread-keep');
+    store.updateSessionCodexThreadId(binding.bridgeSessionId, 'thread-keep');
 
-    _testOnly.persistSdkSessionUpdate(
-      binding.codepilotSessionId,
+    _testOnly.persistCodexThreadUpdate(
+      binding.bridgeSessionId,
       null,
       true,
       'Codex 会话恢复失败，上一轮执行进程未正常退出。请稍后重试。',
     );
 
     const currentBinding = store.getChannelBinding(address.channelType, address.chatId);
-    assert.equal(store.getSession(binding.codepilotSessionId)?.sdk_session_id, 'thread-keep');
-    assert.equal(currentBinding?.sdkSessionId, 'thread-keep');
-    assert.equal(_testOnly.computeSdkSessionUpdate(null, true, 'timeout waiting for child process to exit'), null);
-    assert.equal(_testOnly.computeSdkSessionUpdate(null, true, 'resuming session with different model'), '');
+    assert.equal(store.getSession(binding.bridgeSessionId)?.codex_thread_id, 'thread-keep');
+    assert.equal(currentBinding?.bridgeSessionId, binding.bridgeSessionId);
+    assert.equal(_testOnly.computeCodexThreadUpdate(null, true, 'timeout waiting for child process to exit'), null);
+    assert.equal(_testOnly.computeCodexThreadUpdate(null, true, 'resuming session with different model'), '');
   });
 });
 
@@ -2630,7 +2630,7 @@ describe('channel-router defaults', () => {
       channelType: 'feishu',
       chatId: 'chat-default-mode',
     });
-    const session = store.getSession(binding.codepilotSessionId);
+    const session = store.getSession(binding.bridgeSessionId);
 
     assert.equal(binding.mode, 'normal');
     assert.equal(session?.preferred_mode, 'normal');

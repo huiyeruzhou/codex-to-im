@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codex-to-im.local/schemas/data/bindings.v2.schema.json",
+  "title": "Codex-to-IM data/bindings.json",
+  "description": "Map of binding id to ChannelBinding records.",
+  "type": "object",
+  "additionalProperties": {
+    "$ref": "#/$defs/channelBinding"
+  },
+  "$defs": {
+    "channelBinding": {
+      "type": "object",
+      "required": [
+        "id",
+        "channelType",
+        "chatId",
+        "bridgeSessionId",
+        "workingDirectory",
+        "model",
+        "mode",
+        "active",
+        "createdAt",
+        "updatedAt"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "channelType": {
+          "type": "string",
+          "minLength": 1
+        },
+        "channelProvider": {
+          "type": "string"
+        },
+        "channelAlias": {
+          "type": "string"
+        },
+        "chatId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "chatUserId": {
+          "type": "string"
+        },
+        "chatDisplayName": {
+          "type": "string"
+        },
+        "bridgeSessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "workingDirectory": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "mode": {
+          "enum": ["normal", "yolo", "code", "plan", "ask"]
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        }
+      },
+      "allOf": [
+        {
+          "$ref": "#/$defs/noThreadIdentityOnBinding"
+        }
+      ],
+      "additionalProperties": true
+    },
+    "noThreadIdentityOnBinding": {
+      "not": {
+        "anyOf": [
+          {
+            "required": ["codex_thread_id"]
+          },
+          {
+            "required": ["codexThreadId"]
+          },
+          {
+            "required": ["sdk_session_id"]
+          },
+          {
+            "required": ["sdkSessionId"]
+          },
+          {
+            "required": ["desktop_thread_id"]
+          },
+          {
+            "required": ["desktopThreadId"]
+          },
+          {
+            "required": ["thread_origin"]
+          },
+          {
+            "required": ["threadOrigin"]
+          },
+          {
+            "required": ["thread_id"]
+          },
+          {
+            "required": ["threadId"]
+          },
+          {
+            "required": ["codepilotSessionId"]
+          },
+          {
+            "required": ["codepilot_session_id"]
+          },
+          {
+            "required": ["bridge_session_id"]
+          }
+        ]
+      }
+    }
+  }
+}

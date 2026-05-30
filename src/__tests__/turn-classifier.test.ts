@@ -4,8 +4,6 @@ import assert from 'node:assert/strict';
 import {
   classifyInteractiveTurn,
   getCodexThreadId,
-  getExplicitDesktopThreadId,
-  isDesktopBackedSession,
 } from '../lib/bridge/turns/turn-classifier.js';
 import type { BridgeSession } from '../lib/bridge/host.js';
 import type { ChannelBinding } from '../lib/bridge/types.js';
@@ -15,8 +13,7 @@ function binding(overrides: Partial<ChannelBinding> = {}): ChannelBinding {
     id: 'binding-1',
     channelType: 'feishu-default',
     chatId: 'chat-1',
-    codepilotSessionId: 'session-1',
-    sdkSessionId: '',
+    bridgeSessionId: 'session-1',
     workingDirectory: '/tmp/project',
     model: 'gpt-test',
     mode: 'code',
@@ -40,75 +37,57 @@ function session(overrides: Partial<BridgeSession> = {}): BridgeSession {
 describe('turn-classifier', () => {
   it('classifies pure IM SDK sessions even when a codex thread id exists', () => {
     const currentSession = session({
-      sdk_session_id: 'codex-thread-1',
       codex_thread_id: 'codex-thread-1',
-      thread_origin: 'bridge',
     });
     const result = classifyInteractiveTurn(
-      binding({ sdkSessionId: 'codex-thread-1' }),
-      currentSession,
-      () => true,
-    );
-
-    assert.equal(result.kind, 'im_sdk');
-    assert.equal(result.reason, 'bridge_thread');
-    assert.equal(result.codexThreadId, 'codex-thread-1');
-    assert.equal(result.desktopThreadId, undefined);
-    assert.equal(result.desktopAvailable, false);
-  });
-
-  it('classifies explicit desktop-backed sessions as IM desktop reuse', () => {
-    const currentSession = session({
-      sdk_session_id: 'desktop-thread-1',
-      codex_thread_id: 'desktop-thread-1',
-      desktop_thread_id: 'desktop-thread-1',
-      thread_origin: 'desktop',
-    });
-    const result = classifyInteractiveTurn(
-      binding({ sdkSessionId: 'desktop-thread-1' }),
-      currentSession,
-      (threadId) => threadId === 'desktop-thread-1',
-    );
-
-    assert.equal(result.kind, 'im_desktop_reuse');
-    assert.equal(result.reason, 'desktop_thread');
-    assert.equal(result.codexThreadId, 'desktop-thread-1');
-    assert.equal(result.desktopThreadId, 'desktop-thread-1');
-    assert.equal(result.desktopAvailable, true);
-  });
-
-  it('marks missing desktop threads without treating bridge SDK ids as desktop ids', () => {
-    const currentSession = session({
-      sdk_session_id: 'desktop-missing',
-      codex_thread_id: 'desktop-missing',
-      desktop_thread_id: 'desktop-missing',
-      thread_origin: 'desktop',
-    });
-    const result = classifyInteractiveTurn(
-      binding({ sdkSessionId: 'desktop-missing' }),
+      binding(),
       currentSession,
       () => false,
     );
 
     assert.equal(result.kind, 'im_sdk');
-    assert.equal(result.reason, 'desktop_thread_missing');
-    assert.equal(result.desktopThreadId, 'desktop-missing');
-    assert.equal(result.desktopAvailable, false);
+    assert.equal(result.reason, 'bridge_thread');
+    assert.equal(result.codexThreadId, 'codex-thread-1');
+    assert.equal(result.codexThreadAvailable, false);
   });
 
-  it('falls back to legacy desktop origin only when explicitly marked desktop', () => {
-    const desktopLegacy = session({
-      sdk_session_id: 'legacy-desktop-thread',
-      thread_origin: 'desktop',
+  it('classifies sessions with a locally visible Codex thread as IM Codex reuse', () => {
+    const currentSession = session({
+      codex_thread_id: 'codex-thread-1',
     });
-    const bridgeLegacy = session({
-      sdk_session_id: 'legacy-bridge-thread',
+    const result = classifyInteractiveTurn(
+      binding(),
+      currentSession,
+      (threadId) => threadId === 'codex-thread-1',
+    );
+
+    assert.equal(result.kind, 'im_codex_reuse');
+    assert.equal(result.reason, 'codex_thread');
+    assert.equal(result.codexThreadId, 'codex-thread-1');
+    assert.equal(result.codexThreadAvailable, true);
+  });
+
+  it('treats sessions with missing local Codex thread files as plain SDK turns', () => {
+    const currentSession = session({
+      codex_thread_id: 'codex-missing',
+    });
+    const result = classifyInteractiveTurn(
+      binding(),
+      currentSession,
+      () => false,
+    );
+
+    assert.equal(result.kind, 'im_sdk');
+    assert.equal(result.reason, 'bridge_thread');
+    assert.equal(result.codexThreadId, 'codex-missing');
+    assert.equal(result.codexThreadAvailable, false);
+  });
+
+  it('does not read legacy thread fields from bindings or session fallbacks', () => {
+    const currentSession = session({
+      codex_thread_id: 'codex-thread-only',
     });
 
-    assert.equal(getExplicitDesktopThreadId(desktopLegacy), 'legacy-desktop-thread');
-    assert.equal(getExplicitDesktopThreadId(bridgeLegacy), undefined);
-    assert.equal(isDesktopBackedSession(desktopLegacy), true);
-    assert.equal(isDesktopBackedSession(bridgeLegacy), false);
-    assert.equal(getCodexThreadId(bridgeLegacy), 'legacy-bridge-thread');
+    assert.equal(getCodexThreadId(currentSession), 'codex-thread-only');
   });
 });

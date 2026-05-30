@@ -1,7 +1,7 @@
 import { isSupportedChannelProvider, type ChannelInstance, type ChannelProvider } from '../../config.js';
 import { getBridgeContext } from './context.js';
 import { markdownToPlainText } from './markdown/plain.js';
-import { formatBindingChatLabel as formatBindingChatLabelBase } from './command-helpers.js';
+import { formatBindingChatLabel as formatBindingChatLabelBase } from './display/channel-label.js';
 import type { ChannelBinding } from './types.js';
 
 export function listConfiguredChannelInstances(): ChannelInstance[] {

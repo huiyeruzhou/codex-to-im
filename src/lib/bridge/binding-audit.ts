@@ -6,8 +6,8 @@ export type BindingChangeAction =
   | 'auto_create_prebound'
   | 'auto_recreate_missing_session'
   | 'switch_draft'
-  | 'switch_desktop'
-  | 'add_desktop'
+  | 'switch_codex'
+  | 'add_codex'
   | 'use_binding'
   | 'remove_binding'
   | 'new_session'
@@ -29,8 +29,7 @@ export interface BindingChangeAuditInput {
 function describeBinding(binding: ChannelBinding | null | undefined): string {
   if (!binding) return 'none';
   const parts = [
-    `session=${binding.codepilotSessionId}`,
-    `sdk=${binding.sdkSessionId || '-'}`,
+    `session=${binding.bridgeSessionId}`,
     `mode=${binding.mode}`,
   ];
   if (binding.workingDirectory) {

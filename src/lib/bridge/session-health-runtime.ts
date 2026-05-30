@@ -1,4 +1,4 @@
-import type { DesktopMirrorRecord } from '../../desktop-sessions.js';
+import type { CodexMirrorRecord } from '../../codex/session-index.js';
 import type { StructuredStreamingUiSnapshot } from './channel-adapter.js';
 import type { BridgeSession, BridgeStore } from './host.js';
 import type { ThreadProcessProbeResult } from './session-health-process.js';
@@ -41,7 +41,7 @@ export interface SessionHealthRuntime {
   recordToolState(sessionId: string, toolId: string, toolName: string, status: SessionToolStatus): void;
   recordStructuredStreamUi(sessionId: string, snapshot: StructuredStreamingUiSnapshot): void;
   recordInteractiveEnd(sessionId: string, outcome: SessionEndOutcome, detail?: string): void;
-  observeDesktopMirrorRecords(sessionId: string, threadId: string, records: DesktopMirrorRecord[]): void;
+  observeCodexMirrorRecords(sessionId: string, threadId: string, records: CodexMirrorRecord[]): void;
   reconcileSessionHealth(): void;
   diagnoseSessionHealth(sessionId: string): Promise<SessionHealthDiagnosis | null>;
   diagnoseAllActiveSessions(): Promise<SessionHealthDiagnosis[]>;
@@ -60,9 +60,9 @@ export function createSessionHealthRuntime(
     return isTerminalHealthStatus(session.health_status);
   }
 
-  function summarizePlanUpdate(tasks: DesktopMirrorRecord['tasks']): string {
+  function summarizePlanUpdate(tasks: CodexMirrorRecord['tasks']): string {
     if (!Array.isArray(tasks) || tasks.length === 0) {
-      return '检测到桌面线程更新了任务计划。';
+      return '检测到 Codex thread更新了任务计划。';
     }
     let inProgress = 0;
     let pending = 0;
@@ -72,7 +72,7 @@ export function createSessionHealthRuntime(
       else if (task?.status === 'in_progress') inProgress += 1;
       else pending += 1;
     }
-    return `检测到桌面线程更新了任务计划（执行中 ${inProgress} 项，等待中 ${pending} 项，已完成 ${completed} 项）。`;
+    return `检测到 Codex thread更新了任务计划（执行中 ${inProgress} 项，等待中 ${pending} 项，已完成 ${completed} 项）。`;
   }
 
   function updateSessionHealth(
@@ -274,18 +274,18 @@ export function createSessionHealthRuntime(
     updateSessionHealth(sessionId, updates);
   }
 
-  function observeDesktopMirrorRecords(sessionId: string, _threadId: string, records: DesktopMirrorRecord[]): void {
+  function observeCodexMirrorRecords(sessionId: string, _threadId: string, records: CodexMirrorRecord[]): void {
     for (const record of records) {
       if (record.type === 'task_started') {
-        recordInteractiveStart(sessionId, '检测到桌面线程开始执行。');
+        recordInteractiveStart(sessionId, '检测到 Codex thread开始执行。');
         continue;
       }
       if (record.type === 'task_complete') {
-        recordInteractiveEnd(sessionId, 'completed', '检测到桌面线程已完成当前任务。');
+        recordInteractiveEnd(sessionId, 'completed', '检测到 Codex thread已完成当前任务。');
         continue;
       }
       if (record.type === 'task_aborted') {
-        recordInteractiveEnd(sessionId, 'aborted', '检测到桌面线程已停止当前任务。');
+        recordInteractiveEnd(sessionId, 'aborted', '检测到 Codex thread已停止当前任务。');
         continue;
       }
       if (record.type === 'tool_started') {
@@ -305,7 +305,7 @@ export function createSessionHealthRuntime(
         recordInteractiveProgress(
           sessionId,
           'reasoning',
-          '检测到桌面线程新的思考/状态说明。',
+          '检测到 Codex thread新的思考/状态说明。',
         );
         continue;
       }
@@ -322,8 +322,8 @@ export function createSessionHealthRuntime(
           sessionId,
           record.role === 'commentary' ? 'commentary' : 'message',
           record.role === 'commentary'
-            ? '检测到桌面线程新的执行进展说明。'
-            : '检测到桌面线程新的消息输出。',
+            ? '检测到 Codex thread新的执行进展说明。'
+            : '检测到 Codex thread新的消息输出。',
         );
       }
     }
@@ -346,7 +346,7 @@ export function createSessionHealthRuntime(
   }
 
   async function loadProcessProbe(session: BridgeSession): Promise<ThreadProcessProbeResult | null> {
-    const threadId = session.sdk_session_id?.trim();
+    const threadId = session.codex_thread_id?.trim();
     if (!threadId || !deps.probeThreadProcess) return null;
     return deps.probeThreadProcess(threadId);
   }
@@ -377,7 +377,7 @@ export function createSessionHealthRuntime(
     recordToolState,
     recordStructuredStreamUi,
     recordInteractiveEnd,
-    observeDesktopMirrorRecords,
+    observeCodexMirrorRecords,
     reconcileSessionHealth,
     diagnoseSessionHealth,
     diagnoseAllActiveSessions,

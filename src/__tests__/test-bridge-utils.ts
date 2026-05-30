@@ -70,15 +70,15 @@ export function initBridgeTestContext(options: {
   return store;
 }
 
-export interface DesktopSessionJsonlFixtureOptions {
+export interface CodexSessionJsonlFixtureOptions {
   threadId: string;
   workDir: string;
   datePath?: [string, string, string];
   lines?: unknown[];
 }
 
-export function writeDesktopSessionJsonlFixture(
-  options: DesktopSessionJsonlFixtureOptions,
+export function writeCodexSessionJsonlFixture(
+  options: CodexSessionJsonlFixtureOptions,
 ): { sessionPath: string; rawJsonl: string } {
   const datePath = options.datePath || ['2026', '05', '28'];
   const sessionDir = path.join(process.env.CODEX_HOME!, 'sessions', ...datePath);
@@ -99,12 +99,12 @@ export function writeDesktopSessionJsonlFixture(
     {
       timestamp: '2026-05-28T00:00:01.000Z',
       type: 'event_msg',
-      payload: { type: 'user_message', message: '桌面用户消息' },
+      payload: { type: 'user_message', message: 'Codex 用户消息' },
     },
     {
       timestamp: '2026-05-28T00:00:02.000Z',
       type: 'event_msg',
-      payload: { type: 'agent_message', message: '桌面助手回复' },
+      payload: { type: 'agent_message', message: 'Codex 助手回复' },
     },
   ];
   const rawJsonl = lines.map((line) => JSON.stringify(line)).join('\n') + '\n';

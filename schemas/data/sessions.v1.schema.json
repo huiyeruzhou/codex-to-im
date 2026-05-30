@@ -1,0 +1,192 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codex-to-im.local/schemas/data/sessions.v1.schema.json",
+  "title": "Codex-to-IM data/sessions.json",
+  "description": "Map of bridge session id to BridgeSession records.",
+  "type": "object",
+  "additionalProperties": {
+    "$ref": "#/$defs/bridgeSession"
+  },
+  "$defs": {
+    "bridgeSession": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string"
+        },
+        "working_directory": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "preferred_mode": {
+          "enum": ["normal", "yolo", "code", "plan", "ask"]
+        },
+        "system_prompt": {
+          "type": "string"
+        },
+        "provider_id": {
+          "type": "string"
+        },
+        "codex_thread_id": {
+          "type": "string"
+        },
+        "codex_title": {
+          "type": "string"
+        },
+        "reasoning_effort": {
+          "enum": ["minimal", "low", "medium", "high", "xhigh"]
+        },
+        "codex_provider": {
+          "enum": ["sdk", "tmux"]
+        },
+        "codex_sandbox_mode": {
+          "enum": ["read-only", "workspace-write", "danger-full-access"]
+        },
+        "codex_network_access": {
+          "type": "boolean"
+        },
+        "tmux_session_name": {
+          "type": "string"
+        },
+        "tmux_capture_lines": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "tmux_auto_enter": {
+          "type": "boolean"
+        },
+        "session_type": {
+          "enum": ["normal", "draft"]
+        },
+        "hidden": {
+          "type": "boolean"
+        },
+        "parent_session_id": {
+          "type": "string"
+        },
+        "expires_at": {
+          "type": "string"
+        },
+        "runtime_status": {
+          "enum": ["idle", "running", "queued"]
+        },
+        "queued_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "last_runtime_update_at": {
+          "type": "string"
+        },
+        "health_status": {
+          "enum": [
+            "idle",
+            "running_active",
+            "waiting_tool",
+            "slow_observed",
+            "suspected_stall",
+            "suspected_stream_ui_stall",
+            "suspected_detached",
+            "completed",
+            "failed",
+            "aborted"
+          ]
+        },
+        "health_reason": {
+          "type": "string"
+        },
+        "last_progress_at": {
+          "type": "string"
+        },
+        "last_progress_type": {
+          "type": "string"
+        },
+        "active_tools_json": {
+          "type": "string"
+        },
+        "active_tool_name": {
+          "type": "string"
+        },
+        "active_tool_started_at": {
+          "type": "string"
+        },
+        "last_tool_finished_at": {
+          "type": "string"
+        },
+        "last_stream_ui_attempt_at": {
+          "type": "string"
+        },
+        "last_stream_ui_update_at": {
+          "type": "string"
+        },
+        "stream_ui_flush_started_at": {
+          "type": "string"
+        },
+        "last_stream_ui_error_at": {
+          "type": "string"
+        },
+        "last_stream_ui_error": {
+          "type": "string"
+        },
+        "stream_ui_consecutive_failures": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "mirror_status": {
+          "enum": ["inactive", "watching", "stale"]
+        },
+        "mirror_last_event_at": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        }
+      },
+      "allOf": [
+        {
+          "$ref": "#/$defs/noRetiredThreadIdentityFields"
+        }
+      ],
+      "additionalProperties": true
+    },
+    "noRetiredThreadIdentityFields": {
+      "not": {
+        "anyOf": [
+          {
+            "required": ["sdk_session_id"]
+          },
+          {
+            "required": ["sdkSessionId"]
+          },
+          {
+            "required": ["desktop_thread_id"]
+          },
+          {
+            "required": ["desktopThreadId"]
+          },
+          {
+            "required": ["thread_origin"]
+          },
+          {
+            "required": ["threadOrigin"]
+          },
+          {
+            "required": ["thread_id"]
+          },
+          {
+            "required": ["threadId"]
+          }
+        ]
+      }
+    }
+  }
+}

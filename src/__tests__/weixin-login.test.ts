@@ -1,7 +1,7 @@
 import './test-setup.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildQrHtml, buildWeixinLoginPopupHtml } from '../weixin-login.js';
+import { buildQrHtml, buildWeixinLoginPopupHtml } from '../weixin/login.js';
 
 describe('weixin-login HTML', () => {
   it('embeds inline QR markup without remote CDN scripts', () => {

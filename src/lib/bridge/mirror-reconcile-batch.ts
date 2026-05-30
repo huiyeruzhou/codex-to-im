@@ -1,13 +1,13 @@
-import type { DesktopMirrorSubscription } from './mirror-subscription-state.js';
+import type { CodexMirrorSubscription } from './mirror-subscription-state.js';
 
 export type MirrorReconcileStatus = 'processed' | 'suspended';
 
 export interface MirrorReconcileBatchDeps {
   syncSubscriptionSet: () => void;
-  getSubscriptions: () => DesktopMirrorSubscription[];
-  reconcileSubscription: (subscription: DesktopMirrorSubscription) => Promise<MirrorReconcileStatus>;
-  clearFailureState: (subscription: DesktopMirrorSubscription) => void;
-  handleFailure: (subscription: DesktopMirrorSubscription, error: unknown) => Promise<void> | void;
+  getSubscriptions: () => CodexMirrorSubscription[];
+  reconcileSubscription: (subscription: CodexMirrorSubscription) => Promise<MirrorReconcileStatus>;
+  clearFailureState: (subscription: CodexMirrorSubscription) => void;
+  handleFailure: (subscription: CodexMirrorSubscription, error: unknown) => Promise<void> | void;
   logBatchError: (stage: string, error: unknown) => void;
 }
 

@@ -3,10 +3,6 @@ import type { ChannelAddress, OutboundAttachment, SendResult } from '../types.js
 import {
   deliverResponse as defaultDeliverResponse,
 } from '../feedback-delivery.js';
-import {
-  finalizeStreamFeedback,
-  type StreamFeedbackTarget,
-} from '../stream-feedback-controller.js';
 import type { FinalizedBridgeResponse } from './turn-types.js';
 
 export type DeliverResponseImpl = (
@@ -75,12 +71,4 @@ export async function deliverFinalResponse(
   }
 
   return lastResult;
-}
-
-export async function finalizeStreamingUi(
-  target: StreamFeedbackTarget,
-  status: 'completed' | 'interrupted' | 'error',
-  response: Pick<FinalizedBridgeResponse, 'text'>,
-): Promise<boolean> {
-  return finalizeStreamFeedback(target, status, response.text);
 }

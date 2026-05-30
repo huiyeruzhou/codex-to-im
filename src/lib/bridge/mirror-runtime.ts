@@ -1,15 +1,17 @@
 import fs from 'node:fs';
 
-import type { DesktopMirrorRecord, DesktopSessionSummary } from '../../desktop-sessions.js';
+import type {
+  CodexMirrorRecord,
+  CodexSessionSummary,
+} from '../../codex/session-index.js';
 import type { BaseChannelAdapter } from './channel-adapter.js';
-import { getBridgeContext } from './context.js';
 import {
   enqueuePendingMirrorDeliveries,
   removePendingMirrorDeliveries,
   selectPendingMirrorDeliveries,
-  type FinalizedDesktopMirrorTurn,
+  type FinalizedCodexMirrorTurn,
 } from './mirror-turns.js';
-import type { DesktopMirrorSubscription } from './mirror-subscription-state.js';
+import type { CodexMirrorSubscription } from './mirror-subscription-state.js';
 import {
   clearMirrorSubscriptionFailure,
   createMirrorSubscription,
@@ -26,15 +28,26 @@ import {
 import { buildMirrorDeliveryPlan } from './mirror-delivery-plan.js';
 import { buildMirrorSubscriptionRegistryPlan } from './mirror-subscription-registry.js';
 import { runMirrorReconcileBatch, type MirrorReconcileStatus } from './mirror-reconcile-batch.js';
-import { getExplicitDesktopThreadId } from './turns/turn-classifier.js';
 
 export interface BridgeMirrorRuntimeState {
   running: boolean;
   adapters: Map<string, BaseChannelAdapter>;
-  mirrorSubscriptions: Map<string, DesktopMirrorSubscription>;
+  mirrorSubscriptions: Map<string, CodexMirrorSubscription>;
   mirrorWakeTimer: NodeJS.Timeout | null;
   mirrorSyncInFlight: boolean;
   activeTasks: Map<string, unknown>;
+}
+
+export interface MirrorRuntimeBinding {
+  id: string;
+  channelType: string;
+  chatId: string;
+  bridgeSessionId: string;
+}
+
+export interface MirrorRuntimeSession {
+  codex_thread_id?: string | null;
+  mirror_last_event_at?: string | null;
 }
 
 export interface CreateMirrorRuntimeOptions {
@@ -47,26 +60,29 @@ export interface CreateMirrorRuntimeOptions {
 export interface CreateMirrorRuntimeDeps {
   nowIso(): string;
   describeUnknownError(error: unknown): string;
-  getDesktopSessionByThreadIdSafe(threadId: string, context: string): DesktopSessionSummary | null;
+  listChannelBindings(): MirrorRuntimeBinding[];
+  getSession(sessionId: string): MirrorRuntimeSession | null | undefined;
+  clearSessionCodexThreadId(sessionId: string): void;
+  getCodexSessionByThreadIdSafe(threadId: string, context: string): CodexSessionSummary | null;
   syncMirrorSessionStateSafe(sessionId: string, context: string): void;
-  filterSuppressedMirrorRecords(sessionId: string, records: DesktopMirrorRecord[]): DesktopMirrorRecord[];
-  observeSessionHealthRecords(sessionId: string, threadId: string, records: DesktopMirrorRecord[]): void;
-  routeDesktopRecords?(
+  filterSuppressedMirrorRecords(sessionId: string, records: CodexMirrorRecord[]): CodexMirrorRecord[];
+  observeSessionHealthRecords(sessionId: string, threadId: string, records: CodexMirrorRecord[]): void;
+  routeCodexRecords?(
     sessionId: string,
     threadId: string,
-    records: DesktopMirrorRecord[],
-  ): Promise<{ claimed: DesktopMirrorRecord[]; unclaimed: DesktopMirrorRecord[]; terminalClaimed: boolean }>;
-  consumeMirrorRecords(subscription: DesktopMirrorSubscription, records: DesktopMirrorRecord[]): FinalizedDesktopMirrorTurn[];
-  flushTimedOutMirrorTurn(subscription: DesktopMirrorSubscription): FinalizedDesktopMirrorTurn | null;
-  hasPendingMirrorWork(subscription: DesktopMirrorSubscription): boolean;
-  consumeBufferedMirrorTurns(subscription: DesktopMirrorSubscription): FinalizedDesktopMirrorTurn[];
+    records: CodexMirrorRecord[],
+  ): Promise<{ claimed: CodexMirrorRecord[]; unclaimed: CodexMirrorRecord[]; terminalClaimed: boolean }>;
+  consumeMirrorRecords(subscription: CodexMirrorSubscription, records: CodexMirrorRecord[]): FinalizedCodexMirrorTurn[];
+  flushTimedOutMirrorTurn(subscription: CodexMirrorSubscription): FinalizedCodexMirrorTurn | null;
+  hasPendingMirrorWork(subscription: CodexMirrorSubscription): boolean;
+  consumeBufferedMirrorTurns(subscription: CodexMirrorSubscription): FinalizedCodexMirrorTurn[];
   stopMirrorStreaming(
-    subscription: DesktopMirrorSubscription,
+    subscription: CodexMirrorSubscription,
     status?: 'completed' | 'interrupted',
   ): void;
   deliverMirrorTurns(
-    subscription: DesktopMirrorSubscription,
-    turns: FinalizedDesktopMirrorTurn[],
+    subscription: CodexMirrorSubscription,
+    turns: FinalizedCodexMirrorTurn[],
   ): Promise<{ deliveredCount: number; error?: unknown }>;
 }
 
@@ -81,7 +97,7 @@ export function createMirrorRuntime(
   options: CreateMirrorRuntimeOptions,
   deps: CreateMirrorRuntimeDeps,
 ): MirrorRuntime {
-  function closeMirrorWatcher(subscription: DesktopMirrorSubscription): void {
+  function closeMirrorWatcher(subscription: CodexMirrorSubscription): void {
     if (subscription.watcher) {
       try {
         subscription.watcher.close();
@@ -106,7 +122,7 @@ export function createMirrorRuntime(
     }, delayMs);
   }
 
-  function watchMirrorFile(subscription: DesktopMirrorSubscription, filePath: string | null): void {
+  function watchMirrorFile(subscription: CodexMirrorSubscription, filePath: string | null): void {
     if (!filePath) {
       closeMirrorWatcher(subscription);
       return;
@@ -138,46 +154,38 @@ export function createMirrorRuntime(
     deps.syncMirrorSessionStateSafe(existing.sessionId, 'mirror subscription removal');
   }
 
-  function clearDanglingMirrorThread(subscription: DesktopMirrorSubscription, reason: string): void {
-    const { store } = getBridgeContext();
-    const session = store.getSession(subscription.sessionId);
-    const currentThreadId = getExplicitDesktopThreadId(session) || subscription.threadId;
+  function clearDanglingMirrorThread(subscription: CodexMirrorSubscription, reason: string): void {
+    const session = deps.getSession(subscription.sessionId);
+    const currentThreadId = session?.codex_thread_id?.trim() || subscription.threadId;
     console.warn(
-      `[bridge-manager] Clearing dangling desktop thread ${currentThreadId} for session ${subscription.sessionId}: ${reason}`,
+      `[bridge-manager] Clearing dangling Codex thread ${currentThreadId} for session ${subscription.sessionId}: ${reason}`,
     );
-    store.updateSdkSessionId(subscription.sessionId, '');
-    store.updateSession(subscription.sessionId, {
-      sdk_session_id: '',
-      codex_thread_id: undefined,
-      desktop_thread_id: undefined,
-      thread_origin: undefined,
-    });
+    deps.clearSessionCodexThreadId(subscription.sessionId);
     removeMirrorSubscription(subscription.bindingId);
   }
 
-  function upsertMirrorSubscription(binding: { id: string; channelType: string; chatId: string; codepilotSessionId: string; sdkSessionId: string }): void {
-    const { store } = getBridgeContext();
+  function upsertMirrorSubscription(binding: MirrorRuntimeBinding): void {
     const state = getState();
-    const session = store.getSession(binding.codepilotSessionId);
+    const session = deps.getSession(binding.bridgeSessionId);
     if (!session) {
       removeMirrorSubscription(binding.id);
       return;
     }
 
-    const threadId = getExplicitDesktopThreadId(session) || '';
+    const threadId = session.codex_thread_id?.trim() || '';
     if (!threadId) {
       removeMirrorSubscription(binding.id);
       return;
     }
 
-    const desktopSession = deps.getDesktopSessionByThreadIdSafe(threadId, 'mirror subscription sync');
-    const filePath = desktopSession?.filePath || null;
+    const codexSession = deps.getCodexSessionByThreadIdSafe(threadId, 'mirror subscription sync');
+    const filePath = codexSession?.filePath || null;
     const existing = state.mirrorSubscriptions.get(binding.id);
 
     if (!existing) {
       const created = createMirrorSubscription({
         bindingId: binding.id,
-        sessionId: binding.codepilotSessionId,
+        sessionId: binding.bridgeSessionId,
         channelType: binding.channelType,
         chatId: binding.chatId,
         threadId,
@@ -186,12 +194,12 @@ export function createMirrorRuntime(
       });
       watchMirrorFile(created, filePath);
       state.mirrorSubscriptions.set(binding.id, created);
-      deps.syncMirrorSessionStateSafe(binding.codepilotSessionId, 'mirror subscription create');
+      deps.syncMirrorSessionStateSafe(binding.bridgeSessionId, 'mirror subscription create');
       return;
     }
 
     const { previousSessionId, threadChanged, filePathChanged } = updateMirrorSubscription(existing, {
-      sessionId: binding.codepilotSessionId,
+      sessionId: binding.bridgeSessionId,
       channelType: binding.channelType,
       chatId: binding.chatId,
       threadId,
@@ -202,20 +210,19 @@ export function createMirrorRuntime(
       deps.stopMirrorStreaming(existing);
     }
     watchMirrorFile(existing, filePath);
-    if (previousSessionId !== binding.codepilotSessionId) {
+    if (previousSessionId !== binding.bridgeSessionId) {
       deps.syncMirrorSessionStateSafe(previousSessionId, 'mirror subscription rebind previous session');
     }
-    deps.syncMirrorSessionStateSafe(binding.codepilotSessionId, 'mirror subscription upsert');
+    deps.syncMirrorSessionStateSafe(binding.bridgeSessionId, 'mirror subscription upsert');
   }
 
   function syncMirrorSubscriptionSet(): void {
-    const { store } = getBridgeContext();
     const state = getState();
     const plan = buildMirrorSubscriptionRegistryPlan(
-      store.listChannelBindings(),
+      deps.listChannelBindings(),
       state.adapters.keys(),
       state.mirrorSubscriptions.keys(),
-      (sessionId) => store.getSession(sessionId),
+      deps.getSession,
     );
 
     for (const binding of plan.upsertBindings) {
@@ -235,10 +242,9 @@ export function createMirrorRuntime(
   }
 
   async function reconcileMirrorSubscription(
-    subscription: DesktopMirrorSubscription,
+    subscription: CodexMirrorSubscription,
   ): Promise<MirrorReconcileStatus> {
-    const { store } = getBridgeContext();
-    const session = store.getSession(subscription.sessionId);
+    const session = deps.getSession(subscription.sessionId);
     if (!session) {
       removeMirrorSubscription(subscription.bindingId);
       return 'processed';
@@ -252,17 +258,17 @@ export function createMirrorRuntime(
       subscription.suspendedUntil = null;
     }
 
-    const desktopSession = deps.getDesktopSessionByThreadIdSafe(subscription.threadId, 'mirror reconcile');
-    if (!desktopSession) {
+    const codexSession = deps.getCodexSessionByThreadIdSafe(subscription.threadId, 'mirror reconcile');
+    if (!codexSession) {
       subscription.missingThreadPolls += 1;
       if (subscription.missingThreadPolls >= options.danglingThreadRetryLimit) {
-        clearDanglingMirrorThread(subscription, 'desktop thread no longer exists locally');
+        clearDanglingMirrorThread(subscription, 'Codex thread no longer exists locally');
         return 'processed';
       }
     } else {
       subscription.missingThreadPolls = 0;
     }
-    refreshMirrorSubscriptionSource(subscription, desktopSession?.filePath || null, deps.nowIso());
+    refreshMirrorSubscriptionSource(subscription, codexSession?.filePath || null, deps.nowIso());
     watchMirrorFile(subscription, subscription.filePath);
 
     if (!subscription.filePath) {
@@ -289,11 +295,11 @@ export function createMirrorRuntime(
       if (subscription.unknownMirrorKindsSeen.has(kind)) continue;
       subscription.unknownMirrorKindsSeen.add(kind);
       console.warn(
-        `[bridge-manager] Unhandled desktop mirror event for thread ${subscription.threadId}: ${kind}`,
+        `[bridge-manager] Unhandled Codex mirror event for thread ${subscription.threadId}: ${kind}`,
       );
     }
-    const routeResult = deliverableRecords.length > 0 && deps.routeDesktopRecords
-      ? await deps.routeDesktopRecords(subscription.sessionId, subscription.threadId, deliverableRecords)
+    const routeResult = deliverableRecords.length > 0 && deps.routeCodexRecords
+      ? await deps.routeCodexRecords(subscription.sessionId, subscription.threadId, deliverableRecords)
       : { claimed: [], unclaimed: deliverableRecords, terminalClaimed: false };
     const mirrorRecords = routeResult.unclaimed;
 
@@ -329,7 +335,7 @@ export function createMirrorRuntime(
   }
 
   async function handleMirrorSubscriptionReconcileFailure(
-    subscription: DesktopMirrorSubscription,
+    subscription: CodexMirrorSubscription,
     error: unknown,
   ): Promise<void> {
     try {

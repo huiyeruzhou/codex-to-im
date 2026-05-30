@@ -1116,11 +1116,11 @@ describe('feishu-adapter structured streaming regions', () => {
 
     const result = await adapter.send({
       address: { channelType: 'feishu', chatId: 'chat-1' },
-      text: '最近桌面会话',
+      text: '最近本地 Codex 会话',
       parseMode: 'Markdown',
       replyToMessageId: 'incoming-1',
       richCard: {
-        title: '最近 1 条桌面会话',
+        title: '最近 1 条本地 Codex 会话',
         sections: [],
         updateKey: 'thread-card:global:feishu:chat-1',
         updateTtlMs: null,

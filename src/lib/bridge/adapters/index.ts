@@ -10,4 +10,4 @@
  */
 
 import './feishu-adapter.js';
-import '../../../adapters/weixin-adapter.js';
+import './weixin-adapter.js';

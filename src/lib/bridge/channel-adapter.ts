@@ -189,7 +189,7 @@ export abstract class BaseChannelAdapter {
 
   /**
    * Start a detached streaming UI cycle that is not tied to the current
-   * inbound IM message. Shared desktop-thread mirroring uses this to create
+   * inbound IM message. Shared Codex-thread mirroring uses this to create
    * a standalone streaming card/message in channels that support it.
    */
   onMirrorStreamStart?(_chatId: string, _streamKey?: string): void;

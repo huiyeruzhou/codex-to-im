@@ -7,6 +7,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { loadConfig } from '../config.js';
 import { _testOnly, registerAdapter } from '../lib/bridge/bridge-manager.js';
+import { listAutoTasks } from '../lib/bridge/auto-tasks.js';
 import type { LLMProvider, StreamChatParams } from '../lib/bridge/host.js';
 import {
   initBridgeTestContext,
@@ -14,12 +15,12 @@ import {
   makeBridgeSettings,
   RecordingAdapter,
   resetBridgeTestState,
-  writeDesktopSessionJsonlFixture,
+  writeCodexSessionJsonlFixture,
 } from './test-bridge-utils.js';
 
 interface RecordedLlmCall {
   sessionId: string;
-  sdkSessionId: string;
+  codexThreadId: string;
   prompt: string;
 }
 
@@ -50,7 +51,7 @@ function createRecordingLlm(calls: RecordedLlmCall[]): LLMProvider {
     streamChat(params: StreamChatParams): ReadableStream<string> {
       calls.push({
         sessionId: params.sessionId,
-        sdkSessionId: params.sdkSessionId || '',
+        codexThreadId: params.codexThreadId || '',
         prompt: params.prompt,
       });
       return new ReadableStream({
@@ -71,7 +72,7 @@ function createControlledLlm(calls: ControlledLlmCall[]): LLMProvider {
         start(controller) {
           calls.push({
             sessionId: params.sessionId,
-            sdkSessionId: params.sdkSessionId || '',
+            codexThreadId: params.codexThreadId || '',
             prompt: params.prompt,
             controller,
           });
@@ -87,7 +88,15 @@ function finishControlledCall(call: ControlledLlmCall, responseText: string): vo
   call.controller.close();
 }
 
-function appendDesktopMirrorTurn(filePath: string, params: {
+function writeAutoScript(name: string, body: string): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `cti-auto-${name}-`));
+  const scriptPath = path.join(dir, `${name}.sh`);
+  fs.writeFileSync(scriptPath, body, 'utf-8');
+  fs.chmodSync(scriptPath, 0o755);
+  return scriptPath;
+}
+
+function appendCodexMirrorTurn(filePath: string, params: {
   timestampPrefix: string;
   turnId: string;
   userText: string;
@@ -214,8 +223,8 @@ describe('bridge command e2e', () => {
     assert.ok(binding);
     assert.equal(binding.workingDirectory, workDir);
 
-    store.addMessage(binding.codepilotSessionId, 'user', '端到端用户消息');
-    store.addMessage(binding.codepilotSessionId, 'assistant', '端到端助手回复');
+    store.addMessage(binding.bridgeSessionId, 'user', '端到端用户消息');
+    store.addMessage(binding.bridgeSessionId, 'assistant', '端到端助手回复');
 
     await _testOnly.handleMessage(adapter, inboundMessage(address, '/his limit 12', 'incoming-limit'));
     assert.equal(loadConfig().historyMessageLimit, 12);
@@ -238,6 +247,208 @@ describe('bridge command e2e', () => {
     assert.match(lastText, /端到端助手回复/);
   });
 
+  it('handles /auto skill install and uninstall idempotently', async () => {
+    initBridgeTestContext({ dynamicSettings: true });
+    const adapter = new RecordingAdapter();
+    const address = { channelType: 'feishu', chatId: 'chat-auto-skill-e2e' } as const;
+    const skillDir = path.join(process.env.CODEX_HOME!, 'skills', 'codex-to-im-auto');
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/auto skill install', 'incoming-auto-skill-install'));
+    assert.ok(fs.existsSync(path.join(skillDir, 'SKILL.md')));
+    assert.match(adapter.sent.at(-1)?.text || '', /已安装自动脚本 skill|自动脚本 skill 已存在/);
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/auto skill install', 'incoming-auto-skill-install-again'));
+    assert.match(adapter.sent.at(-1)?.text || '', /自动脚本 skill 已存在/);
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/auto skill uninstall', 'incoming-auto-skill-uninstall'));
+    assert.equal(fs.existsSync(path.join(skillDir, 'SKILL.md')), false);
+    assert.match(adapter.sent.at(-1)?.text || '', /已删除自动脚本 skill/);
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/auto skill uninstall', 'incoming-auto-skill-uninstall-again'));
+    assert.match(adapter.sent.at(-1)?.text || '', /自动脚本 skill 未安装/);
+  });
+
+  it('runs the /auto text command chain from list to create, refresh, remove, and refresh', async () => {
+    initBridgeTestContext({ dynamicSettings: true });
+    const adapter = new RecordingAdapter();
+    const address = { channelType: 'feishu', chatId: 'chat-auto-text-e2e' } as const;
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-auto-text-work-'));
+    const scriptPath = writeAutoScript('slow_text_timer', '#!/usr/bin/env bash\nsleep 30\nprintf "text timer prompt\\n"\n');
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/new ${workDir}`, 'incoming-auto-text-new-session'));
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/auto ls', 'incoming-auto-text-ls-empty'));
+    assert.match(adapter.sent.at(-1)?.text || '', /当前聊天没有自动化任务/);
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/auto new ${scriptPath} 3`, 'incoming-auto-text-new'));
+    assert.match(adapter.sent.at(-1)?.text || '', /已创建自动化任务/);
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/auto ls', 'incoming-auto-text-ls-created'));
+    assert.match(adapter.sent.at(-1)?.text || '', /当前聊天自动化任务/);
+    assert.match(adapter.sent.at(-1)?.text || '', /slow_text_timer/);
+    assert.equal(adapter.sent.at(-1)?.richCard?.template, 'green');
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/auto rm 1', 'incoming-auto-text-rm'));
+    assert.match(adapter.sent.at(-1)?.text || '', /已删除自动化任务/);
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/auto ls', 'incoming-auto-text-ls-removed'));
+    assert.match(adapter.sent.at(-1)?.text || '', /当前聊天没有自动化任务/);
+  });
+
+  it('runs the /auto rich card chain with refresh, set, remove, and refresh callbacks', async () => {
+    initBridgeTestContext({ dynamicSettings: true });
+    const adapter = new RecordingAdapter();
+    const address = { channelType: 'feishu', chatId: 'chat-auto-card-e2e' } as const;
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-auto-card-work-'));
+    const scriptPath = writeAutoScript('slow_card_timer', '#!/usr/bin/env bash\nsleep 30\nprintf "card timer prompt\\n"\n');
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/new ${workDir}`, 'incoming-auto-card-new-session'));
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/auto new ${scriptPath} 2`, 'incoming-auto-card-new'));
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/auto ls', 'incoming-auto-card-ls'));
+
+    const card = adapter.sent.at(-1)?.richCard;
+    assert.ok(card);
+    assert.equal(card.template, 'green');
+    assert.equal(card.title, '当前聊天自动化任务（1）');
+    const selectCallback = card.selects?.[0]?.options?.[0]?.callbackData;
+    const setCallback = card.actions?.[0]?.find((action) => action.text === '设为1次')?.callbackData;
+    const rmCallback = card.actions?.[0]?.find((action) => action.text === '删除')?.callbackData;
+    const refreshCallback = card.actions?.[0]?.find((action) => action.text === '刷新')?.callbackData;
+    assert.ok(selectCallback);
+    assert.ok(setCallback);
+    assert.ok(rmCallback);
+    assert.ok(refreshCallback);
+
+    await _testOnly.handleMessage(adapter, {
+      ...inboundMessage(address, '', 'auto-card-callback-message'),
+      callbackData: selectCallback,
+      callbackMessageId: 'auto-card-message',
+    });
+    await _testOnly.handleMessage(adapter, {
+      ...inboundMessage(address, '', 'auto-card-callback-message'),
+      callbackData: setCallback,
+      callbackMessageId: 'auto-card-message',
+    });
+    assert.match(adapter.sent.at(-1)?.text || '', /已更新自动化任务次数/);
+    assert.match(adapter.sent.at(-1)?.text || '', /总次数.*1/s);
+
+    await _testOnly.handleMessage(adapter, {
+      ...inboundMessage(address, '', 'auto-card-callback-message'),
+      callbackData: rmCallback,
+      callbackMessageId: 'auto-card-message',
+    });
+    assert.match(adapter.sent.at(-1)?.text || '', /已删除自动化任务/);
+
+    await _testOnly.handleMessage(adapter, {
+      ...inboundMessage(address, '', 'auto-card-refresh-message'),
+      callbackData: refreshCallback,
+      callbackMessageId: 'auto-card-message',
+    });
+    assert.match(adapter.sent.at(-1)?.text || '', /当前聊天没有自动化任务/);
+  });
+
+  it('keeps /auto tasks visible across session switches and restarts the original session after set', async () => {
+    const calls: RecordedLlmCall[] = [];
+    const store = initBridgeTestContext({ dynamicSettings: true, llm: createRecordingLlm(calls) });
+    const adapter = new RecordingAdapter();
+    registerAdapter(adapter);
+    const address = { channelType: 'feishu', chatId: 'chat-auto-cross-session-e2e' } as const;
+    const workDirA = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-auto-cross-a-'));
+    const workDirB = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-auto-cross-b-'));
+    const scriptPath = writeAutoScript('instant_cross_session_timer', '#!/usr/bin/env bash\nprintf "old session prompt\\n"\n');
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/new ${workDirA}`, 'incoming-auto-cross-new-a'));
+    const sessionA = store.getChannelBinding(address.channelType, address.chatId)!.bridgeSessionId;
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/auto new ${scriptPath} 1`, 'incoming-auto-cross-auto-new'));
+    await waitForCondition(() => calls.length === 1);
+    assert.equal(calls[0].sessionId, sessionA);
+    assert.equal(calls[0].prompt, 'old session prompt');
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/new ${workDirB}`, 'incoming-auto-cross-new-b'));
+    const sessionB = store.getChannelBinding(address.channelType, address.chatId)!.bridgeSessionId;
+    assert.notEqual(sessionA, sessionB);
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/auto ls', 'incoming-auto-cross-ls-b'));
+    assert.match(adapter.sent.at(-1)?.text || '', /当前聊天自动化任务/);
+    assert.match(adapter.sent.at(-1)?.text || '', /instant_cross_session_timer/);
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/auto set 1 1', 'incoming-auto-cross-set'));
+    await waitForCondition(() => calls.length === 2);
+    assert.equal(calls[1].sessionId, sessionA);
+    assert.equal(calls[1].prompt, 'old session prompt');
+  });
+
+  it('stops /auto task after configured times and set restarts from zero', async () => {
+    const calls: RecordedLlmCall[] = [];
+    const store = initBridgeTestContext({ dynamicSettings: true, llm: createRecordingLlm(calls) });
+    const adapter = new RecordingAdapter();
+    registerAdapter(adapter);
+    const address = { channelType: 'feishu', chatId: 'chat-auto-times-e2e' } as const;
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-auto-times-work-'));
+    const scriptPath = writeAutoScript('instant_times_timer', '#!/usr/bin/env bash\nprintf "times prompt\\n"\n');
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/new ${workDir}`, 'incoming-auto-times-new-session'));
+    const sessionId = store.getChannelBinding(address.channelType, address.chatId)!.bridgeSessionId;
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/auto new ${scriptPath} 2`, 'incoming-auto-times-new'));
+    await waitForCondition(() => calls.length === 2);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(calls.length, 2);
+    assert.deepEqual(calls.map((call) => call.prompt), ['times prompt', 'times prompt']);
+
+    const completedTask = listAutoTasks({ bridgeSessionId: sessionId, includeCompleted: true })[0];
+    assert.equal(completedTask.times, 2);
+    assert.equal(completedTask.triggeredCount, 2);
+    assert.equal(completedTask.status, 'completed');
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/auto set 1 1', 'incoming-auto-times-set'));
+    assert.match(adapter.sent.at(-1)?.text || '', /已更新自动化任务次数/);
+    await waitForCondition(() => calls.length === 3);
+    await waitForCondition(() => {
+      const task = listAutoTasks({ bridgeSessionId: sessionId, includeCompleted: true })[0];
+      return task.triggeredCount === 1 && task.status === 'completed';
+    });
+
+    const resetTask = listAutoTasks({ bridgeSessionId: sessionId, includeCompleted: true })[0];
+    assert.equal(resetTask.times, 1);
+    assert.equal(resetTask.triggeredCount, 1);
+    assert.equal(resetTask.status, 'completed');
+    assert.equal(calls[2].sessionId, sessionId);
+    assert.equal(calls[2].prompt, 'times prompt');
+  });
+
+  it('sets /auto task times to zero when its session binding is removed and allows set after rebinding', async () => {
+    const store = initBridgeTestContext({ dynamicSettings: true });
+    const adapter = new RecordingAdapter();
+    const address = { channelType: 'feishu', chatId: 'chat-auto-unbind-e2e' } as const;
+    const workDirA = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-auto-unbind-a-'));
+    const workDirB = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-auto-unbind-b-'));
+    const scriptPath = writeAutoScript('slow_unbind_timer', '#!/usr/bin/env bash\nsleep 30\nprintf "unbind timer prompt\\n"\n');
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/new ${workDirA}`, 'incoming-auto-unbind-new-a'));
+    const sessionA = store.getChannelBinding(address.channelType, address.chatId)!.bridgeSessionId;
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/auto new ${scriptPath} 3`, 'incoming-auto-unbind-auto-new'));
+    assert.equal(listAutoTasks({ bridgeSessionId: sessionA, includeCompleted: true })[0].times, 3);
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t rm 1', 'incoming-auto-unbind-rm-binding'));
+    const pausedTask = listAutoTasks({ bridgeSessionId: sessionA, includeCompleted: true })[0];
+    assert.equal(pausedTask.times, 0);
+    assert.equal(pausedTask.triggeredCount, 0);
+    assert.equal(pausedTask.status, 'completed');
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/new ${workDirB}`, 'incoming-auto-unbind-new-b'));
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/auto ls', 'incoming-auto-unbind-ls-b'));
+    assert.match(adapter.sent.at(-1)?.text || '', /slow_unbind_timer/);
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/auto set 1 2', 'incoming-auto-unbind-set'));
+    const resetTask = listAutoTasks({ bridgeSessionId: sessionA, includeCompleted: true })[0];
+    assert.equal(resetTask.times, 2);
+    assert.equal(resetTask.triggeredCount, 0);
+    assert.equal(resetTask.status, 'running');
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/auto rm 1', 'incoming-auto-unbind-cleanup'));
+  });
+
   it('routes normal messages to the active binding across a user multi-binding flow', async () => {
     const llmCalls: RecordedLlmCall[] = [];
     const store = initBridgeTestContext({
@@ -257,7 +468,7 @@ describe('bridge command e2e', () => {
 
     await _testOnly.handleMessage(adapter, inboundMessage(address, 'A 的第一条普通消息', 'incoming-a-1'));
     assert.equal(llmCalls.length, 1);
-    assert.equal(llmCalls[0].sessionId, bindingA.codepilotSessionId);
+    assert.equal(llmCalls[0].sessionId, bindingA.bridgeSessionId);
     assert.equal(llmCalls[0].prompt, 'A 的第一条普通消息');
 
     await _testOnly.handleMessage(adapter, inboundMessage(address, `/new ${workDirB}`, 'incoming-new-b'));
@@ -276,7 +487,7 @@ describe('bridge command e2e', () => {
 
     await _testOnly.handleMessage(adapter, inboundMessage(address, 'B 的第一条普通消息', 'incoming-b-1'));
     assert.equal(llmCalls.length, 2);
-    assert.equal(llmCalls[1].sessionId, bindingB.codepilotSessionId);
+    assert.equal(llmCalls[1].sessionId, bindingB.bridgeSessionId);
     assert.equal(llmCalls[1].prompt, 'B 的第一条普通消息');
 
     await _testOnly.handleMessage(adapter, inboundMessage(address, '/t ls', 'incoming-ls'));
@@ -292,7 +503,7 @@ describe('bridge command e2e', () => {
 
     await _testOnly.handleMessage(adapter, inboundMessage(address, '切回 A 后的普通消息', 'incoming-a-2'));
     assert.equal(llmCalls.length, 3);
-    assert.equal(llmCalls[2].sessionId, bindingA.codepilotSessionId);
+    assert.equal(llmCalls[2].sessionId, bindingA.bridgeSessionId);
     assert.equal(llmCalls[2].prompt, '切回 A 后的普通消息');
 
     await _testOnly.handleMessage(adapter, inboundMessage(address, '/t use 2', 'incoming-use-b'));
@@ -300,7 +511,7 @@ describe('bridge command e2e', () => {
 
     await _testOnly.handleMessage(adapter, inboundMessage(address, '再切回 B 后的普通消息', 'incoming-b-2'));
     assert.equal(llmCalls.length, 4);
-    assert.equal(llmCalls[3].sessionId, bindingB.codepilotSessionId);
+    assert.equal(llmCalls[3].sessionId, bindingB.bridgeSessionId);
     assert.equal(llmCalls[3].prompt, '再切回 B 后的普通消息');
 
     await _testOnly.handleMessage(adapter, inboundMessage(address, '/t rm 2', 'incoming-rm-b'));
@@ -309,13 +520,13 @@ describe('bridge command e2e', () => {
     assert.match(adapter.sent.at(-1)?.text || '', /已移除绑定线程/);
   });
 
-  it('applies desktop thread card buttons to the currently selected dropdown option', async () => {
+  it('applies Codex thread card buttons to the currently selected dropdown option', async () => {
     const store = initBridgeTestContext({ dynamicSettings: true });
     const adapter = new RecordingAdapter();
     const address = { channelType: 'feishu', chatId: 'chat-thread-card-actions' } as const;
     const threadId = '33333333-3333-4333-8333-333333333333';
     const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-thread-card-'));
-    writeDesktopSessionJsonlFixture({
+    writeCodexSessionJsonlFixture({
       threadId,
       workDir,
       lines: [{
@@ -353,7 +564,7 @@ describe('bridge command e2e', () => {
 
     const binding = store.getChannelBinding(address.channelType, address.chatId);
     assert.ok(binding);
-    assert.equal(binding.sdkSessionId, threadId);
+    assert.equal(store.getSession(binding.bridgeSessionId)?.codex_thread_id, threadId);
     assert.match(adapter.sent.at(-1)?.text || '', /已添加并激活线程/);
     assert.ok(adapter.sent.at(-1)?.richCard);
     assert.match(adapter.sent.at(-1)?.richCard?.updateKey || '', /^thread-card:global:/);
@@ -368,7 +579,7 @@ describe('bridge command e2e', () => {
     const address = { channelType: 'feishu', chatId: 'chat-thread-title-sync' } as const;
     const threadId = '44444444-4444-4444-8444-444444444444';
     const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-title-sync-'));
-    writeDesktopSessionJsonlFixture({
+    writeCodexSessionJsonlFixture({
       threadId,
       workDir,
       lines: [
@@ -385,7 +596,7 @@ describe('bridge command e2e', () => {
         {
           timestamp: '2026-05-28T00:00:01.000Z',
           type: 'event_msg',
-          payload: { type: 'user_message', message: '原始桌面标题' },
+          payload: { type: 'user_message', message: '原始 Codex 标题' },
         },
       ],
     });
@@ -395,14 +606,23 @@ describe('bridge command e2e', () => {
     await _testOnly.handleMessage(adapter, inboundMessage(address, '/', 'incoming-title-current'));
 
     assert.match(adapter.sent.at(-1)?.text || '', /标题.*统一后的标题/s);
+    assert.match(adapter.sent.at(-1)?.text || '', /name.*统一后的标题/s);
+    assert.match(adapter.sent.at(-1)?.text || '', /codex_title.*原始 Codex 标题/s);
 
     await _testOnly.handleMessage(adapter, inboundMessage(address, '/t', 'incoming-title-list'));
     const listMessage = adapter.sent.at(-1);
     assert.match(listMessage?.text || '', /统一后的标题/);
-    assert.doesNotMatch(listMessage?.text || '', /原始桌面标题/);
+    assert.doesNotMatch(listMessage?.text || '', /原始 Codex 标题/);
     assert.equal(listMessage?.richCard?.table?.rows?.[0]?.title, '**统一后的标题**');
     assert.equal(String(listMessage?.richCard?.table?.rows?.[0]?.title || '').replace(/\*/g, ''), '统一后的标题');
     assert.equal(listMessage?.richCard?.selects?.[0]?.options?.[0]?.text, '1. 统一后的标题');
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t rm 1', 'incoming-title-unbind'));
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t', 'incoming-title-list-unbound'));
+    const unboundListMessage = adapter.sent.at(-1);
+    assert.match(unboundListMessage?.text || '', /统一后的标题/);
+    assert.doesNotMatch(unboundListMessage?.text || '', /原始 Codex 标题/);
+    assert.equal(unboundListMessage?.richCard?.selects?.[0]?.options?.[0]?.text, '1. 统一后的标题');
   });
 
   it('keeps SDK output from an inactive binding alive after /t use switches away', async () => {
@@ -428,7 +648,7 @@ describe('bridge command e2e', () => {
 
     const firstTurn = _testOnly.handleMessage(adapter, inboundMessage(address, 'A 长任务', 'incoming-concurrent-a'));
     await waitForCondition(() => llmCalls.length === 1);
-    assert.equal(llmCalls[0].sessionId, bindingA.codepilotSessionId);
+    assert.equal(llmCalls[0].sessionId, bindingA.bridgeSessionId);
 
     await _testOnly.handleMessage(adapter, inboundMessage(address, '/t use 2', 'incoming-concurrent-use-b'));
     assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, bindingB.id);
@@ -436,7 +656,7 @@ describe('bridge command e2e', () => {
 
     const secondTurn = _testOnly.handleMessage(adapter, inboundMessage(address, 'B 长任务', 'incoming-concurrent-b'));
     await waitForCondition(() => llmCalls.length === 2);
-    assert.equal(llmCalls[1].sessionId, bindingB.codepilotSessionId);
+    assert.equal(llmCalls[1].sessionId, bindingB.bridgeSessionId);
 
     finishControlledCall(llmCalls[0], 'A 完成');
     finishControlledCall(llmCalls[1], 'B 完成');
@@ -448,7 +668,7 @@ describe('bridge command e2e', () => {
     assert.doesNotMatch(sentText, /回复已跳过/);
   });
 
-  it('keeps Feishu mirror output active for multiple bound desktop threads after /t use switches away', async () => {
+  it('keeps Feishu mirror output active for multiple bound Codex threads after /t use switches away', async () => {
     const store = initBridgeTestContext({ dynamicSettings: true });
     const adapter = new RecordingAdapter();
     registerAdapter(adapter);
@@ -459,7 +679,7 @@ describe('bridge command e2e', () => {
     const threadB = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
     const workDirA = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-mirror-a-'));
     const workDirB = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-mirror-b-'));
-    const fixtureA = writeDesktopSessionJsonlFixture({
+    const fixtureA = writeCodexSessionJsonlFixture({
       threadId: threadA,
       workDir: workDirA,
       lines: [{
@@ -473,7 +693,7 @@ describe('bridge command e2e', () => {
         },
       }],
     });
-    const fixtureB = writeDesktopSessionJsonlFixture({
+    const fixtureB = writeCodexSessionJsonlFixture({
       threadId: threadB,
       workDir: workDirB,
       lines: [{
@@ -494,7 +714,7 @@ describe('bridge command e2e', () => {
 
     await _testOnly.handleMessage(adapter, inboundMessage(address, `/t add ${threadB}`, 'incoming-mirror-add-b'));
     const bindingsAfterAdd = store.listChannelBindings().filter((binding) => binding.chatId === address.chatId);
-    const bindingB = bindingsAfterAdd.find((binding) => binding.sdkSessionId === threadB);
+    const bindingB = bindingsAfterAdd.find((binding) => store.getSession(binding.bridgeSessionId)?.codex_thread_id === threadB);
     assert.ok(bindingB);
     assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, bindingA.id);
     assert.equal(bindingB.active, false);
@@ -508,25 +728,25 @@ describe('bridge command e2e', () => {
     await _testOnly.handleMessage(adapter, inboundMessage(address, '/t use 2', 'incoming-mirror-use-b'));
     assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, bindingB.id);
 
-    appendDesktopMirrorTurn(fixtureA.sessionPath, {
+    appendCodexMirrorTurn(fixtureA.sessionPath, {
       timestampPrefix: '2026-05-28T00:01',
       turnId: 'turn-mirror-a',
-      userText: 'A 桌面问题',
+      userText: 'A Codex 问题',
       assistantText: 'A mirror final',
     });
-    appendDesktopMirrorTurn(fixtureB.sessionPath, {
+    appendCodexMirrorTurn(fixtureB.sessionPath, {
       timestampPrefix: '2026-05-28T00:02',
       turnId: 'turn-mirror-b',
-      userText: 'B 桌面问题',
+      userText: 'B Codex 问题',
       assistantText: 'B mirror final',
     });
 
     await _testOnly.reconcileMirrorSubscriptions();
 
     const sentText = adapter.sent.map((message) => message.text).join('\n\n');
-    assert.match(sentText, /A 桌面问题/);
+    assert.match(sentText, /A Codex 问题/);
     assert.match(sentText, /A mirror final/);
-    assert.match(sentText, /B 桌面问题/);
+    assert.match(sentText, /B Codex 问题/);
     assert.match(sentText, /B mirror final/);
   });
 
@@ -553,19 +773,18 @@ describe('bridge command e2e', () => {
       assert.ok(binding);
       const normalThreadId = '019e46bc-f466-71d3-a186-a2ce89051958';
       const normalTmuxSession = `codex-${normalThreadId}`;
-      store.updateSdkSessionId(binding.codepilotSessionId, normalThreadId);
+      store.updateSessionCodexThreadId(binding.bridgeSessionId, normalThreadId);
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/sandbox read-only', 'incoming-runtime-sandbox'));
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/network on', 'incoming-runtime-network'));
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/r high', 'incoming-runtime-reasoning'));
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/provider tmux', 'incoming-runtime-provider'));
 
-      const tmuxSession = store.getSession(binding.codepilotSessionId);
+      const tmuxSession = store.getSession(binding.bridgeSessionId);
       assert.equal(tmuxSession?.codex_provider, 'tmux');
       assert.equal(tmuxSession?.tmux_session_name, normalTmuxSession);
       assert.equal(tmuxSession?.tmux_auto_enter, true);
-      assert.equal(tmuxSession?.desktop_thread_id, normalThreadId);
-      assert.equal(tmuxSession?.thread_origin, 'desktop');
+      assert.equal(tmuxSession?.codex_thread_id, normalThreadId);
 
       const startLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
       assert.match(startLog, new RegExp(`has-session -t ${normalTmuxSession}`));
@@ -608,23 +827,23 @@ describe('bridge command e2e', () => {
       assert.match(adapter.sent.at(-1)?.text || '', /当前是 tmux Provider/);
       assert.match(adapter.sent.at(-1)?.text || '', /先发送 \/provider sdk/);
       assert.notEqual(store.getChannelBinding(address.channelType, address.chatId)?.mode, 'yolo');
-      assert.notEqual(store.getSession(binding.codepilotSessionId)?.preferred_mode, 'yolo');
+      assert.notEqual(store.getSession(binding.bridgeSessionId)?.preferred_mode, 'yolo');
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/net off', 'incoming-runtime-block-network'));
       assert.match(adapter.sent.at(-1)?.text || '', /当前是 tmux Provider/);
       assert.match(adapter.sent.at(-1)?.text || '', /Codex TUI 里使用内置 slash 命令/);
-      assert.equal(store.getSession(binding.codepilotSessionId)?.codex_network_access, true);
+      assert.equal(store.getSession(binding.bridgeSessionId)?.codex_network_access, true);
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/provider sdk', 'incoming-runtime-provider-sdk'));
-      assert.equal(store.getSession(binding.codepilotSessionId)?.codex_provider, 'sdk');
+      assert.equal(store.getSession(binding.bridgeSessionId)?.codex_provider, 'sdk');
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/m yolo', 'incoming-runtime-mode-yolo'));
       assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.mode, 'yolo');
-      assert.equal(store.getSession(binding.codepilotSessionId)?.preferred_mode, 'yolo');
+      assert.equal(store.getSession(binding.bridgeSessionId)?.preferred_mode, 'yolo');
 
       const yoloThreadId = '019e46bc-f466-71d3-a186-a2ce89051959';
       const yoloTmuxSession = `codex-${yoloThreadId}`;
-      store.updateSdkSessionId(binding.codepilotSessionId, yoloThreadId);
+      store.updateSessionCodexThreadId(binding.bridgeSessionId, yoloThreadId);
       const beforeYoloLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/provider tmux', 'incoming-runtime-provider-tmux-yolo'));
       const yoloLog = fs.readFileSync(fakeTmux.logPath, 'utf-8').slice(beforeYoloLog.length);
@@ -642,8 +861,9 @@ describe('bridge command e2e', () => {
       assert.match(statusText, /tmux/);
       assert.match(statusText, /read-only/);
       assert.match(statusText, /enabled/);
-      assert.match(statusText, /当前聊天已绑定到一条共享会话/);
-      assert.doesNotMatch(statusText, /还没有绑定桌面会话/);
+      assert.match(statusText, /当前聊天正在使用 IM 会话/);
+      assert.doesNotMatch(statusText, /当前聊天已绑定到一条共享会话/);
+      assert.doesNotMatch(statusText, /还没有绑定本地 Codex 会话/);
     } finally {
       process.env.PATH = oldPath;
       if (oldFakeLog === undefined) delete process.env.TMUX_FAKE_LOG;
@@ -654,7 +874,7 @@ describe('bridge command e2e', () => {
     }
   });
 
-  it('falls back to bridge cached messages for /his when the session has no desktop JSONL file', async () => {
+  it('falls back to bridge cached messages for /his when the session has no Codex JSONL file', async () => {
     const store = initBridgeTestContext({ dynamicSettings: true });
     const adapter = new RecordingAdapter();
     const address = { channelType: 'feishu', chatId: 'chat-history-raw-e2e' } as const;
@@ -664,8 +884,8 @@ describe('bridge command e2e', () => {
     const binding = store.getChannelBinding(address.channelType, address.chatId);
     assert.ok(binding);
 
-    store.addMessage(binding.codepilotSessionId, 'user', 'Bridge 缓存用户消息');
-    store.addMessage(binding.codepilotSessionId, 'assistant', 'Bridge 缓存助手回复');
+    store.addMessage(binding.bridgeSessionId, 'user', 'Bridge 缓存用户消息');
+    store.addMessage(binding.bridgeSessionId, 'assistant', 'Bridge 缓存助手回复');
 
     await _testOnly.handleMessage(adapter, inboundMessage(address, '/his', 'incoming-history-raw'));
 
@@ -676,13 +896,13 @@ describe('bridge command e2e', () => {
     assert.match(lastText, /Bridge 缓存助手回复/);
   });
 
-  it('prefers desktop JSONL messages over bridge cached messages for /his msg after /t binding', async () => {
+  it('prefers Codex JSONL messages over bridge cached messages for /his msg after /t binding', async () => {
     const store = initBridgeTestContext({ dynamicSettings: true });
     const adapter = new RecordingAdapter();
-    const address = { channelType: 'feishu', chatId: 'chat-history-desktop-msg-e2e' } as const;
+    const address = { channelType: 'feishu', chatId: 'chat-history-codex-msg-e2e' } as const;
     const threadId = '11111111-1111-4111-8111-111111111111';
-    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-desktop-msg-e2e-'));
-    writeDesktopSessionJsonlFixture({
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-codex-msg-e2e-'));
+    writeCodexSessionJsonlFixture({
       threadId,
       workDir,
       lines: [
@@ -699,12 +919,12 @@ describe('bridge command e2e', () => {
         {
           timestamp: '2026-05-28T00:00:01.000Z',
           type: 'event_msg',
-          payload: { type: 'user_message', message: '桌面 JSONL 用户消息' },
+          payload: { type: 'user_message', message: 'Codex JSONL 用户消息' },
         },
         {
           timestamp: '2026-05-28T00:00:02.000Z',
           type: 'event_msg',
-          payload: { type: 'agent_message', message: '桌面 JSONL 助手回复' },
+          payload: { type: 'agent_message', message: 'Codex JSONL 助手回复' },
         },
         {
           timestamp: '2026-05-28T00:00:02.001Z',
@@ -712,7 +932,7 @@ describe('bridge command e2e', () => {
           payload: {
             type: 'message',
             role: 'assistant',
-            content: [{ type: 'output_text', text: '桌面 JSONL 助手回复' }],
+            content: [{ type: 'output_text', text: 'Codex JSONL 助手回复' }],
           },
         },
       ],
@@ -721,26 +941,26 @@ describe('bridge command e2e', () => {
     await _testOnly.handleMessage(adapter, inboundMessage(address, `/t ${threadId}`, 'incoming-thread-msg'));
     const binding = store.getChannelBinding(address.channelType, address.chatId);
     assert.ok(binding);
-    store.addMessage(binding.codepilotSessionId, 'assistant', 'Bridge 缓存不应优先展示');
+    store.addMessage(binding.bridgeSessionId, 'assistant', 'Bridge 缓存不应优先展示');
 
-    await _testOnly.handleMessage(adapter, inboundMessage(address, '/his msg', 'incoming-history-desktop-msg'));
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/his msg', 'incoming-history-codex-msg'));
 
     const lastText = adapter.sent.at(-1)?.text || '';
     assert.match(lastText, /最近对话（msg）/);
     assert.match(lastText, /来源.*Codex session JSONL/s);
-    assert.match(lastText, /桌面 JSONL 用户消息/);
-    assert.match(lastText, /桌面 JSONL 助手回复/);
-    assert.equal((lastText.match(/桌面 JSONL 助手回复/g) || []).length, 1);
+    assert.match(lastText, /Codex JSONL 用户消息/);
+    assert.match(lastText, /Codex JSONL 助手回复/);
+    assert.equal((lastText.match(/Codex JSONL 助手回复/g) || []).length, 1);
     assert.doesNotMatch(lastText, /Bridge 缓存不应优先展示/);
   });
 
-  it('renders task_complete-only final answers from desktop JSONL through /his msg', async () => {
+  it('renders task_complete-only final answers from Codex JSONL through /his msg', async () => {
     initBridgeTestContext({ dynamicSettings: true });
     const adapter = new RecordingAdapter();
     const address = { channelType: 'feishu', chatId: 'chat-history-task-complete-e2e' } as const;
     const threadId = '22222222-2222-4222-8222-222222222222';
     const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-task-complete-e2e-'));
-    writeDesktopSessionJsonlFixture({
+    writeCodexSessionJsonlFixture({
       threadId,
       workDir,
       lines: [
@@ -779,13 +999,13 @@ describe('bridge command e2e', () => {
     assert.match(lastText, /只有 task_complete 里的最终答案/);
   });
 
-  it('sends the original desktop session JSONL file through /his json after /t binding', async () => {
+  it('sends the original Codex session JSONL file through /his json after /t binding', async () => {
     initBridgeTestContext({ dynamicSettings: true });
     const adapter = new RecordingAdapter();
     const address = { channelType: 'feishu', chatId: 'chat-history-json-e2e' } as const;
     const threadId = '0123456789abcdef0123456789abcdef';
-    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-desktop-e2e-'));
-    const { sessionPath, rawJsonl } = writeDesktopSessionJsonlFixture({
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-codex-e2e-'));
+    const { sessionPath, rawJsonl } = writeCodexSessionJsonlFixture({
       threadId,
       workDir,
       lines: [

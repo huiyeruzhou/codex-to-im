@@ -8,7 +8,7 @@ Its main path is not to modify Codex itself, but to:
 
 1. start a local web workbench and bridge on your machine
 2. create and configure one or more channel instances in the workbench
-3. bind desktop Codex sessions to IM chats
+3. bind locally discoverable Codex sessions to IM chats
 4. continue the same conversation, switch threads, and inspect status from IM
 
 ## Project Origin
@@ -18,21 +18,21 @@ The current codebase is a consolidated continuation of two earlier projects:
 - `Claude-to-IM`
 - `Claude-to-IM-skill`
 
-`codex-to-im` continues from those two repositories and has been reworked into a single local package with a unified workbench, bridge, shared-thread workflow, and optional skill integration model.
+`codex-to-im` continues from those two repositories and has been reworked into a single local package with a unified workbench, bridge, shared Codex-thread workflow, and optional skill integration model.
 
 ## Core Capabilities
 
-- Shared desktop threads: bind a thread currently used in Codex Desktop to IM and continue the same conversation there.
+- Shared Codex threads: bind a locally discoverable Codex thread to IM and continue the same conversation there.
 - IM remote control: inspect current status, switch threads, create threads, change mode, change reasoning effort, switch model, stop the current task, and inspect history from IM.
 - Local web workbench: central place for configuration, channel login, logs, session management, and binding management.
-- Feishu streaming cards: Feishu can show streaming shared-thread responses and tool progress updates.
+- Feishu streaming cards: Feishu can show streaming shared Codex-thread responses and tool progress updates.
 - Attachment send-back: send local images or files back to Feishu; if you want Codex to actively use that capability, install the bundled `codex-to-im` skill.
 - Local-first: services, config, logs, and the bridge all run on the local machine; LAN access to the web console is optional.
 
 ## Supported Channels
 
-- Feishu: supports multiple bot instances, connectivity testing, shared threads, streaming cards, image sending, and file sending.
-- Weixin: supports multiple instances, QR login, shared threads, and text feedback.
+- Feishu: supports multiple bot instances, connectivity testing, shared Codex threads, streaming cards, image sending, and file sending.
+- Weixin: supports multiple instances, QR login, shared Codex threads, and text feedback.
 
 Each channel instance can have its own alias, for example:
 
@@ -51,7 +51,7 @@ These aliases only distinguish different chat entry points. They do not change C
 
 Any of the following is sufficient:
 
-- a logged-in Codex Desktop App
+- a logged-in local Codex client
 - a logged-in Codex CLI
 - `CTI_CODEX_API_KEY`, `CODEX_API_KEY`, or `OPENAI_API_KEY`
 
@@ -127,7 +127,7 @@ Notes:
 
 ## Typical Workflows
 
-### 1. Take over a desktop thread
+### 1. Take over a local Codex thread
 
 After creating a Feishu or Weixin channel instance in the web workbench, start the bridge.
 Then send:
@@ -136,13 +136,13 @@ Then send:
 /t
 ```
 
-to list the latest 10 desktop threads. Send:
+to list the latest 10 local Codex threads. Send:
 
 ```text
 /t all
 ```
 
-to list up to 200 desktop threads. Then use:
+to list up to 200 local Codex threads. Then use:
 
 ```text
 /t 1
@@ -153,7 +153,7 @@ to switch to the selected thread.
 ### 2. Continue from IM
 
 Once the binding is established, send normal messages to continue the current thread.
-If the same shared thread is also used on desktop, its output is mirrored back to IM.
+If the same shared thread is also used from Codex Native, CLI, or TUI, its output is mirrored back to IM.
 
 ### 3. Create a new IM thread
 
@@ -177,16 +177,16 @@ You can also specify a directory explicitly:
 - `/status`: inspect global status, including channels, Bridge/UI processes and PIDs, bindings, and session counts.
 - `/check`: inspect session health; use `/check all` for active sessions.
 - `//...`: send text that starts with `/` to the model, for example `//status` is sent as `/status`.
-- `/t`: list the latest 10 desktop threads.
-- `/t all`: list up to 200 desktop threads.
-- `/t n 100`: list the latest 100 desktop threads, capped at 200.
-- `/t 1`: switch to desktop thread 1.
+- `/t`: list the latest 10 local Codex threads.
+- `/t all`: list up to 200 local Codex threads.
+- `/t n 100`: list the latest 100 local Codex threads, capped at 200.
+- `/t 1`: switch to local Codex thread 1.
 - `/t ls`: list threads bound to the current chat; `*` marks the active thread.
-- `/t add <index|thread-id|name>`: add a desktop thread to the current chat without necessarily activating it.
+- `/t add <index|thread-id|name>`: add a local Codex thread to the current chat without necessarily activating it.
 - `/t use <index|thread-id|binding-id|name>`: activate one of the current chat's bound threads.
 - `/t rm <index|thread-id|binding-id|name>`: remove a specific bound thread from the current chat.
 - `/t rename <name>`: rename the current thread; names cannot be pure numbers or look like thread/binding IDs.
-- Index scope: `/t 1` and `/t add 1` use the global desktop-thread list from `/t`; `/t use 1` and `/t rm 1` use the current chat's local binding list from `/t ls`.
+- Index scope: `/t 1` and `/t add 1` use the global local-Codex-thread list from `/t`; `/t use 1` and `/t rm 1` use the current chat's local binding list from `/t ls`.
 - `/t 0`: switch to the temporary thread for the current chat.
 - `/new`: create a new thread under the current formal session directory.
 - `/new <path or project name>`: create a new thread under the specified directory.
@@ -228,12 +228,13 @@ The compatibility `config.env` file is still kept as a snapshot and fallback for
 
 ## Current Boundaries
 
-- Threads created with `/new` are only guaranteed to continue inside IM; they are not guaranteed to automatically appear in the Codex Desktop thread list.
+- Threads created with `/new` are only guaranteed to continue inside IM; they are not guaranteed to automatically appear in the local Codex session list.
 - One session can only be bound to one chat at a time, and that exclusivity also applies across Feishu and Weixin.
 - Feishu attachments currently support images and files; videos are currently sent as files and are not guaranteed to render with native preview.
-- `/t` shows only the latest 10 desktop threads by default; `/t all` is capped at 200, and `/t n 100` is also capped at 200.
+- `/t` shows only the latest 10 local Codex threads by default; `/t all` is capped at 200, and `/t n 100` is also capped at 200.
 
 ## More Docs
 
+- Current architecture: [docs/current-architecture.md](docs/current-architecture.md)
 - Windows installation guide: [docs/install-windows.md](docs/install-windows.md)
 - Chinese version: [README.md](README.md)

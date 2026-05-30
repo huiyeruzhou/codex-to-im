@@ -29,7 +29,7 @@ async function build(entryPoint, outfile) {
 }
 
 await build('src/main.ts', 'dist/daemon.mjs');
-await build('src/ui-server.ts', 'dist/ui-server.mjs');
+await build('src/ui/server.ts', 'dist/ui-server.mjs');
 await build('src/cli.ts', 'dist/cli.mjs');
 
 console.log('Built dist/daemon.mjs, dist/ui-server.mjs, dist/cli.mjs');

@@ -1,5 +1,5 @@
 import type { BridgeSession, BridgeStore } from './host.js';
-import type { InteractiveTaskState } from './interactive-message-runner.js';
+import type { InteractiveTaskState } from './interactive-turn/runner.js';
 
 export interface BridgeInteractiveRuntimeState {
   activeTasks: Map<string, InteractiveTaskState>;

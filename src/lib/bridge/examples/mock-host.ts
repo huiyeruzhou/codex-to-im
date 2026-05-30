@@ -17,7 +17,12 @@
 
 import { initBridgeContext } from '../context.js';
 import * as router from '../channel-router.js';
-import * as engine from '../conversation-engine.js';
+import * as engine from '../interactive-turn/sdk-conversation-engine.js';
+import { consumeSseEvents } from '../sse-stream-decoder.js';
+import {
+  normalizeReasoningEffort,
+  normalizeSandboxMode,
+} from '../../../runtime-options.js';
 import type {
   BridgeStore,
   LLMProvider,
@@ -47,14 +52,11 @@ class InMemoryStore implements BridgeStore {
     )) ?? null;
   }
 
-  upsertChannelBinding(data: { channelType: string; chatId: string; codepilotSessionId: string; sdkSessionId?: string; workingDirectory: string; model: string; mode?: string; active?: boolean }) {
+  upsertChannelBinding(data: { channelType: string; chatId: string; bridgeSessionId: string; workingDirectory: string; model: string; mode?: string; active?: boolean }) {
     const existing = Array.from(this.bindings.values()).find((binding) => (
       binding.channelType === data.channelType
       && binding.chatId === data.chatId
-      && (
-        binding.codepilotSessionId === data.codepilotSessionId
-        || Boolean(data.sdkSessionId && binding.sdkSessionId === data.sdkSessionId)
-      )
+      && binding.bridgeSessionId === data.bridgeSessionId
     ));
     const id = existing?.id || `binding-${this.nextId++}`;
     const shouldActivate = data.active !== false;
@@ -62,8 +64,7 @@ class InMemoryStore implements BridgeStore {
       id,
       channelType: data.channelType,
       chatId: data.chatId,
-      codepilotSessionId: data.codepilotSessionId,
-      sdkSessionId: data.sdkSessionId ?? existing?.sdkSessionId ?? '',
+      bridgeSessionId: data.bridgeSessionId,
       workingDirectory: data.workingDirectory ?? existing?.workingDirectory ?? '',
       model: data.model ?? existing?.model ?? '',
       mode: (data.mode as ChannelBinding['mode']) ?? existing?.mode ?? 'code',
@@ -110,14 +111,14 @@ class InMemoryStore implements BridgeStore {
 
   listChannelBindings(_channelType?: ChannelType) { return Array.from(this.bindings.values()); }
   getChannelDefaultTarget(channelType: string) { return this.channelDefaultTargets.get(channelType) ?? null; }
-  upsertChannelDefaultTarget(data: { channelType: string; channelProvider?: string; channelAlias?: string; targetKey: string }) {
+  upsertChannelDefaultTarget(data: { channelType: string; channelProvider?: string; channelAlias?: string; bridgeSessionId: string }) {
     const existing = this.channelDefaultTargets.get(data.channelType);
     const target: ChannelDefaultTarget = {
       id: existing?.id || `channel-default-${this.nextId++}`,
       channelType: data.channelType,
       channelProvider: data.channelProvider ?? existing?.channelProvider,
       channelAlias: data.channelAlias ?? existing?.channelAlias,
-      targetKey: data.targetKey,
+      bridgeSessionId: data.bridgeSessionId,
       createdAt: existing?.createdAt ?? new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -131,11 +132,9 @@ class InMemoryStore implements BridgeStore {
 
   listSessions() { return Array.from(this.sessions.values()); }
 
-  findSessionBySdkSessionId(sdkSessionId: string) {
+  findSessionByCodexThreadId(codexThreadId: string) {
     return Array.from(this.sessions.values()).find((session) => (
-      session.sdk_session_id === sdkSessionId
-      || session.codex_thread_id === sdkSessionId
-      || session.desktop_thread_id === sdkSessionId
+      session.codex_thread_id === codexThreadId
     )) ?? null;
   }
 
@@ -187,7 +186,7 @@ class InMemoryStore implements BridgeStore {
     this.sessions.delete(sessionId);
     this.messages.delete(sessionId);
     for (const [key, binding] of this.bindings) {
-      if (binding.codepilotSessionId === sessionId) {
+      if (binding.bridgeSessionId === sessionId) {
         this.bindings.delete(key);
       }
     }
@@ -202,12 +201,10 @@ class InMemoryStore implements BridgeStore {
   renewSessionLock() {}
   releaseSessionLock() {}
   setSessionRuntimeStatus() {}
-  updateSdkSessionId(sessionId: string, sdkSessionId: string) {
+  updateSessionCodexThreadId(sessionId: string, codexThreadId: string) {
     const session = this.sessions.get(sessionId);
     if (session) {
-      session.sdk_session_id = sdkSessionId;
-      session.codex_thread_id = sdkSessionId || undefined;
-      session.thread_origin = session.thread_origin || (sdkSessionId ? 'bridge' : undefined);
+      session.codex_thread_id = codexThreadId || undefined;
     }
   }
   updateSessionModel() {}
@@ -253,9 +250,11 @@ async function main() {
   console.log('=== Codex-to-IM Bridge Mock Host Example ===\n');
 
   // 1. Initialize context
+  const store = new InMemoryStore();
+  const llm = new EchoLLM();
   initBridgeContext({
-    store: new InMemoryStore(),
-    llm: new EchoLLM(),
+    store,
+    llm,
     permissions: { resolvePendingPermission: () => true },
     lifecycle: {
       onBridgeStart: () => console.log('[lifecycle] Bridge started'),
@@ -268,12 +267,31 @@ async function main() {
 
   console.log('Resolving channel binding...');
   const binding = router.resolve(address);
-  console.log(`  Session: ${binding.codepilotSessionId}`);
+  console.log(`  Session: ${binding.bridgeSessionId}`);
   console.log(`  CWD: ${binding.workingDirectory}\n`);
 
   // 3. Process message through conversation engine
   console.log('Processing message: "Hello, Codex!"');
-  const result = await engine.processMessage(binding, 'Hello, Codex!');
+  const result = await engine.processMessage(
+    binding,
+    'Hello, Codex!',
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    {
+      store,
+      llm,
+      consumeSseEvents,
+      normalizeSandboxMode,
+      normalizeReasoningEffort,
+    },
+  );
 
   console.log(`\nResult:`);
   console.log(`  Response: "${result.responseText}"`);

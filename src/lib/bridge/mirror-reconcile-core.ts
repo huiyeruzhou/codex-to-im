@@ -1,15 +1,17 @@
 import fs from 'node:fs';
 
 import {
-  advanceDesktopMirrorCursor,
+  advanceCodexMirrorCursor,
   filterDuplicateAssistantEvents,
-  reconcileDesktopMirrorCursor,
-} from '../../desktop-session-mirror.js';
-import { readDesktopSessionMirrorRecordDeltaByFilePath } from '../../desktop-sessions.js';
-import type { DesktopMirrorRecord } from '../../desktop-sessions.js';
+  reconcileCodexMirrorCursor,
+} from '../../codex/session-mirror.js';
+import {
+  readCodexSessionMirrorRecordDeltaByFilePath,
+  type CodexMirrorRecord,
+} from '../../codex/session-index.js';
 import {
   resetMirrorReadState,
-  type DesktopMirrorSubscription,
+  type CodexMirrorSubscription,
   type MirrorFileSnapshot,
 } from './mirror-subscription-state.js';
 
@@ -28,7 +30,7 @@ export function statMirrorFile(filePath: string): MirrorFileSnapshot | null {
 }
 
 export function refreshMirrorSubscriptionSource(
-  subscription: DesktopMirrorSubscription,
+  subscription: CodexMirrorSubscription,
   filePath: string | null,
   reconciledAt: string,
 ): boolean {
@@ -43,14 +45,14 @@ export function refreshMirrorSubscriptionSource(
   return filePathChanged;
 }
 
-export function markMirrorSnapshotMissing(subscription: DesktopMirrorSubscription): void {
+export function markMirrorSnapshotMissing(subscription: CodexMirrorSubscription): void {
   subscription.status = 'stale';
   subscription.dirty = true;
   resetMirrorReadState(subscription);
 }
 
 export function isMirrorSnapshotUnchanged(
-  subscription: DesktopMirrorSubscription,
+  subscription: CodexMirrorSubscription,
   snapshot: MirrorFileSnapshot,
 ): boolean {
   return !subscription.dirty
@@ -60,10 +62,10 @@ export function isMirrorSnapshotUnchanged(
 }
 
 export function readMirrorDeliverableRecords(
-  subscription: DesktopMirrorSubscription,
+  subscription: CodexMirrorSubscription,
   snapshot: MirrorFileSnapshot,
 ) {
-  let deliverableRecords: DesktopMirrorRecord[] = [];
+  let deliverableRecords: CodexMirrorRecord[] = [];
   let unknownKinds: string[] = [];
 
   const requiresFullRecover = !subscription.cursor.initialized
@@ -79,7 +81,7 @@ export function readMirrorDeliverableRecords(
 
   if (requiresFullRecover) {
     const previousCursor = subscription.cursor;
-    const fullDelta = readDesktopSessionMirrorRecordDeltaByFilePath(
+    const fullDelta = readCodexSessionMirrorRecordDeltaByFilePath(
       subscription.filePath!,
       0,
       snapshot.size,
@@ -87,7 +89,7 @@ export function readMirrorDeliverableRecords(
       null,
       [],
     );
-    const delta = reconcileDesktopMirrorCursor(subscription.cursor, fullDelta.records);
+    const delta = reconcileCodexMirrorCursor(subscription.cursor, fullDelta.records);
     subscription.cursor = delta.nextCursor;
     deliverableRecords = filterDuplicateAssistantEvents(previousCursor, delta.deliverableRecords);
     subscription.trailingText = '';
@@ -97,7 +99,7 @@ export function readMirrorDeliverableRecords(
     unknownKinds = fullDelta.unknownKinds;
   } else if (snapshot.size > subscription.fileOffset || subscription.trailingText) {
     const previousCursor = subscription.cursor;
-    const delta = readDesktopSessionMirrorRecordDeltaByFilePath(
+    const delta = readCodexSessionMirrorRecordDeltaByFilePath(
       subscription.filePath!,
       subscription.fileOffset,
       snapshot.size,
@@ -106,7 +108,7 @@ export function readMirrorDeliverableRecords(
       subscription.activeSpecialCallIds,
     );
     deliverableRecords = filterDuplicateAssistantEvents(previousCursor, delta.records);
-    subscription.cursor = advanceDesktopMirrorCursor(subscription.cursor, delta.records);
+    subscription.cursor = advanceCodexMirrorCursor(subscription.cursor, delta.records);
     subscription.trailingText = delta.trailingText;
     subscription.fileOffset = delta.nextOffset;
     subscription.activeMirrorTurnId = delta.nextTurnId;

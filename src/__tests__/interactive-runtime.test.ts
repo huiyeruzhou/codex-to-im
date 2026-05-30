@@ -172,7 +172,7 @@ describe('interactive-runtime', () => {
 
     store.updateSession(session.id, {
       health_status: 'completed',
-      health_reason: '检测到桌面线程已完成当前任务。',
+      health_reason: '检测到Codex thread已完成当前任务。',
       last_runtime_update_at: '2026-04-20T15:05:00.000Z',
     });
 

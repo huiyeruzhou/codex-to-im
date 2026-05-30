@@ -1,16 +1,16 @@
 import type { FSWatcher } from 'node:fs';
-import type { DesktopMirrorCursor } from '../../desktop-session-mirror.js';
-import type { DesktopMirrorRecord } from '../../desktop-sessions.js';
-import type { DesktopMirrorTurnState, FinalizedDesktopMirrorTurn } from './mirror-turns.js';
+import type { CodexMirrorCursor } from '../../codex/session-mirror.js';
+import type { CodexMirrorRecord } from '../../codex/session-index.js';
+import type { CodexMirrorTurnState, FinalizedCodexMirrorTurn } from './mirror-turns.js';
 
-export interface DesktopMirrorSubscription {
+export interface CodexMirrorSubscription {
   bindingId: string;
   sessionId: string;
   channelType: string;
   chatId: string;
   threadId: string;
   filePath: string | null;
-  cursor: DesktopMirrorCursor;
+  cursor: CodexMirrorCursor;
   dirty: boolean;
   status: 'inactive' | 'watching' | 'stale';
   watcher: FSWatcher | null;
@@ -24,9 +24,9 @@ export interface DesktopMirrorSubscription {
   trailingText: string;
   activeMirrorTurnId: string | null;
   activeSpecialCallIds: Set<string>;
-  bufferedRecords: DesktopMirrorRecord[];
-  pendingTurn: DesktopMirrorTurnState | null;
-  pendingDeliveries: FinalizedDesktopMirrorTurn[];
+  bufferedRecords: CodexMirrorRecord[];
+  pendingTurn: CodexMirrorTurnState | null;
+  pendingDeliveries: FinalizedCodexMirrorTurn[];
   unknownMirrorKindsSeen: Set<string>;
   missingThreadPolls: number;
   consecutiveFailures: number;
@@ -64,7 +64,7 @@ export interface UpdateMirrorSubscriptionResult {
   filePathChanged: boolean;
 }
 
-export function resetMirrorReadState(subscription: DesktopMirrorSubscription): void {
+export function resetMirrorReadState(subscription: CodexMirrorSubscription): void {
   subscription.fileOffset = 0;
   subscription.fileSize = null;
   subscription.fileMtimeMs = null;
@@ -77,7 +77,7 @@ export function resetMirrorReadState(subscription: DesktopMirrorSubscription): v
 
 export function createMirrorSubscription(
   input: CreateMirrorSubscriptionInput,
-): DesktopMirrorSubscription {
+): CodexMirrorSubscription {
   return {
     bindingId: input.bindingId,
     sessionId: input.sessionId,
@@ -110,7 +110,7 @@ export function createMirrorSubscription(
 }
 
 function resetMirrorSubscriptionForThreadChange(
-  subscription: DesktopMirrorSubscription,
+  subscription: CodexMirrorSubscription,
   lastDeliveredAt: string | null,
 ): void {
   subscription.cursor = { initialized: false, lastEventCount: 0 };
@@ -126,7 +126,7 @@ function resetMirrorSubscriptionForThreadChange(
 }
 
 function resetMirrorSubscriptionForFilePathChange(
-  subscription: DesktopMirrorSubscription,
+  subscription: CodexMirrorSubscription,
 ): void {
   subscription.dirty = true;
   subscription.pendingTurn = null;
@@ -136,7 +136,7 @@ function resetMirrorSubscriptionForFilePathChange(
 }
 
 export function updateMirrorSubscription(
-  subscription: DesktopMirrorSubscription,
+  subscription: CodexMirrorSubscription,
   input: UpdateMirrorSubscriptionInput,
 ): UpdateMirrorSubscriptionResult {
   const previousSessionId = subscription.sessionId;
@@ -163,13 +163,13 @@ export function updateMirrorSubscription(
   };
 }
 
-export function clearMirrorSubscriptionFailure(subscription: DesktopMirrorSubscription): void {
+export function clearMirrorSubscriptionFailure(subscription: CodexMirrorSubscription): void {
   subscription.consecutiveFailures = 0;
   subscription.suspendedUntil = null;
 }
 
 export function recordMirrorSubscriptionFailure(
-  subscription: DesktopMirrorSubscription,
+  subscription: CodexMirrorSubscription,
   suspendThreshold: number,
   suspendMs: number,
   nowMs = Date.now(),
