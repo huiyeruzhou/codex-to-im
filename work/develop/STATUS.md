@@ -77,13 +77,17 @@
   - `unset NODE_OPTIONS; source ~/.nvm/nvm.sh && nvm use 24 && node --test --import tsx --test-timeout=15000 src/__tests__/session-display-query.test.ts src/__tests__/command-dispatch.test.ts src/__tests__/bridge-command-e2e.test.ts`：通过，39 tests。
   - 追加断言后重跑 `unset NODE_OPTIONS; source ~/.nvm/nvm.sh && nvm use 24 && node --test --import tsx --test-timeout=15000 src/__tests__/command-dispatch.test.ts`：通过，20 tests。
   - `unset NODE_OPTIONS; source ~/.nvm/nvm.sh && nvm use 24 && npm run typecheck`：通过。
+  - 补充 `/t rm` 不删除 BridgeSession 的断言后重跑 `unset NODE_OPTIONS; source ~/.nvm/nvm.sh && nvm use 24 && node --test --import tsx --test-timeout=15000 src/__tests__/command-dispatch.test.ts`：通过，20 tests。
+  - `unset NODE_OPTIONS; source ~/.nvm/nvm.sh && nvm use 24 && npm test`：通过，499 tests。
 - 当前进入阶段审计：
   - `/auto` 失败审计完成：运行态直接错误是 tmux provider 在 tmux 2.8 上使用 `new-session -e`，与 auto script 本身无关；该修复已单独归为 `/tmux` 组。
   - `/t` 组完成：bridge session 在 session 列表展示中优先于 Codex 原始线程；`/t use`/`/t rm` 的目标解析顺序调整为序号 > binding_id/bridge_session_id > codex_thread_id > name；Codex 删除/归档仍按用户纠偏保留“删除关联 bridge session”的既有行为。
+  - `/current` 审计：`handleCurrentCommand` 已明确输出 `name`、`codex_title`、`codex-thread-id`，标题通过 thread display 统一解析；现有 e2e `keeps renamed thread titles identical in /current and /t dropdown surfaces` 随完整测试通过。
   - `/auto` 组完成：`/auto ls` 卡片具备稳定 updateKey、持久 message 记录和 pin 路径；auto scripts 限制在 Codex home 下；skill 文档明确了脚本目录和 `/auto new` 参数。
   - `/tmux` 组完成：tmux provider 不再向 `tmux new-session` 传 `-e`，改为在 tmux session command 中使用 `env ... codex ...` 形式，兼容本机 `tmux 2.8`。
 - 阶段提交：
   - `/t` 组：`5d83612 Keep bridge sessions primary in thread lists`
+  - `/t` 组 follow-up：`Verify thread unbind preserves sessions`（提交哈希以 `git log --oneline` 为准）
   - `/auto` 组：`b4c7f08 Persist auto task cards and constrain scripts`
   - `/tmux` 组：`348a8f5 Avoid tmux new-session env flags`
 - 下一个阶段计划：

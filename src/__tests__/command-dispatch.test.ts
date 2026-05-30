@@ -666,6 +666,7 @@ describe('command-dispatch', () => {
     );
     const remaining = store.listChannelBindings().filter((binding) => binding.chatId === address.chatId);
     assert.deepEqual(remaining.map((binding) => binding.id), [first.id]);
+    assert.ok(store.getSession(second.bridgeSessionId));
     assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, first.id);
     assert.match(sent.at(-1) || '', /已移除绑定线程/);
     assert.equal(richCards.length, 2);
