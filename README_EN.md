@@ -202,10 +202,11 @@ You can also specify a directory explicitly:
 - `/ui`: inspect UI display settings; `/ui on|off` toggles whether SDK tool input/output details are shown.
 - `/model`: inspect the current model and available models.
 - `/model <model name>`: change the model for the current IM session.
-- `/history` or `/his`: inspect recent raw messages for the current thread.
-- `/his msg`: render recent messages as a card.
+- `/history` or `/his [N]`: render recent messages for the current thread as a card.
+- `/his msg [N]`: render recent messages as a card, optionally overriding the count for this request.
+- `/his raw [N]`: inspect recent parsed-text messages for the current thread, optionally overriding the count for this request.
 - `/his json`: send the original Codex session JSONL file directly, without repackaging or post-processing.
-- `/his limit <1-20>`: change the `/his msg` message limit.
+- `/his limit <1-20>`: change the default `/his` / `/his msg` message limit.
 - `/stop`: stop the current task.
 
 ## Key Settings

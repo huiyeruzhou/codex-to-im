@@ -59,6 +59,23 @@ function parseHistoryLimitArg(raw: string): number | null {
   return parsed;
 }
 
+function buildHistoryUsage(): string {
+  return [
+    '用法：/his [msg|raw] [1-20] | /his json | /his limit <1-20>',
+    '示例：',
+    '- /his',
+    '- /his 5',
+    '- /his msg 12',
+    '- /his raw 5',
+    '- /his json',
+    '- /his limit 12',
+  ].join('\n');
+}
+
+function formatHistoryLimitLabel(limit: number, configuredLimit: number): string {
+  return limit === configuredLimit ? `配置 ${configuredLimit}` : `本次 ${limit}（配置 ${configuredLimit}）`;
+}
+
 function resolveHistorySessionFile(
   session: BridgeSession | null,
   binding: ChannelBinding,
@@ -94,6 +111,7 @@ function buildHistoryMessagesText(
     title: string;
     source: string;
     limit: number;
+    configuredLimit: number;
     markdown: boolean;
   },
 ): string {
@@ -102,9 +120,9 @@ function buildHistoryMessagesText(
     [
       ['标题', options.title],
       ['来源', options.source],
-      ['返回条数', `${messages.length} / 配置 ${options.limit}`],
+      ['返回条数', `${messages.length} / ${formatHistoryLimitLabel(options.limit, options.configuredLimit)}`],
     ],
-    ['`/his raw` 查看解析后的纯文本视图；`/his json` 直接发送原始 session JSONL 文件；`/his limit 12` 修改返回条数。'],
+    ['`/his raw 5` 查看指定条数的解析文本；`/his json` 直接发送原始 session JSONL 文件；`/his limit 12` 修改默认返回条数。'],
     options.markdown,
   );
 
@@ -126,11 +144,12 @@ function buildHistoryMessagesRichCard(
     title: string;
     source: string;
     limit: number;
+    configuredLimit: number;
   },
 ): OutboundRichCard {
   return {
     title: '最近对话',
-    subtitle: '`/his raw` 查看解析文本；`/his json` 发送原始 session JSONL；`/his limit 12` 修改返回条数。',
+    subtitle: '`/his raw 5` 查看指定条数的解析文本；`/his json` 发送原始 session JSONL；`/his limit 12` 修改默认返回条数。',
     template: 'blue',
     sections: [
       {
@@ -138,7 +157,7 @@ function buildHistoryMessagesRichCard(
         fields: [
           ['标题', options.title],
           ['来源', options.source],
-          ['返回条数', `${messages.length} / 配置 ${options.limit}`],
+          ['返回条数', `${messages.length} / ${formatHistoryLimitLabel(options.limit, options.configuredLimit)}`],
         ],
       },
       ...messages.map((message, index) => ({
@@ -275,6 +294,7 @@ export async function handleHistoryCommand(options: {
 }): Promise<string> {
   const historyParts = options.args.trim().split(/\s+/).filter(Boolean);
   const historyArg = (historyParts[0] || '').toLowerCase();
+
   if (historyArg === 'limit' || historyArg === 'n') {
     const nextLimit = parseHistoryLimitArg(historyParts[1] || '');
     if (!nextLimit || historyParts.length > 2) {
@@ -293,27 +313,38 @@ export async function handleHistoryCommand(options: {
     }
   }
 
+  const configuredLimit = getHistoryMessageLimit();
+  let historyView: 'msg' | 'raw' | 'json' | 'file' = 'msg';
+  let limit = configuredLimit;
+
+  if (!historyArg) {
+    historyView = 'msg';
+  } else if (historyArg === 'msg' || historyArg === 'raw') {
+    historyView = historyArg;
+    if (historyParts.length > 2) return buildHistoryUsage();
+    if (historyParts[1]) {
+      const temporaryLimit = parseHistoryLimitArg(historyParts[1]);
+      if (!temporaryLimit) return buildHistoryUsage();
+      limit = temporaryLimit;
+    }
+  } else if (historyArg === 'json' || historyArg === 'file') {
+    if (historyParts.length > 1) return buildHistoryUsage();
+    historyView = historyArg;
+  } else {
+    const shorthandLimit = parseHistoryLimitArg(historyArg);
+    if (!shorthandLimit || historyParts.length > 1) return buildHistoryUsage();
+    historyView = 'msg';
+    limit = shorthandLimit;
+  }
+
   if (!options.binding) {
     return '当前聊天还没有绑定会话。先发送消息创建会话，或先用 `/t 1` 接管本地 Codex 会话。';
   }
 
-  if (historyArg && historyArg !== 'msg' && historyArg !== 'raw' && historyArg !== 'json' && historyArg !== 'file') {
-    return [
-      '用法：/his [msg|raw|json|limit <1-20>]',
-      '示例：',
-      '- /his msg',
-      '- /his',
-      '- /his raw',
-      '- /his json',
-      '- /his limit 12',
-    ].join('\n');
-  }
-
-  const limit = getHistoryMessageLimit();
   const session = options.store.getSession(options.binding.bridgeSessionId);
   const sessionFile = resolveHistorySessionFile(session, options.binding);
 
-  if (historyArg === 'json' || historyArg === 'file') {
+  if (historyView === 'json' || historyView === 'file') {
     if (!sessionFile) {
       return '当前会话没有可直接发送的 Codex session JSONL 文件。只有已落盘到 Codex session 文件的线程才能使用 `/his json`。';
     }
@@ -344,16 +375,18 @@ export async function handleHistoryCommand(options: {
   const threadTitle = options.threadDisplay.binding(options.binding).title;
   const messageSource = codexMessages.length > 0 ? 'Codex session JSONL' : 'Bridge 缓存';
 
-  if (historyArg === 'msg') {
+  if (historyView === 'msg') {
     options.richCard?.(buildHistoryMessagesRichCard(messages, {
       title: threadTitle,
       source: messageSource,
       limit,
+      configuredLimit,
     }));
     return buildHistoryMessagesText(messages, {
       title: threadTitle,
       source: messageSource,
       limit,
+      configuredLimit,
       markdown: options.markdown,
     });
   }
@@ -363,11 +396,9 @@ export async function handleHistoryCommand(options: {
     [
       ['标题', threadTitle],
       ['来源', messageSource],
-      ['返回条数', `${messages.length} / 配置 ${limit}`],
+      ['返回条数', `${messages.length} / ${formatHistoryLimitLabel(limit, configuredLimit)}`],
     ],
-    historyArg === 'raw'
-      ? []
-      : ['`/his msg` 查看卡片版消息；`/his raw` 查看解析后的纯文本视图；`/his json` 直接发送原始 session JSONL 文件；`/his limit 12` 修改返回条数。'],
+    [],
     options.markdown,
   );
   const body = messages.map((message, index) => {

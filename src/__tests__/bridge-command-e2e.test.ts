@@ -254,6 +254,14 @@ describe('bridge command e2e', () => {
     assert.equal(richCard?.sections[0]?.fields?.[1]?.[1], 'Bridge 缓存');
     assert.match(richCard?.sections[2]?.markdown || '', /\*\*端到端助手回复\*\*/);
     assert.doesNotMatch(richCard?.sections[2]?.markdown || '', /^```text/);
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/his msg 1', 'incoming-history-msg-once'));
+    assert.equal(loadConfig().historyMessageLimit, 12);
+    const temporaryText = adapter.sent.at(-1)?.text || '';
+    assert.match(temporaryText, /最近对话（msg）/);
+    assert.match(temporaryText, /返回条数.*1 \/ 本次 1（配置 12）/s);
+    assert.doesNotMatch(temporaryText, /端到端用户消息/);
+    assert.match(temporaryText, /端到端助手回复/);
   });
 
   it('handles /auto skill install and uninstall idempotently', async () => {
@@ -1000,7 +1008,7 @@ describe('bridge command e2e', () => {
     }
   });
 
-  it('falls back to bridge cached messages for /his when the session has no Codex JSONL file', async () => {
+  it('falls back to bridge cached messages for /his and supports temporary raw limits', async () => {
     const store = initBridgeTestContext({ dynamicSettings: true });
     const adapter = new RecordingAdapter();
     const address = { channelType: 'feishu', chatId: 'chat-history-raw-e2e' } as const;
@@ -1012,14 +1020,25 @@ describe('bridge command e2e', () => {
 
     store.addMessage(binding.bridgeSessionId, 'user', 'Bridge 缓存用户消息');
     store.addMessage(binding.bridgeSessionId, 'assistant', 'Bridge 缓存助手回复');
+    store.addMessage(binding.bridgeSessionId, 'user', 'Bridge 缓存最后一条');
 
-    await _testOnly.handleMessage(adapter, inboundMessage(address, '/his', 'incoming-history-raw'));
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/his', 'incoming-history-default-msg'));
 
     const lastText = adapter.sent.at(-1)?.text || '';
-    assert.match(lastText, /最近对话（解析文本）/);
+    assert.match(lastText, /最近对话（msg）/);
     assert.match(lastText, /来源.*Bridge 缓存/s);
     assert.match(lastText, /Bridge 缓存用户消息/);
     assert.match(lastText, /Bridge 缓存助手回复/);
+    assert.equal(adapter.sent.at(-1)?.richCard?.title, '最近对话');
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/his raw 1', 'incoming-history-raw-once'));
+
+    const rawText = adapter.sent.at(-1)?.text || '';
+    assert.match(rawText, /最近对话（解析文本）/);
+    assert.match(rawText, /返回条数.*1 \/ 本次 1（配置 8）/s);
+    assert.doesNotMatch(rawText, /Bridge 缓存用户消息/);
+    assert.doesNotMatch(rawText, /Bridge 缓存助手回复/);
+    assert.match(rawText, /Bridge 缓存最后一条/);
   });
 
   it('prefers Codex JSONL messages over bridge cached messages for /his msg after /t binding', async () => {
