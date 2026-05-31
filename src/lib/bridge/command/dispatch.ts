@@ -446,9 +446,31 @@ export async function handleBridgeCommand(
     }
 
     case '/shell': {
+      const shellStreamKey = `shell:${msg.address.channelType}:${msg.address.chatId}:${commandBinding?.bridgeSessionId || 'none'}:${msg.messageId}`;
+      const shellStreamTarget: StreamFeedbackTarget = {
+        adapter,
+        channelType: adapter.channelType,
+        chatId: msg.address.chatId,
+        streamKey: shellStreamKey,
+      };
+      const shellCard = (
+        adapter.supportsStructuredStreamingUi?.(msg.address.chatId)
+        && typeof adapter.onStreamText === 'function'
+      )
+        ? {
+            update: (cardText: string, statusText: string) => {
+              pushStreamFeedbackText(shellStreamTarget, cardText);
+              pushStreamFeedbackStatus(shellStreamTarget, statusText);
+            },
+            finish: (status: 'completed' | 'interrupted' | 'error', cardText: string) => (
+              finalizeStreamFeedback(shellStreamTarget, status, cardText)
+            ),
+          }
+        : undefined;
       response = await handleShellCommand({
         args,
         binding: commandBinding,
+        card: shellCard,
         markdown: responseParseMode === 'Markdown',
         runner: deps.shellRunner,
       });

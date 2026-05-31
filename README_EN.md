@@ -207,7 +207,7 @@ You can also specify a directory explicitly:
 - `/his raw [N]`: inspect recent parsed-text messages for the current thread, optionally overriding the count for this request.
 - `/his json`: send the original Codex session JSONL file directly, without repackaging or post-processing.
 - `/his limit <1-20>`: change the default `/his` / `/his msg` message limit.
-- `/shell <command>`: run a shell command directly in the current session directory through `codex sandbox`; defaults to `workspace-write` with network enabled, supports `--sandbox read-only`, requires `--force` for high-risk commands, and executes IM auto-links by their visible text.
+- `/shell [seconds] <command>` (new): stream a shell command directly in the current session directory through `codex sandbox`; defaults to `workspace-write` with network enabled, supports `--sandbox read-only`, refreshes cards no faster than every 5 seconds, requires `--force` for high-risk commands, and executes IM auto-links by their visible text.
 - `/stop`: stop the current task.
 
 ## Key Settings

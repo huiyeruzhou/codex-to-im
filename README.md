@@ -208,7 +208,7 @@ Codex Native、CLI 或 TUI 继续操作这条共享线程时，结果也会同�
 - `/his raw [N]`：查看当前线程最近消息的解析纯文本视图，可临时指定本次条数。
 - `/his json`：直接发送原始 Codex session JSONL 文件，不做二次包装或后处理。
 - `/his limit <1-20>`：修改 `/his` / `/his msg` 默认返回条数限制。
-- `/shell <command>`：在当前会话目录通过 `codex sandbox` 直接执行 shell 命令；默认 `workspace-write` 且网络开启，可用 `--sandbox read-only`，高风险命令需追加 `--force`；IM 自动链接会按显示文本执行。
+- `/shell [秒数] <command>`（新特性）：在当前会话目录通过 `codex sandbox` 流式执行 shell 命令；默认 `workspace-write` 且网络开启，可用 `--sandbox read-only`，卡片刷新最低 5 秒，高风险命令需追加 `--force`；IM 自动链接会按显示文本执行。
 - `/stop`：停止当前任务。
 
 ## 关键配置

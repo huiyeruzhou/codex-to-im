@@ -14,7 +14,12 @@ import { buildCommandCallbackData, parseCommandCallbackData } from '../lib/bridg
 import * as router from '../lib/bridge/channel-router.js';
 import { getThreadTableMessageRecord } from '../lib/bridge/command/thread-table-message-pins.js';
 import { listAutoTasks } from '../lib/bridge/auto-tasks.js';
-import { buildCodexSandboxArgs, resolveCodexCliExecutable } from '../lib/bridge/command/shell.js';
+import {
+  buildCodexSandboxArgs,
+  detectCodexSandboxCliStyleFromHelp,
+  parseShellCommandArgs,
+  resolveCodexCliExecutable,
+} from '../lib/bridge/command/shell.js';
 import { writeCodexSessionJsonlFixture } from './test-bridge-utils.js';
 import type { OutboundRichCard } from '../lib/bridge/types.js';
 import type { HotUpdateRunRequest } from '../lib/bridge/command/hot-update.js';
@@ -233,6 +238,7 @@ describe('command-dispatch', () => {
       command: string;
       cwd: string;
       networkAccess: boolean;
+      refreshIntervalSeconds: number | undefined;
       sandboxMode: string;
       shell: string;
     }> = [];
@@ -262,6 +268,7 @@ describe('command-dispatch', () => {
             command: request.command,
             cwd: request.cwd,
             networkAccess: request.networkAccess,
+            refreshIntervalSeconds: request.refreshIntervalSeconds,
             sandboxMode: request.sandboxMode,
             shell: request.shell,
           });
@@ -274,6 +281,7 @@ describe('command-dispatch', () => {
       command: 'echo ok',
       cwd: workDir,
       networkAccess: true,
+      refreshIntervalSeconds: 5,
       sandboxMode: 'workspace-write',
       shell: process.env.SHELL || '/bin/bash',
     }]);
@@ -324,15 +332,94 @@ describe('command-dispatch', () => {
     assert.doesNotMatch(sent.at(-1) || '', /http:\/\/baidu\.com/);
   });
 
+  it('streams /shell progress to a structured card and floors refresh interval to 5 seconds', async () => {
+    initTestContext();
+    const address = { channelType: 'feishu', chatId: 'chat-shell-stream' } as const;
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-shell-stream-'));
+    router.createBinding(address, workDir);
+
+    const sent: string[] = [];
+    const streamTexts: string[] = [];
+    const streamStatuses: string[] = [];
+    const streamEnds: Array<{ status: string; text: string }> = [];
+    const requestedIntervals: Array<number | undefined> = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      supportsStructuredStreamingUi: () => true,
+      onStreamText: (_chatId: string, text: string) => {
+        streamTexts.push(text);
+      },
+      onStreamStatus: (_chatId: string, text: string) => {
+        streamStatuses.push(text);
+      },
+      onStreamEnd: async (_chatId: string, status: string, text: string) => {
+        streamEnds.push({ status, text });
+        return true;
+      },
+      send: async (message: { text: string }) => {
+        sent.push(message.text);
+        return { ok: true, messageId: `reply-shell-stream-${sent.length}` };
+      },
+    };
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/shell 2 echo streamed',
+        messageId: 'incoming-shell-stream',
+      } as any,
+      '/shell 2 echo streamed',
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+        shellRunner: async (request) => {
+          requestedIntervals.push(request.refreshIntervalSeconds);
+          request.onProgress?.({ stdout: 'partial\n', stderr: '' });
+          return { exitCode: 0, stdout: 'partial\nfinal\n', stderr: '' };
+        },
+      },
+    );
+
+    assert.deepEqual(requestedIntervals, [5]);
+    assert.deepEqual(sent, []);
+    assert.ok(streamTexts.some((text) => /partial/.test(text)));
+    assert.ok(streamTexts.some((text) => /final/.test(text)));
+    assert.ok(streamStatuses.some((text) => /refresh 5s/.test(text)));
+    assert.deepEqual(streamEnds.map((entry) => entry.status), ['completed']);
+    assert.match(streamEnds[0].text, /\/shell 执行完成/);
+  });
+
+  it('parses /shell refresh interval from the leading numeric argument', () => {
+    const defaultArgs = parseShellCommandArgs('echo default');
+    assert.ok(!('error' in defaultArgs));
+    assert.equal(defaultArgs.command, 'echo default');
+    assert.equal(defaultArgs.refreshIntervalSeconds, 5);
+
+    const flooredArgs = parseShellCommandArgs('2 echo floored');
+    assert.ok(!('error' in flooredArgs));
+    assert.equal(flooredArgs.command, 'echo floored');
+    assert.equal(flooredArgs.refreshIntervalSeconds, 5);
+
+    const explicitArgs = parseShellCommandArgs('--sandbox read-only 12 echo slow');
+    assert.ok(!('error' in explicitArgs));
+    assert.equal(explicitArgs.command, 'echo slow');
+    assert.equal(explicitArgs.refreshIntervalSeconds, 12);
+    assert.equal(explicitArgs.sandboxMode, 'read-only');
+  });
+
   it('builds /shell codex sandbox args with default network access', () => {
-    const args = buildCodexSandboxArgs({
+    const request = {
       command: 'curl baidu.com',
       cwd: '/tmp/cti-shell',
       networkAccess: true,
       sandboxMode: 'workspace-write',
       shell: '/bin/bash',
       timeoutMs: 60_000,
-    });
+    } as const;
+    const args = buildCodexSandboxArgs(request);
 
     assert.deepEqual(args, [
       'sandbox',
@@ -350,6 +437,42 @@ describe('command-dispatch', () => {
       '-lc',
       'curl baidu.com',
     ]);
+
+    assert.deepEqual(buildCodexSandboxArgs(request, 'linux-subcommand'), [
+      'sandbox',
+      'linux',
+      '-c',
+      'permissions.cti_shell_workspace_network.extends=":workspace"',
+      '-c',
+      'permissions.cti_shell_workspace_network.network.enabled=true',
+      '-c',
+      'permissions.cti_shell_workspace_network.network.mode="full"',
+      '--permissions-profile',
+      'cti_shell_workspace_network',
+      '--cd',
+      '/tmp/cti-shell',
+      '/bin/bash',
+      '-lc',
+      'curl baidu.com',
+    ]);
+  });
+
+  it('detects new and legacy codex sandbox CLI help forms', () => {
+    assert.equal(detectCodexSandboxCliStyleFromHelp([
+      'Usage: codex sandbox [OPTIONS] [COMMAND]...',
+      '',
+      'Options:',
+      '      --permissions-profile <NAME>',
+    ].join('\n')), 'top-level');
+
+    assert.equal(detectCodexSandboxCliStyleFromHelp([
+      'Usage: codex sandbox [OPTIONS] <COMMAND>',
+      '',
+      'Commands:',
+      '  macos    Run a command under Seatbelt',
+      '  linux    Run a command under the Linux sandbox',
+      '  windows  Run a command under Windows restricted token',
+    ].join('\n')), 'linux-subcommand');
   });
 
   it('prefers a global codex executable over node_modules for /shell', () => {

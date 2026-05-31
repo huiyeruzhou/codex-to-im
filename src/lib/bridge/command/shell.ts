@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -15,8 +15,12 @@ const SHELL_COMMAND_TIMEOUT_MS = 60_000;
 const SHELL_COMMAND_MAX_OUTPUT_BYTES = 96_000;
 const CODEX_SHELL_WORKSPACE_NETWORK_PROFILE = 'cti_shell_workspace_network';
 const CODEX_SHELL_READ_ONLY_NETWORK_PROFILE = 'cti_shell_read_only_network';
+const CODEX_SANDBOX_HELP_TIMEOUT_MS = 5_000;
+const DEFAULT_SHELL_REFRESH_INTERVAL_SECONDS = 5;
+const MIN_SHELL_REFRESH_INTERVAL_SECONDS = 5;
 
 type ShellSandboxMode = 'read-only' | 'workspace-write';
+type CodexSandboxCliStyle = 'top-level' | 'linux-subcommand';
 
 export interface ShellCommandRunRequest {
   command: string;
@@ -25,6 +29,8 @@ export interface ShellCommandRunRequest {
   networkAccess: boolean;
   shell: string;
   timeoutMs: number;
+  refreshIntervalSeconds?: number;
+  onProgress?: (progress: ShellCommandProgress) => void;
 }
 
 export interface ShellCommandRunResult {
@@ -32,6 +38,15 @@ export interface ShellCommandRunResult {
   stdout: string;
   stderr: string;
   timedOut?: boolean;
+  outputTruncated?: boolean;
+}
+
+export interface ShellCommandProgress {
+  exitCode?: number | null;
+  stdout: string;
+  stderr: string;
+  timedOut?: boolean;
+  outputTruncated?: boolean;
 }
 
 export type ShellCommandRunner = (request: ShellCommandRunRequest) => Promise<ShellCommandRunResult>;
@@ -40,6 +55,12 @@ interface ParsedShellCommandArgs {
   command: string;
   force: boolean;
   sandboxMode: ShellSandboxMode;
+  refreshIntervalSeconds: number;
+}
+
+interface ShellStreamCard {
+  update: (text: string, statusText: string) => void;
+  finish: (status: 'completed' | 'interrupted' | 'error', text: string) => Promise<boolean>;
 }
 
 interface ShellAuditFinding {
@@ -70,10 +91,13 @@ function buildCodexNetworkProfileConfigArgs(request: ShellCommandRunRequest): st
   ];
 }
 
-export function buildCodexSandboxArgs(request: ShellCommandRunRequest, legacyLinuxSubcommand = false): string[] {
+export function buildCodexSandboxArgs(
+  request: ShellCommandRunRequest,
+  cliStyle: CodexSandboxCliStyle = 'top-level',
+): string[] {
   return [
     'sandbox',
-    ...(legacyLinuxSubcommand ? ['linux'] : []),
+    ...(cliStyle === 'linux-subcommand' ? ['linux'] : []),
     ...buildCodexNetworkProfileConfigArgs(request),
     '--permissions-profile',
     codexSandboxPermissionProfile(request),
@@ -85,12 +109,119 @@ export function buildCodexSandboxArgs(request: ShellCommandRunRequest, legacyLin
   ];
 }
 
-async function execCodexSandbox(request: ShellCommandRunRequest, legacyLinuxSubcommand = false) {
-  return execFileAsync(resolveCodexCliExecutable(), buildCodexSandboxArgs(request, legacyLinuxSubcommand), {
-    cwd: request.cwd,
-    timeout: request.timeoutMs,
-    maxBuffer: SHELL_COMMAND_MAX_OUTPUT_BYTES,
-    env: process.env,
+export function detectCodexSandboxCliStyleFromHelp(helpText: string): CodexSandboxCliStyle {
+  if (/(^|\n)\s+--permissions-profile\b/.test(helpText)) return 'top-level';
+  if (/(^|\n)Commands:\s*[\s\S]*\n\s+linux\b/.test(helpText)) return 'linux-subcommand';
+  return 'top-level';
+}
+
+async function resolveCodexSandboxCliStyle(executable: string): Promise<CodexSandboxCliStyle> {
+  try {
+    const help = await execFileAsync(executable, ['sandbox', '--help'], {
+      timeout: CODEX_SANDBOX_HELP_TIMEOUT_MS,
+      maxBuffer: 48_000,
+      env: process.env,
+    });
+    return detectCodexSandboxCliStyleFromHelp(String(help.stdout || ''));
+  } catch {
+    return 'top-level';
+  }
+}
+
+async function execCodexSandbox(
+  executable: string,
+  request: ShellCommandRunRequest,
+  cliStyle: CodexSandboxCliStyle,
+): Promise<ShellCommandRunResult> {
+  const args = buildCodexSandboxArgs(request, cliStyle);
+  if (!request.onProgress) {
+    const result = await execFileAsync(executable, args, {
+      cwd: request.cwd,
+      timeout: request.timeoutMs,
+      maxBuffer: SHELL_COMMAND_MAX_OUTPUT_BYTES,
+      env: process.env,
+    });
+    return {
+      exitCode: 0,
+      stdout: result.stdout || '',
+      stderr: result.stderr || '',
+    };
+  }
+
+  return new Promise((resolve) => {
+    const child = spawn(executable, args, {
+      cwd: request.cwd,
+      env: process.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let stdout = '';
+    let stderr = '';
+    let outputBytes = 0;
+    let outputTruncated = false;
+    let timedOut = false;
+    let settled = false;
+
+    const appendOutput = (stream: 'stdout' | 'stderr', chunk: Buffer) => {
+      if (outputTruncated) return;
+      outputBytes += chunk.byteLength;
+      if (outputBytes > SHELL_COMMAND_MAX_OUTPUT_BYTES) {
+        outputTruncated = true;
+        child.kill('SIGTERM');
+        return;
+      }
+      const text = chunk.toString('utf8');
+      if (stream === 'stdout') stdout += text;
+      else stderr += text;
+    };
+
+    const emitProgress = () => {
+      request.onProgress?.({ stdout, stderr, timedOut, outputTruncated });
+    };
+
+    const progressTimer = setInterval(
+      emitProgress,
+      Math.max(MIN_SHELL_REFRESH_INTERVAL_SECONDS, request.refreshIntervalSeconds || DEFAULT_SHELL_REFRESH_INTERVAL_SECONDS) * 1000,
+    );
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGTERM');
+    }, request.timeoutMs);
+
+    const finish = (result: ShellCommandRunResult) => {
+      if (settled) return;
+      settled = true;
+      clearInterval(progressTimer);
+      clearTimeout(timeout);
+      emitProgress();
+      resolve(result);
+    };
+
+    child.stdout?.on('data', (chunk: Buffer) => appendOutput('stdout', chunk));
+    child.stderr?.on('data', (chunk: Buffer) => appendOutput('stderr', chunk));
+    child.on('error', (error) => {
+      finish({
+        exitCode: null,
+        stdout,
+        stderr: stderr || error.message,
+        timedOut,
+        outputTruncated,
+      });
+    });
+    child.on('close', (code) => {
+      const exitCode = typeof code === 'number' ? code : null;
+      const finalStderr = outputTruncated
+        ? `${stderr}${stderr ? '\n' : ''}输出超过 ${SHELL_COMMAND_MAX_OUTPUT_BYTES} bytes，已终止。`
+        : stderr;
+      request.onProgress?.({ exitCode, stdout, stderr: finalStderr, timedOut, outputTruncated });
+      finish({
+        exitCode,
+        stdout,
+        stderr: finalStderr,
+        timedOut,
+        outputTruncated,
+      });
+    });
   });
 }
 
@@ -147,19 +278,24 @@ function shouldRetryWithLegacyLinuxSandbox(error: unknown): boolean {
 }
 
 export const defaultShellCommandRunner: ShellCommandRunner = async (request) => {
+  const executable = resolveCodexCliExecutable();
+  const cliStyle = await resolveCodexSandboxCliStyle(executable);
   try {
-    let result: Awaited<ReturnType<typeof execCodexSandbox>>;
+    let result: ShellCommandRunResult;
     try {
-      result = await execCodexSandbox(request);
+      result = await execCodexSandbox(executable, request, cliStyle);
     } catch (error) {
       if (!shouldRetryWithLegacyLinuxSandbox(error)) throw error;
-      result = await execCodexSandbox(request, true);
+      result = await execCodexSandbox(executable, request, 'linux-subcommand');
     }
-    return {
-      exitCode: 0,
-      stdout: result.stdout || '',
-      stderr: result.stderr || '',
-    };
+    if (
+      result.exitCode !== 0
+      && cliStyle !== 'linux-subcommand'
+      && shouldRetryWithLegacyLinuxSandbox({ stderr: result.stderr, message: result.stderr })
+    ) {
+      result = await execCodexSandbox(executable, request, 'linux-subcommand');
+    }
+    return result;
   } catch (error) {
     const err = error as NodeJS.ErrnoException & {
       code?: number | string;
@@ -214,9 +350,15 @@ export function parseShellCommandArgs(rawArgs: string): ParsedShellCommandArgs |
     return { error: `未知 /shell 参数：${rest.split(/\s+/)[0]}` };
   }
 
+  const refresh = consumeLeadingRefreshInterval(rest);
+  if (refresh) {
+    rest = refresh.rest.trimStart();
+  }
+
   return {
     command: normalizeShellCommandTransportMarkdown(rest).trim(),
     force,
+    refreshIntervalSeconds: refresh?.intervalSeconds || DEFAULT_SHELL_REFRESH_INTERVAL_SECONDS,
     sandboxMode,
   };
 }
@@ -230,6 +372,17 @@ function consumeLeadingToken(raw: string): { token: string; rest: string } | nul
   if (!match) return null;
   return {
     token: match[1] || '',
+    rest: match[2] || '',
+  };
+}
+
+function consumeLeadingRefreshInterval(raw: string): { intervalSeconds: number; rest: string } | null {
+  const match = raw.trimStart().match(/^(\d+)(?:s|秒)?\s+([\s\S]+)$/i);
+  if (!match) return null;
+  const parsed = Number(match[1]);
+  if (!Number.isFinite(parsed) || parsed < 1) return null;
+  return {
+    intervalSeconds: Math.max(MIN_SHELL_REFRESH_INTERVAL_SECONDS, Math.floor(parsed)),
     rest: match[2] || '',
   };
 }
@@ -296,9 +449,63 @@ function formatShellOutput(label: string, value: string, maxLength: number): str
   ];
 }
 
+function formatShellElapsed(startedAtMs: number, nowMs = Date.now()): string {
+  const seconds = Math.max(0, Math.floor((nowMs - startedAtMs) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m${seconds % 60}s`;
+}
+
+function buildShellStatusText(
+  parsed: ParsedShellCommandArgs,
+  startedAtMs: number,
+  state: 'running' | 'done' | 'failed' | 'timeout',
+): string {
+  return `shell · ${state} · ${formatShellElapsed(startedAtMs)} · refresh ${parsed.refreshIntervalSeconds}s`;
+}
+
+function buildShellExecutionResponse(params: {
+  binding: ChannelBinding;
+  markdown: boolean;
+  parsed: ParsedShellCommandArgs;
+  result: ShellCommandRunResult | ShellCommandProgress;
+  running: boolean;
+  startedAtMs: number;
+  warnings: string[];
+}): string {
+  const { binding, markdown, parsed, result, running, startedAtMs, warnings } = params;
+  const exitCode = 'exitCode' in result ? result.exitCode : null;
+  const lines = [
+    ...buildCommandFields(
+      running ? '/shell 执行中' : '/shell 执行完成',
+      [
+        ['命令', buildFencedCodeBlock(parsed.command, 'sh')],
+        ['工作目录', formatCommandPath(binding.workingDirectory)],
+        ['Codex sandbox', parsed.sandboxMode],
+        ['网络', 'on'],
+        ['刷新间隔', `${parsed.refreshIntervalSeconds}s`],
+        ['Shell', resolveUserShell()],
+        ['运行时间', formatShellElapsed(startedAtMs)],
+        ['退出码', exitCode === undefined || exitCode === null ? '-' : String(exitCode)],
+      ],
+      [
+        ...warnings.map((warning) => `已确认高风险操作：${warning}`),
+        result.timedOut ? `命令超过 ${Math.round(SHELL_COMMAND_TIMEOUT_MS / 1000)} 秒，已超时终止。` : '',
+        result.outputTruncated ? '输出超过限制，已终止或截断。' : '',
+      ],
+      markdown,
+    ).split('\n'),
+    '',
+    ...formatShellOutput('stdout', result.stdout, 24_000),
+    '',
+    ...formatShellOutput('stderr', result.stderr, 8_000),
+  ];
+  return lines.join('\n').trim();
+}
+
 export async function handleShellCommand(options: {
   args: string;
   binding: ChannelBinding | null;
+  card?: ShellStreamCard;
   markdown: boolean;
   runner?: ShellCommandRunner;
 }): Promise<string> {
@@ -337,6 +544,7 @@ export async function handleShellCommand(options: {
         ['工作目录', formatCommandPath(options.binding.workingDirectory)],
         ['Codex sandbox', parsed.sandboxMode],
         ['网络', 'on'],
+        ['刷新间隔', `${parsed.refreshIntervalSeconds}s`],
         ['Shell', resolveUserShell()],
       ],
       [
@@ -348,6 +556,34 @@ export async function handleShellCommand(options: {
   }
 
   const runner = options.runner || defaultShellCommandRunner;
+  const startedAtMs = Date.now();
+  const card = options.card;
+  let latestProgress: ShellCommandProgress = { stdout: '', stderr: '' };
+  let lastCardUpdateAt = 0;
+  let hasOutputProgressUpdate = false;
+  const pushCardSnapshot = (force = false, outputProgress = false) => {
+    if (!card) return;
+    const now = Date.now();
+    if (!force && hasOutputProgressUpdate && now - lastCardUpdateAt < parsed.refreshIntervalSeconds * 1000) return;
+    if (outputProgress) hasOutputProgressUpdate = true;
+    lastCardUpdateAt = now;
+    card.update(
+      buildShellExecutionResponse({
+        binding: options.binding!,
+        markdown: options.markdown,
+        parsed,
+        result: latestProgress,
+        running: true,
+        startedAtMs,
+        warnings,
+      }),
+      buildShellStatusText(parsed, startedAtMs, 'running'),
+    );
+  };
+  const cardTimer = card
+    ? setInterval(() => pushCardSnapshot(true), parsed.refreshIntervalSeconds * 1000)
+    : null;
+  pushCardSnapshot(true);
   const result = await runner({
     command: parsed.command,
     cwd: options.binding.workingDirectory,
@@ -355,29 +591,30 @@ export async function handleShellCommand(options: {
     networkAccess: true,
     shell: resolveUserShell(),
     timeoutMs: SHELL_COMMAND_TIMEOUT_MS,
+    refreshIntervalSeconds: parsed.refreshIntervalSeconds,
+    onProgress: card
+      ? (progress) => {
+          latestProgress = progress;
+          pushCardSnapshot(false, true);
+        }
+      : undefined,
   });
+  if (cardTimer) clearInterval(cardTimer);
 
-  const lines = [
-    ...buildCommandFields(
-      '/shell 执行完成',
-      [
-        ['命令', buildFencedCodeBlock(parsed.command, 'sh')],
-        ['工作目录', formatCommandPath(options.binding.workingDirectory)],
-        ['Codex sandbox', parsed.sandboxMode],
-        ['网络', 'on'],
-        ['Shell', resolveUserShell()],
-        ['退出码', result.exitCode === null ? '-' : String(result.exitCode)],
-      ],
-      [
-        ...warnings.map((warning) => `已确认高风险操作：${warning}`),
-        result.timedOut ? `命令超过 ${Math.round(SHELL_COMMAND_TIMEOUT_MS / 1000)} 秒，已超时终止。` : '',
-      ],
-      options.markdown,
-    ).split('\n'),
-    '',
-    ...formatShellOutput('stdout', result.stdout, 24_000),
-    '',
-    ...formatShellOutput('stderr', result.stderr, 8_000),
-  ];
-  return lines.join('\n').trim();
+  const finalText = buildShellExecutionResponse({
+    binding: options.binding,
+    markdown: options.markdown,
+    parsed,
+    result,
+    running: false,
+    startedAtMs,
+    warnings,
+  });
+  if (card) {
+    const state = result.timedOut ? 'timeout' : result.exitCode === 0 ? 'done' : 'failed';
+    card.update(finalText, buildShellStatusText(parsed, startedAtMs, state));
+    const finalized = await card.finish(result.exitCode === 0 ? 'completed' : 'error', finalText);
+    if (finalized) return '';
+  }
+  return finalText;
 }
