@@ -186,6 +186,172 @@ describe('command-dispatch', () => {
     assert.match(sent.at(-1) || '', /npm test: skipped/);
   });
 
+  it('updates /hot-update log in a regular rich card after dispatch', async () => {
+    initTestContext();
+    const logDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-hot-update-log-'));
+    const hotUpdateLog = path.join(logDir, 'hot-update.log');
+    const bridgeLog = path.join(logDir, 'bridge.log');
+    fs.writeFileSync(hotUpdateLog, [
+      '[hot-update] started 2026-05-31T23:43:00+08:00',
+      '[hot-update] npm run build',
+    ].join('\n'), 'utf-8');
+
+    const sent: Array<{
+      text: string;
+      richCard?: OutboundRichCard;
+      richCardUpdateMessageId?: string;
+    }> = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      supportsStructuredStreamingUi: () => true,
+      onStreamText: () => {
+        throw new Error('/hot-update should not use streaming text cards');
+      },
+      onStreamStatus: () => {
+        throw new Error('/hot-update should not use streaming status cards');
+      },
+      onStreamEnd: async () => {
+        throw new Error('/hot-update should not finalize streaming cards');
+      },
+      send: async (message: { text: string; richCard?: OutboundRichCard; richCardUpdateMessageId?: string }) => {
+        sent.push({
+          text: message.text,
+          richCard: message.richCard,
+          richCardUpdateMessageId: message.richCardUpdateMessageId,
+        });
+        return { ok: true, messageId: `reply-hot-update-card-${sent.length}` };
+      },
+    };
+    const address = { channelType: 'feishu', chatId: 'chat-hot-update-stream' } as const;
+
+    try {
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/hot-update --skip-tests',
+          messageId: 'incoming-hot-update-stream',
+        } as any,
+        '/hot-update --skip-tests',
+        {
+          getActiveTask: () => undefined,
+          diagnoseSessionHealth: async () => null,
+          diagnoseAllActiveSessions: async () => [],
+          hotUpdateCwd: process.cwd(),
+          hotUpdateLogRefreshIntervalMs: 5,
+          hotUpdateRunner: async (request) => ({
+            stdout: [
+              'Dispatched Codex-to-IM hot update.',
+              'PID: 12345',
+              `Hot update log: ${hotUpdateLog}`,
+              `Bridge log: ${bridgeLog}`,
+              'Pull requested: no',
+              'Tests skipped: yes',
+              `cwd: ${request.cwd}`,
+            ].join('\n'),
+            stderr: '',
+          }),
+        },
+      );
+
+      assert.equal(sent.length, 1);
+      assert.match(sent[0].text, /已派发 Codex-to-IM 热更新/);
+      assert.equal(sent[0].richCard?.title, 'Codex-to-IM 热更新日志');
+      assert.match(sent[0].richCard?.updateKey || '', /^hot-update-log:/);
+      assert.equal(sent[0].richCard?.updateTtlMs, null);
+      assert.match(sent[0].richCard?.subtitle || '', /不使用流式“处理中”卡片/);
+      assert.match(sent[0].richCard?.sections[2]?.code?.text || '', /npm run build/);
+
+      fs.appendFileSync(hotUpdateLog, '\n[hot-update] completed 2026-05-31T23:43:10+08:00\n', 'utf-8');
+      await new Promise((resolve) => setTimeout(resolve, 25));
+
+      assert.ok(sent.length >= 2);
+      assert.equal(sent[1].richCardUpdateMessageId, 'reply-hot-update-card-1');
+      assert.equal(sent[1].richCard?.updateKey, sent[0].richCard?.updateKey);
+      assert.equal(sent[1].richCard?.title, 'Codex-to-IM 热更新完成');
+      assert.match(sent[1].richCard?.sections[2]?.code?.text || '', /\[hot-update\] completed/);
+    } finally {
+      fs.rmSync(logDir, { recursive: true, force: true });
+    }
+  });
+
+  it('stops /hot-update log updates when the dispatched worker pid exits without completion', async () => {
+    initTestContext();
+    const logDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-hot-update-exited-'));
+    const hotUpdateLog = path.join(logDir, 'hot-update.log');
+    const bridgeLog = path.join(logDir, 'bridge.log');
+    const exitedPid = 999_999_999;
+    fs.writeFileSync(hotUpdateLog, [
+      '[hot-update] started 2026-06-01T00:17:00+08:00',
+      '[hot-update] npm run build',
+    ].join('\n'), 'utf-8');
+
+    const sent: Array<{
+      text: string;
+      richCard?: OutboundRichCard;
+      richCardUpdateMessageId?: string;
+    }> = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      send: async (message: { text: string; richCard?: OutboundRichCard; richCardUpdateMessageId?: string }) => {
+        sent.push({
+          text: message.text,
+          richCard: message.richCard,
+          richCardUpdateMessageId: message.richCardUpdateMessageId,
+        });
+        return { ok: true, messageId: `reply-hot-update-exited-${sent.length}` };
+      },
+    };
+    const address = { channelType: 'feishu', chatId: 'chat-hot-update-exited' } as const;
+
+    try {
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/hot-update',
+          messageId: 'incoming-hot-update-exited',
+        } as any,
+        '/hot-update',
+        {
+          getActiveTask: () => undefined,
+          diagnoseSessionHealth: async () => null,
+          diagnoseAllActiveSessions: async () => [],
+          hotUpdateCwd: process.cwd(),
+          hotUpdateLogRefreshIntervalMs: 5,
+          hotUpdateRunner: async () => ({
+            stdout: [
+              'Dispatched Codex-to-IM hot update.',
+              `PID: ${exitedPid}`,
+              `Hot update log: ${hotUpdateLog}`,
+              `Bridge log: ${bridgeLog}`,
+              'Pull requested: no',
+              'Tests skipped: no',
+            ].join('\n'),
+            stderr: '',
+          }),
+        },
+      );
+
+      assert.equal(sent.length, 1);
+      assert.equal(sent[0].richCard?.title, 'Codex-to-IM 热更新日志');
+
+      await new Promise((resolve) => setTimeout(resolve, 35));
+
+      assert.equal(sent.length, 2);
+      assert.equal(sent[1].richCardUpdateMessageId, 'reply-hot-update-exited-1');
+      assert.equal(sent[1].richCard?.title, 'Codex-to-IM 热更新异常');
+      assert.match(sent[1].richCard?.footer?.join('\n') || '', /PID 999999999 已退出/);
+
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      assert.equal(sent.length, 2);
+    } finally {
+      fs.rmSync(logDir, { recursive: true, force: true });
+    }
+  });
+
   it('rejects /hot-update --run from IM commands before invoking the script', async () => {
     initTestContext();
     const sent: string[] = [];

@@ -30,7 +30,7 @@ export function buildHelpCommandResponse(): string {
     '- `/his json` 直接发送原始 session JSONL 文件',
     '- `/his limit 12` 修改 `/his msg` 默认返回条数（1-20）',
     '- `/shell [秒数] <command>`（新特性）在当前会话目录用 `codex sandbox` 流式执行命令；默认允许网络；卡片刷新最低 5 秒；高风险命令需追加 `--force`',
-    '- `/hot-update` 使用当前 Bridge 环境派发本项目热更新；`/hot-update --dry-run` 只检查不执行',
+    '- `/hot-update` 使用当前 Bridge 环境派发本项目热更新，并每 10 秒刷新 hot update log 卡片；`/hot-update --dry-run` 只检查不执行',
     '- `/auto ls` 查看当前 bridge session 的自动化任务',
     '- `/auto new <scriptpath> <times>` 创建自动化任务；脚本 stdout 会作为下一轮 Codex prompt',
     '- `/auto rm <序号>` 删除自动化任务',

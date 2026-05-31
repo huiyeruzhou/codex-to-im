@@ -53,6 +53,7 @@ import {
 } from './auto.js';
 import {
   handleHotUpdateCommand,
+  startHotUpdateLogMonitor,
   type HotUpdateRunner,
 } from './hot-update.js';
 import {
@@ -88,6 +89,7 @@ export interface BridgeCommandDispatchDeps {
   hotUpdateRunner?: HotUpdateRunner;
   hotUpdateCwd?: string;
   hotUpdateEnv?: NodeJS.ProcessEnv;
+  hotUpdateLogRefreshIntervalMs?: number;
   shellRunner?: ShellCommandRunner;
 }
 
@@ -140,6 +142,7 @@ export async function handleBridgeCommand(
   let responseParseMode: 'Markdown' | 'plain' = getFeedbackParseMode(adapter.channelType);
   let auditResponse = true;
   let threadTableCardScope: ThreadCardScope | undefined;
+  let afterDelivery: ((messageId?: string) => void) | undefined;
   const currentBinding = deps.scopedBinding || store.getChannelBinding(msg.address.channelType, msg.address.chatId);
   const shouldApplyDefaultTargetForCommand = !new Set(['/status', '/threads', '/t', '/set']).has(command);
   const commandBinding = !shouldApplyDefaultTargetForCommand
@@ -436,12 +439,27 @@ export async function handleBridgeCommand(
     }
 
     case '/hot-update': {
-      response = await handleHotUpdateCommand({
+      const hotUpdateUpdateKey = `hot-update-log:${msg.address.channelType}:${msg.address.chatId}:${msg.messageId}`;
+      const result = await handleHotUpdateCommand({
         args,
         cwd: deps.hotUpdateCwd,
         env: deps.hotUpdateEnv,
         runner: deps.hotUpdateRunner,
+        updateKey: hotUpdateUpdateKey,
       });
+      response = result.response;
+      responseRichCard = result.richCard;
+      if (result.monitor) {
+        afterDelivery = (messageId?: string) => {
+          startHotUpdateLogMonitor({
+            adapter,
+            address: msg.address,
+            messageId,
+            refreshIntervalMs: deps.hotUpdateLogRefreshIntervalMs,
+            spec: result.monitor!,
+          });
+        };
+      }
       break;
     }
 
@@ -538,6 +556,9 @@ export async function handleBridgeCommand(
     });
     if (result.ok && threadTableCardScope && result.messageId) {
       await persistAndPinLatestThreadTableMessage(adapter, msg.address, threadTableCardScope, result.messageId);
+    }
+    if (result.ok && afterDelivery) {
+      afterDelivery(result.messageId);
     }
   }
 }
