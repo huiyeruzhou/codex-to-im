@@ -94,6 +94,7 @@ export async function handleBridgeCommand(
   const command = resolveCommandAlias(rawCommand, args);
 
   const isTmuxKeystrokeCommand = command === '/tmux'
+    || command === '/tmux-key'
     || command === '/tmux-switch'
     || command === '/tmux-attach'
     || command === '/tmux-new'
@@ -196,6 +197,7 @@ export async function handleBridgeCommand(
     }
 
     case '/tmux':
+    case '/tmux-key':
     case '/tmux-switch':
     case '/tmux-attach':
     case '/tmux-new':

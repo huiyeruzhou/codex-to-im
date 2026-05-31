@@ -6,12 +6,8 @@ import { buildCommandFields } from './presentation.js';
 import { buildFencedCodeBlock } from '../markdown/fence.js';
 import { sanitizeInput } from '../security/validators.js';
 import {
-  captureTmuxArgv,
-  hasTmuxSession,
-  listTmuxSessions,
-  runTmux,
-  tmuxCommandPreview,
-  type TmuxArgv,
+  tmuxCore,
+  type TmuxSendAction,
   type TmuxSessionInfo,
 } from '../tmux/runtime.js';
 export {
@@ -45,10 +41,6 @@ function buildTmuxSwitchSelect(
     }),
   }];
 }
-
-type TmuxSendAction =
-  | { type: 'literal'; text: string }
-  | { type: 'key'; key: string };
 
 export interface HandleTmuxBridgeCommandParams {
   command: string;
@@ -232,11 +224,11 @@ function buildTmuxSwitchCommandCard(
 
 function tmuxDirectHelp(): string[] {
   return [
-    '普通字符：直接写在 `/tmux` 后面，例如 `/tmux pwd<Enter>`。',
-    '特殊键：用尖括号写，例如 `<Enter>`、`<Tab>`、`<Esc>`。',
-    'Ctrl/Cmd：写成 `<C-c>`、`<Ctrl+C>` 或 `<Cmd+C>`，都会按 tmux 的 `C-c` 形式发送。',
-    'Option/Alt：写成 `<Option+Enter>`、`<Alt+Enter>` 或 tmux 原生命名 `<M-Enter>`。',
-    '混合发送：`/tmux git status<Enter><C-c>` 会先输入普通字符，再按回车，再发 Ctrl+C。',
+    '普通文本：直接写在 `/tmux` 后面，例如 `/tmux pwd`；尖括号会按原文发送。',
+    '特殊键：使用 `/tmux-key` 和尖括号，例如 `/tmux-key <Enter>`、`/tmux-key <Tab>`、`/tmux-key <Esc>`。',
+    'Ctrl/Cmd：写成 `/tmux-key <C-c>`、`/tmux-key <Ctrl+C>` 或 `/tmux-key <Cmd+C>`，都会按 tmux 的 `C-c` 形式发送。',
+    'Option/Alt：写成 `/tmux-key <Option+Enter>`、`/tmux-key <Alt+Enter>` 或 tmux 原生命名 `/tmux-key <M-Enter>`。',
+    '混合按键：`/tmux-key git status<Enter><C-c>` 会先输入普通字符，再按回车，再发 Ctrl+C。',
   ];
 }
 
@@ -252,7 +244,8 @@ function tmuxCommandFamilyHelp(): string[] {
     '`/tmux-screen 5s`：使用默认行数，并每 5 秒刷新一次。',
     '`/tmux-screen 120 5s`：临时展示 120 行，并每 5 秒刷新一次；最低间隔 3 秒。',
     '`/tmux-screen stop`：停止当前聊天的 tmux 屏幕定时刷新。',
-    '`/tmux ...`：把后面的普通字符和特殊键发送给当前绑定的 tmux session，并自动截屏返回。',
+    '`/tmux ...`：把后面的普通文本发送给当前绑定的 tmux session，并自动截屏返回；尖括号按原文发送。',
+    '`/tmux-key ...`：解析 `<Enter>`、`<C-c>` 等特殊键，适合需要按键控制或混合文本/按键的场景。',
   ];
 }
 
@@ -373,34 +366,6 @@ function applyAutoEnter(actions: TmuxSendAction[], session: BridgeSession): Tmux
   return shouldAppendAutoEnter(actions, session)
     ? [...actions, { type: 'key', key: 'Enter' }]
     : actions;
-}
-
-function tmuxSendActionArgv(target: string, action: TmuxSendAction): TmuxArgv {
-  if (action.type === 'literal') {
-    return ['send-keys', '-t', target, '-l', action.text];
-  }
-  return ['send-keys', '-t', target, action.key];
-}
-
-function tmuxSendCommandPreviews(target: string, actions: TmuxSendAction[], captureLines: number): string[] {
-  return [
-    ...actions.map((action) => tmuxCommandPreview(tmuxSendActionArgv(target, action))),
-    tmuxCommandPreview(captureTmuxArgv(target, captureLines)),
-  ];
-}
-
-async function sendTmuxActions(target: string, actions: TmuxSendAction[]): Promise<void> {
-  for (const [index, action] of actions.entries()) {
-    await runTmux(tmuxSendActionArgv(target, action));
-    if (index < actions.length - 1) {
-      await delay(SEND_ACTION_DELAY_MS);
-    }
-  }
-}
-
-async function captureTmuxPane(target: string, lines: number): Promise<string> {
-  const result = await runTmux(captureTmuxArgv(target, lines));
-  return result.stdout.replace(/\s+$/g, '');
 }
 
 function buildTmuxCaptureResponse(screen: string, lines: number, commands: string[], markdown: boolean): string {
@@ -575,15 +540,15 @@ function startTmuxScreenMonitor(params: {
       if (monitor.busy) return;
       monitor.busy = true;
       try {
-        const screen = await captureTmuxPane(monitor.target, monitor.lines);
+        const capture = await tmuxCore.capturePane(monitor.target, monitor.lines);
         const text = buildTmuxScreenResponse(
           monitor.target,
-          screen,
+          capture.screen,
           monitor.lines,
           monitor.markdown,
           {
             intervalSeconds: monitor.intervalSeconds,
-            commands: monitor.card ? [] : [tmuxCommandPreview(captureTmuxArgv(monitor.target, monitor.lines))],
+            commands: monitor.card ? [] : [capture.command],
           },
         );
         if (monitor.card) {
@@ -619,15 +584,11 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
 
   try {
     if (command === '/tmux-switch') {
-      const sessions = await listTmuxSessions();
+      const { sessions, command: listCommand } = await tmuxCore.listSessions();
       params.richCard?.(buildTmuxSwitchCommandCard(sessions, params.binding.bridgeSessionId));
       return appendTmuxCommandPreview(
         buildTmuxSwitchResponse(sessions, session.tmux_session_name, markdown),
-        [tmuxCommandPreview([
-          'list-sessions',
-          '-F',
-          '#{session_name}\t#{session_windows}\t#{session_attached}\t#{session_created}\t#{session_activity}',
-        ])],
+        [listCommand],
         markdown,
       );
     }
@@ -670,15 +631,14 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
         return 'tmux 未绑定。先发送 `/tmux-switch` 查看 session，或 `/tmux-attach <session>` / `/tmux-new <session>` 绑定。';
       }
       const lines = parsed.lines ?? getCaptureLines(session);
-      const commandPreview = tmuxCommandPreview(captureTmuxArgv(target, lines));
-      const screen = await captureTmuxPane(target, lines);
+      const capture = await tmuxCore.capturePane(target, lines);
       if (parsed.intervalSeconds) {
-        if (!params.screenMonitor) return appendTmuxCommandPreview('当前环境不支持 tmux 屏幕定时刷新。', [commandPreview], markdown);
+        if (!params.screenMonitor) return appendTmuxCommandPreview('当前环境不支持 tmux 屏幕定时刷新。', [capture.command], markdown);
         const card = params.screenMonitor.card;
-        const initialText = buildTmuxScreenResponse(target, screen, lines, markdown, {
+        const initialText = buildTmuxScreenResponse(target, capture.screen, lines, markdown, {
           intervalSeconds: parsed.intervalSeconds,
           monitorStarted: true,
-          commands: card ? [] : [commandPreview],
+          commands: card ? [] : [capture.command],
         });
         if (card) {
           if (params.screenMonitor.stopCallbackData) {
@@ -698,10 +658,10 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
         });
         if (card) return '';
       }
-      return buildTmuxScreenResponse(target, screen, lines, markdown, {
+      return buildTmuxScreenResponse(target, capture.screen, lines, markdown, {
         intervalSeconds: parsed.intervalSeconds,
         monitorStarted: Boolean(parsed.intervalSeconds),
-        commands: [commandPreview],
+        commands: [capture.command],
       });
     }
 
@@ -743,18 +703,17 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
     if (command === '/tmux-attach') {
       const name = validateTmuxSessionName(args);
       if (!name) return '用法：/tmux-attach <session>';
-      const hasSessionCommand = tmuxCommandPreview(['has-session', '-t', name]);
-      if (!(await hasTmuxSession(name))) {
+      const exists = await tmuxCore.hasSession(name);
+      if (!exists.exists) {
         return appendTmuxCommandPreview(
           `没有找到 tmux session：${name}。可先发送 \`/tmux-switch\` 查看，或 \`/tmux-new ${name}\` 新建。`,
-          [hasSessionCommand],
+          [exists.command],
           markdown,
         );
       }
       store.updateSession(session.id, { tmux_session_name: name });
       const lines = getCaptureLines(session);
-      const captureCommand = tmuxCommandPreview(captureTmuxArgv(name, lines));
-      const screen = await captureTmuxPane(name, lines);
+      const capture = await tmuxCore.capturePane(name, lines);
       return buildTmuxAttachResponse(
         '已绑定 tmux session',
         [
@@ -762,9 +721,9 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
           ['Bridge session', binding.bridgeSessionId],
           ['展示行数', `${lines}`],
         ],
-        screen,
+        capture.screen,
         lines,
-        [hasSessionCommand, captureCommand],
+        [exists.command, capture.command],
         markdown,
       );
     }
@@ -774,34 +733,25 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
       const name = validateTmuxSessionName(requestedName);
       if (!name) return '用法：/tmux-new [session]';
       const cwd = binding.workingDirectory || process.cwd();
-      const hasSessionCommand = tmuxCommandPreview(['has-session', '-t', name]);
-      const existed = await hasTmuxSession(name);
-      if (!existed) {
-        await runTmux(['new-session', '-d', '-s', name, '-c', cwd]);
-      }
+      const ensured = await tmuxCore.ensureDetachedSession({ name, cwd });
       store.updateSession(session.id, { tmux_session_name: name });
       const lines = getCaptureLines(session);
-      const commands = [
-        hasSessionCommand,
-        ...(existed ? [] : [tmuxCommandPreview(['new-session', '-d', '-s', name, '-c', cwd])]),
-        tmuxCommandPreview(captureTmuxArgv(name, lines)),
-      ];
-      const screen = await captureTmuxPane(name, lines);
+      const capture = await tmuxCore.capturePane(name, lines);
       return buildTmuxAttachResponse(
-        existed ? 'tmux session 已存在，已直接绑定' : '已新建并绑定 tmux session',
+        ensured.existed ? 'tmux session 已存在，已直接绑定' : '已新建并绑定 tmux session',
         [
           ['tmux session', name],
           ['目录', cwd],
           ['展示行数', `${lines}`],
         ],
-        screen,
+        capture.screen,
         lines,
-        commands,
+        [...ensured.commands, capture.command],
         markdown,
       );
     }
 
-    if (command === '/tmux') {
+    if (command === '/tmux' || command === '/tmux-key') {
       const target = session.tmux_session_name;
       if (!args.trim()) {
         return buildTmuxOverviewResponse(session, markdown);
@@ -814,22 +764,26 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
           markdown,
         );
       }
-      const parsed = parseTmuxSendActions(args);
+      const parsed = command === '/tmux-key'
+        ? parseTmuxSendActions(args)
+        : { actions: [{ type: 'literal', text: args }] as TmuxSendAction[] };
       if (parsed.error) {
         return buildCommandFields(
           'tmux 按键用法',
           [['错误', parsed.error]],
-          ['发送 `/tmux` 查看完整用法。'],
+          ['发送 `/tmux` 查看完整用法；普通尖括号文本请用 `/tmux ...`，特殊按键请用 `/tmux-key ...`。'],
           markdown,
         );
       }
       const actions = parsed.actions || [];
-      const actionsToSend = applyAutoEnter(actions, session);
-      await sendTmuxActions(target, actionsToSend);
+      const actionsToSend = command === '/tmux'
+        ? applyAutoEnter(actions, session)
+        : actions;
+      const sendResult = await tmuxCore.sendActions(target, actionsToSend, { delayMs: SEND_ACTION_DELAY_MS });
       await delay(CAPTURE_AFTER_SEND_DELAY_MS);
       const lines = getCaptureLines(session);
-      const screen = await captureTmuxPane(target, lines);
-      return buildTmuxCaptureResponse(screen, lines, tmuxSendCommandPreviews(target, actionsToSend, lines), markdown);
+      const capture = await tmuxCore.capturePane(target, lines);
+      return buildTmuxCaptureResponse(capture.screen, lines, [...sendResult.commands, capture.command], markdown);
     }
 
     return `未知 tmux 命令：${command}`;

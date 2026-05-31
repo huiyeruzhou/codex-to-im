@@ -114,6 +114,8 @@ export interface OutboundCardActionSelect {
 export interface OutboundRichCardSection {
   title?: string;
   text?: string;
+  /** Raw markdown content for channels that can render rich card markdown. */
+  markdown?: string;
   fields?: Array<[string, string | null | undefined]>;
   code?: {
     text: string;
@@ -147,7 +149,7 @@ export interface OutboundRichCard {
   footer?: string[];
   selects?: OutboundCardActionSelect[];
   actions?: OutboundCardActionButton[][];
-  template?: 'blue' | 'green' | 'red' | 'yellow' | 'grey';
+  template?: 'blue' | 'wathet' | 'turquoise' | 'green' | 'yellow' | 'orange' | 'red' | 'carmine' | 'violet' | 'purple' | 'indigo' | 'grey';
   /** Maximum number of sections to render in rich IM cards before folding the rest into a summary. */
   maxSections?: number;
   /**

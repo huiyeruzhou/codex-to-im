@@ -12,6 +12,7 @@ import type {
   BridgeStatus,
   ChannelBinding,
   InboundMessage,
+  OutboundRichCard,
 } from './types.js';
 import type { BaseChannelAdapter } from './channel-adapter.js';
 import type { BridgeSession, PermissionLinkRecord } from './host.js';
@@ -145,6 +146,7 @@ const TMUX_SCREEN_STOP_CALLBACK_PREFIX = 'tmux-screen:stop:';
 // IM idle reminder. Active streaming turns never use this fallback timeout.
 const MIRROR_TURN_BUFFER_TIMEOUT_MS = 10 * 60_000;
 const STARTUP_NOTICE_TITLE = 'Bridge 已启动';
+const STARTUP_NOTICE_CARD_TEMPLATE = 'turquoise';
 const AUTO_SCRIPT_OUTPUT_LIMIT = 64_000;
 
 // ── Streaming preview helpers ──────────────────────────────────
@@ -780,6 +782,7 @@ async function deliverStartupNotifications(): Promise<void> {
 
     const statusText = buildGlobalStatusResponse(store, binding, true);
     const text = `${STARTUP_NOTICE_TITLE}\n\n${statusText}`;
+    const richCard = buildStartupNoticeRichCard(statusText);
     tasks.push(deliverBridgeNotice(
       adapter,
       channelAddressFromBinding(binding),
@@ -787,6 +790,7 @@ async function deliverStartupNotifications(): Promise<void> {
       {
         sessionId: binding.bridgeSessionId,
         audit: false,
+        richCard,
       },
     ).catch((err) => {
       console.error('[bridge-manager] Failed to send startup notification:', {
@@ -798,6 +802,17 @@ async function deliverStartupNotifications(): Promise<void> {
   }
 
   await Promise.all(tasks);
+}
+
+function buildStartupNoticeRichCard(statusText: string): OutboundRichCard {
+  return {
+    title: STARTUP_NOTICE_TITLE,
+    subtitle: 'Bridge 已连接并开始接收消息。',
+    template: STARTUP_NOTICE_CARD_TEMPLATE,
+    sections: [{
+      markdown: statusText,
+    }],
+  };
 }
 
 function startPersistedAutoTasks(): void {

@@ -2248,6 +2248,10 @@ describe('bridge-manager startup runtime cleanup', () => {
     assert.match(notice.text, /Bridge 已启动/);
     assert.match(notice.text, /全局状态/);
     assert.match(notice.text, /Adapter/);
+    assert.equal(notice.richCard?.title, 'Bridge 已启动');
+    assert.equal(notice.richCard?.template, 'turquoise');
+    assert.equal(notice.richCard?.sections[0]?.markdown, notice.text.replace(/^Bridge 已启动\n\n/, ''));
+    assert.match(notice.richCard?.sections[0]?.markdown || '', /全局状态/);
   });
 });
 

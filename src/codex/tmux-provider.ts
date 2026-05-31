@@ -1,4 +1,3 @@
-import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -19,6 +18,7 @@ import {
   buildShellSnapshotLaunchCommand,
   ensureShellSnapshot,
 } from './shell-snapshot.js';
+import { tmuxCore } from '../lib/bridge/tmux/core.js';
 
 const DEFAULT_TMUX_PROMPT_DELAY_MS = 1_200;
 const DEFAULT_TMUX_POLL_INTERVAL_MS = 500;
@@ -37,12 +37,6 @@ interface SessionFileSnapshotEntry {
 }
 
 type SessionFileSnapshot = Map<string, SessionFileSnapshotEntry>;
-
-interface TmuxCommandResult {
-  code: number;
-  stdout: string;
-  stderr: string;
-}
 
 interface TmuxRunContext {
   sessionName: string;
@@ -183,53 +177,7 @@ export function buildCodexTuiArgs(params: StreamChatParams, imagePaths: string[]
   return args;
 }
 
-function runCommand(command: string, args: string[], stdin?: string): Promise<TmuxCommandResult> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      stdio: [stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
-      windowsHide: process.platform === 'win32',
-    });
-    let stdout = '';
-    let stderr = '';
-    child.stdout?.on('data', (chunk) => { stdout += chunk.toString(); });
-    child.stderr?.on('data', (chunk) => { stderr += chunk.toString(); });
-    child.on('error', reject);
-    child.on('close', (code) => resolve({ code: code ?? 0, stdout, stderr }));
-    if (stdin !== undefined) {
-      child.stdin?.end(stdin);
-    }
-  });
-}
-
-async function runTmux(args: string[], stdin?: string): Promise<TmuxCommandResult> {
-  const result = await runCommand('tmux', args, stdin);
-  if (result.code !== 0) {
-    throw new Error((result.stderr || result.stdout || `tmux ${args[0] || ''} failed`).trim());
-  }
-  return result;
-}
-
-function logTmuxPromptCommand(args: string[], metadata: Record<string, unknown> = {}): void {
-  console.log('[codex-tmux] Prompt inject tmux command:', {
-    command: commandPreview('tmux', args),
-    ...metadata,
-  });
-}
-
-async function hasTmuxSession(sessionName: string): Promise<boolean> {
-  const result = await runCommand('tmux', ['has-session', '-t', sessionName]);
-  return result.code === 0;
-}
-
-async function killTmuxSession(sessionName: string): Promise<void> {
-  const result = await runCommand('tmux', ['kill-session', '-t', sessionName]);
-  if (result.code !== 0 && !/can't find session/i.test(result.stderr)) {
-    throw new Error((result.stderr || result.stdout || 'tmux kill-session failed').trim());
-  }
-}
-
 export async function injectPromptIntoTmuxPane(targetPane: string, prompt: string): Promise<void> {
-  const bufferName = `cti-prompt-${process.pid}-${Date.now()}`;
   const lines = prompt.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
   console.log('[codex-tmux] Prompt inject start:', {
     target_pane: targetPane,
@@ -238,39 +186,11 @@ export async function injectPromptIntoTmuxPane(targetPane: string, prompt: strin
     newline_key: 'M-Enter',
     submit_key: 'Enter',
   });
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i] || '';
-    if (line) {
-      const loadArgs = ['load-buffer', '-b', bufferName, '-'];
-      logTmuxPromptCommand(loadArgs, {
-        target_pane: targetPane,
-        line_index: i,
-        stdin_chars: line.length,
-      });
-      await runTmux(loadArgs, line);
-      const pasteArgs = ['paste-buffer', '-d', '-p', '-b', bufferName, '-t', targetPane];
-      logTmuxPromptCommand(pasteArgs, {
-        target_pane: targetPane,
-        line_index: i,
-      });
-      await runTmux(pasteArgs);
-    }
-    if (i < lines.length - 1) {
-      const newlineArgs = ['send-keys', '-t', targetPane, 'M-Enter'];
-      logTmuxPromptCommand(newlineArgs, {
-        target_pane: targetPane,
-        line_index: i,
-        key: 'M-Enter',
-      });
-      await runTmux(newlineArgs);
-    }
-  }
-  const submitArgs = ['send-keys', '-t', targetPane, 'Enter'];
-  logTmuxPromptCommand(submitArgs, {
+  const result = await tmuxCore.injectPromptIntoPane(targetPane, prompt);
+  console.log('[codex-tmux] Prompt inject tmux commands:', {
     target_pane: targetPane,
-    key: 'Enter',
+    commands: result.commands,
   });
-  await runTmux(submitArgs);
   console.log('[codex-tmux] Prompt inject submitted:', {
     target_pane: targetPane,
     prompt_chars: prompt.length,
@@ -553,11 +473,6 @@ async function launchTmuxCodexSession(
   const env = buildCodexTuiEnv();
   const codexArgs = buildCodexTuiArgs(params, imagePaths);
   const command = buildCodexTuiShellCommand('codex', codexArgs, env);
-  const tmuxArgs = ['new-session', '-d', '-s', sessionName];
-  if (params.workingDirectory) {
-    tmuxArgs.push('-c', params.workingDirectory);
-  }
-  tmuxArgs.push('--', command);
 
   console.log('[codex-tmux] Codex TUI start:', {
     bridge_session_id: params.sessionId,
@@ -569,7 +484,12 @@ async function launchTmuxCodexSession(
     debug_keep_tmux: isDebugTmuxKeepAlive(),
   });
 
-  await runTmux(tmuxArgs);
+  await tmuxCore.ensureDetachedSession({
+    name: sessionName,
+    cwd: params.workingDirectory,
+    command,
+    recreate: true,
+  });
 }
 
 async function pollSessionFile(
@@ -631,7 +551,7 @@ async function pollSessionFile(
     }
 
     if (context.terminalSeen) break;
-    if (!(await hasTmuxSession(context.sessionName))) {
+    if (!(await tmuxCore.hasSession(context.sessionName)).exists) {
       if (!context.hasError) {
         controller.enqueue(sseEvent('result', {
           ...(context.threadId ? { session_id: context.threadId } : {}),
@@ -694,7 +614,7 @@ export function streamCodexTmuxTui(params: StreamChatParams): ReadableStream<str
             try { fs.unlinkSync(tmp); } catch { /* ignore */ }
           }
           if (!isDebugTmuxKeepAlive()) {
-            try { await killTmuxSession(sessionName); } catch { /* best-effort cleanup */ }
+            try { await tmuxCore.killSession(sessionName, { ignoreMissing: true }); } catch { /* best-effort cleanup */ }
           } else {
             console.log(`[codex-tmux] CTI_DEBUG is enabled; tmux session kept: ${sessionName}`);
           }

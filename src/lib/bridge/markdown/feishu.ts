@@ -136,6 +136,7 @@ function buildRichCardSectionMarkdown(section: OutboundRichCardSection): string 
   if (title) blocks.push(`#### ${title}`);
   const text = compactCardText(section.text, RICH_CARD_TEXT_LIMIT);
   if (text) blocks.push(text);
+  if (section.markdown?.trim()) blocks.push(section.markdown.trim());
 
   const tableRows = (section.fields || [])
     .map(([label, value]) => [normalizeCardLine(label), compactCardText(value, RICH_CARD_FIELD_LIMIT)] as const)
@@ -253,6 +254,7 @@ function buildRichCardSectionElements(
   const elements: Array<Record<string, unknown>> = [];
   const title = compactCardText(section.title, RICH_CARD_TITLE_LIMIT);
   const text = compactCardText(section.text, RICH_CARD_TEXT_LIMIT);
+  const markdown = section.markdown?.trim();
   const fields = (section.fields || [])
     .map(([label, value]) => [normalizeCardLine(label), compactCardText(value, RICH_CARD_FIELD_LIMIT)] as const)
     .filter(([label, value]) => label && value);
@@ -264,6 +266,7 @@ function buildRichCardSectionElements(
   const mainBlocks: string[] = [];
   if (title) mainBlocks.push(`#### ${title}`);
   if (text) mainBlocks.push(text);
+  if (markdown) mainBlocks.push(markdown);
   if (foldedFields.length > 0) {
     mainBlocks.push(`已压缩 ${foldedFields.length} 项：${foldedFields.map(([label]) => label).join('、')}`);
   }

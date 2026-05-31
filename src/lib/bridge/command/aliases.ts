@@ -57,6 +57,7 @@ const KNOWN_BRIDGE_COMMANDS = new Set([
   '/threads',
   '/t',
   '/tmux',
+  '/tmux-key',
   '/tmux-switch',
   '/tmux-attach',
   '/tmux-new',

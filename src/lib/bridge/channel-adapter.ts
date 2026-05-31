@@ -39,7 +39,7 @@ export interface StructuredStreamingUiActionButton {
 export interface StructuredStreamingUiMetadata {
   title?: string;
   tags?: string[];
-  template?: 'blue' | 'green' | 'red' | 'yellow' | 'grey';
+  template?: 'blue' | 'wathet' | 'turquoise' | 'green' | 'yellow' | 'orange' | 'red' | 'carmine' | 'violet' | 'purple' | 'indigo' | 'grey';
   tagColor?: 'neutral' | 'blue' | 'green' | 'red' | 'yellow' | 'orange' | 'purple';
 }
 

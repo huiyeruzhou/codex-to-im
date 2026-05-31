@@ -1207,7 +1207,7 @@ describe('command-dispatch', () => {
     assert.match(String(sent.at(-1)?.text || ''), /已发送文件/);
   });
 
-  it('binds a tmux session, sends mixed literal and special keys, and returns a capture', async () => {
+  it('binds a tmux session, sends literal text and tmux-key special keys, and returns a capture', async () => {
     const store = initTestContext();
     const fakeTmux = installFakeTmux();
     const oldPath = process.env.PATH || '';
@@ -1326,15 +1326,17 @@ describe('command-dispatch', () => {
         adapter,
         {
           address,
-          text: '/tmux echo once<Enter>',
+          text: '/tmux echo <literal>',
           messageId: 'incoming-tmux-auto-enter-explicit',
         } as any,
-        '/tmux echo once<Enter>',
+        '/tmux echo <literal>',
         deps,
       );
       const afterExplicitEnterLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
       const afterExplicitEnterCount = (afterExplicitEnterLog.match(/send-keys -t alpha Enter/g) || []).length;
       assert.equal(afterExplicitEnterCount - beforeExplicitEnterCount, 1);
+      const explicitEnterLogDelta = afterExplicitEnterLog.slice(beforeExplicitEnterLog.length);
+      assert.match(explicitEnterLogDelta, /send-keys -t alpha -l echo <literal>/);
 
       await handleBridgeCommand(
         adapter,
@@ -1468,10 +1470,10 @@ describe('command-dispatch', () => {
         adapter,
         {
           address,
-          text: '/tmux /goal 分析一下这个仓库<Enter>',
+          text: '/tmux-key /goal 分析一下这个仓库<Enter>',
           messageId: 'incoming-tmux-slash-send',
         } as any,
-        '/tmux /goal 分析一下这个仓库<Enter>',
+        '/tmux-key /goal 分析一下这个仓库<Enter>',
         deps,
       );
 
@@ -1489,10 +1491,10 @@ describe('command-dispatch', () => {
         adapter,
         {
           address,
-          text: '/tmux <Cmd+Backspace>',
+          text: '/tmux-key <Cmd+Backspace>',
           messageId: 'incoming-tmux-delete-line',
         } as any,
-        '/tmux <Cmd+Backspace>',
+        '/tmux-key <Cmd+Backspace>',
         deps,
       );
       const deleteLineResponse = sent.at(-1) || '';
@@ -1502,10 +1504,10 @@ describe('command-dispatch', () => {
         adapter,
         {
           address,
-          text: '/tmux pwd<Enter><Cmd+C>',
+          text: '/tmux-key pwd<Enter><Cmd+C>',
           messageId: 'incoming-tmux-send',
         } as any,
-        '/tmux pwd<Enter><Cmd+C>',
+        '/tmux-key pwd<Enter><Cmd+C>',
         deps,
       );
 
@@ -1521,7 +1523,7 @@ describe('command-dispatch', () => {
       const log = fs.readFileSync(fakeTmux.logPath, 'utf-8');
       assert.match(log, /send-keys -t alpha -l pwd/);
       assert.match(log, /send-keys -t alpha -l echo auto/);
-      assert.match(log, /send-keys -t alpha -l echo once/);
+      assert.match(log, /send-keys -t alpha -l echo <literal>/);
       assert.match(log, /send-keys -t alpha -l echo off/);
       assert.match(log, /send-keys -t alpha Enter/);
       assert.match(log, /send-keys -t alpha C-c/);

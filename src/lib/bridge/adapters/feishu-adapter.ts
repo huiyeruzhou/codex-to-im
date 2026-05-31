@@ -60,6 +60,7 @@ import {
   formatElapsed,
   type FeishuCardActionButton,
 } from '../markdown/feishu.js';
+import { buildFencedCodeBlock } from '../markdown/fence.js';
 
 /** Max number of message_ids to keep for dedup. */
 const DEDUP_MAX = 1000;
@@ -573,6 +574,105 @@ type FeishuMessageEventData = {
     }>;
   };
 };
+
+function normalizePostCodeLanguage(value: unknown): string {
+  const language = typeof value === 'string' ? value.trim() : '';
+  if (!language) return 'text';
+  return /^[A-Za-z0-9_+#.-]+$/.test(language) ? language : 'text';
+}
+
+function appendPostBlock(parts: string[], block: string): void {
+  if (!block) return;
+  const previous = parts.at(-1) || '';
+  if (previous && !previous.endsWith('\n')) {
+    parts.push('\n');
+  }
+  parts.push(block);
+  parts.push('\n');
+}
+
+interface FeishuPostParseResult {
+  extractedText: string;
+  imageKeys: string[];
+  warnings: string[];
+}
+
+const POST_ELEMENT_FIELDS: Record<string, Set<string>> = {
+  a: new Set(['tag', 'text', 'href', 'style']),
+  at: new Set(['tag', 'user_id', 'user_name', 'style']),
+  code_block: new Set(['tag', 'language', 'text']),
+  img: new Set(['tag', 'image_key', 'file_key', 'imageKey']),
+  text: new Set(['tag', 'text', 'style', 'un_escape']),
+};
+
+function describeUnsupportedPostElementFields(element: Record<string, unknown>, index: number): string[] {
+  const tag = typeof element.tag === 'string' ? element.tag : '';
+  const knownFields = tag ? POST_ELEMENT_FIELDS[tag] : undefined;
+  if (!knownFields) return [];
+  const unsupported = Object.keys(element).filter((key) => !knownFields.has(key));
+  if (unsupported.length === 0) return [];
+  return [`第 ${index + 1} 个 ${tag} 元素包含暂未支持的字段：${unsupported.join(', ')}`];
+}
+
+function parseFeishuPostContent(content: string): FeishuPostParseResult {
+  const imageKeys: string[] = [];
+  const textParts: string[] = [];
+  const warnings: string[] = [];
+
+  try {
+    const parsed = JSON.parse(content);
+    // Post content structure: { title, content: [[{tag, text/image_key}]] }
+    const title = typeof parsed.title === 'string'
+      ? parsed.title.replace(/\s+/g, ' ').trim()
+      : '';
+    if (title) textParts.push(`# ${title}\n\n`);
+
+    const paragraphs = parsed.content;
+    if (Array.isArray(paragraphs)) {
+      for (const paragraph of paragraphs) {
+        if (!Array.isArray(paragraph)) continue;
+        for (const [index, element] of paragraph.entries()) {
+          if (!element || typeof element !== 'object') {
+            warnings.push(`第 ${index + 1} 个富文本元素结构暂不支持`);
+            appendPostBlock(textParts, '[unsupported Feishu post element]');
+            continue;
+          }
+          warnings.push(...describeUnsupportedPostElementFields(element as Record<string, unknown>, index));
+          if (element.tag === 'text' && element.text) {
+            textParts.push(element.text);
+          } else if (element.tag === 'a' && element.text) {
+            textParts.push(element.text);
+          } else if (element.tag === 'at' && element.user_id) {
+            // Mention in post — handled by isBotMentioned for group policy
+          } else if (element.tag === 'img') {
+            const key = element.image_key || element.file_key || element.imageKey;
+            if (key) imageKeys.push(key);
+          } else if (element.tag === 'code_block' && typeof element.text === 'string') {
+            appendPostBlock(
+              textParts,
+              buildFencedCodeBlock(element.text, normalizePostCodeLanguage(element.language)),
+            );
+          } else {
+            const tag = typeof element.tag === 'string' && element.tag ? element.tag : 'unknown';
+            warnings.push(`暂不支持飞书富文本元素：${tag}`);
+            appendPostBlock(textParts, `[unsupported Feishu post element: ${tag}]`);
+          }
+        }
+        textParts.push('\n');
+      }
+    } else if (parsed.content !== undefined) {
+      warnings.push('飞书富文本 content 字段结构暂不支持');
+    }
+  } catch {
+    warnings.push('飞书富文本 JSON 解析失败');
+  }
+
+  return {
+    extractedText: textParts.join('').replace(/[ \t]+\n/g, '\n').trim(),
+    imageKeys,
+    warnings,
+  };
+}
 
 
 /** MIME type guesses by message_type. */
@@ -2537,7 +2637,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
       }
     } else if (messageType === 'post') {
       // [P2] Extract text and image keys from rich text (post) messages
-      const { extractedText, imageKeys } = this.parsePostContent(msg.content);
+      const { extractedText, imageKeys, warnings } = this.parsePostContent(msg.content);
       text = extractedText;
       for (const key of imageKeys) {
         const attachment = await this.downloadResource(msg.message_id, key, 'image');
@@ -2546,9 +2646,16 @@ export class FeishuAdapter extends BaseChannelAdapter {
         }
         // Don't add fallback text for individual post images — the text already carries context
       }
+      if (warnings.length > 0) {
+        await this.notifyUnsupportedInboundContent(chatId, msg.message_id, warnings);
+      }
     } else {
       // Unsupported type — log and skip
       console.log(`[feishu-adapter] Unsupported message type: ${messageType}, msgId: ${msg.message_id}`);
+      await this.notifyUnsupportedInboundContent(chatId, msg.message_id, [
+        `暂不支持飞书消息类型：${messageType}`,
+        '这条消息不会转发给 Codex。请改用文本/富文本、图片或文件重新发送。',
+      ]);
       return;
     }
 
@@ -2637,40 +2744,30 @@ export class FeishuAdapter extends BaseChannelAdapter {
    * Parse rich text (post) content.
    * Extracts plain text from text elements and image keys from img elements.
    */
-  private parsePostContent(content: string): { extractedText: string; imageKeys: string[] } {
-    const imageKeys: string[] = [];
-    const textParts: string[] = [];
+  private async notifyUnsupportedInboundContent(chatId: string, messageId: string, warnings: string[]): Promise<void> {
+    const uniqueWarnings = Array.from(new Set(warnings.map((warning) => warning.trim()).filter(Boolean))).slice(0, 5);
+    if (uniqueWarnings.length === 0) return;
+    const omitted = warnings.length > uniqueWarnings.length
+      ? `\n- 另外还有 ${warnings.length - uniqueWarnings.length} 条同类提示已省略。`
+      : '';
+    const text = [
+      '这条飞书消息包含当前暂不支持的内容：',
+      ...uniqueWarnings.map((warning) => `- ${warning}`),
+      omitted,
+    ].join('\n').trim();
 
     try {
-      const parsed = JSON.parse(content);
-      // Post content structure: { title, content: [[{tag, text/image_key}]] }
-      const title = parsed.title;
-      if (title) textParts.push(title);
-
-      const paragraphs = parsed.content;
-      if (Array.isArray(paragraphs)) {
-        for (const paragraph of paragraphs) {
-          if (!Array.isArray(paragraph)) continue;
-          for (const element of paragraph) {
-            if (element.tag === 'text' && element.text) {
-              textParts.push(element.text);
-            } else if (element.tag === 'a' && element.text) {
-              textParts.push(element.text);
-            } else if (element.tag === 'at' && element.user_id) {
-              // Mention in post — handled by isBotMentioned for group policy
-            } else if (element.tag === 'img') {
-              const key = element.image_key || element.file_key || element.imageKey;
-              if (key) imageKeys.push(key);
-            }
-          }
-          textParts.push('\n');
-        }
+      const result = await this.sendAsPlainText(chatId, text, messageId);
+      if (!result.ok) {
+        console.warn('[feishu-adapter] Unsupported content notice failed:', result.error || 'unknown error');
       }
-    } catch {
-      // Failed to parse post content
+    } catch (error) {
+      console.warn('[feishu-adapter] Unsupported content notice error:', error instanceof Error ? error.message : error);
     }
+  }
 
-    return { extractedText: textParts.join('').trim(), imageKeys };
+  private parsePostContent(content: string): FeishuPostParseResult {
+    return parseFeishuPostContent(content);
   }
 
   // ── Bot identity ────────────────────────────────────────────
@@ -2876,6 +2973,7 @@ export const _testOnly = {
   getProxyUrlForUrl,
   getWsProxyUrl,
   maskProxyUrl,
+  parseFeishuPostContent,
   shouldBypassProxy,
   withHttpProxyOptions,
 };

@@ -132,6 +132,23 @@ describe('buildRichCardContent', () => {
     assert.match(content, /chat-1/);
   });
 
+  it('preserves raw markdown sections in rich cards', () => {
+    const cardJson = buildRichCardContent({
+      title: 'Bridge 已启动',
+      template: 'turquoise',
+      sections: [{
+        markdown: '**全局状态**\n\n```text\nAdapter 1/1 running\n```',
+      }],
+    }, 'chat-1');
+
+    const parsed = JSON.parse(cardJson) as any;
+    assert.equal(parsed.header.title.content, 'Bridge 已启动');
+    assert.equal(parsed.header.template, 'turquoise');
+    const content = JSON.stringify(parsed);
+    assert.match(content, /全局状态/);
+    assert.match(content, /Adapter 1\/1 running/);
+  });
+
   it('compresses long rich-card lists in the card body', () => {
     const cardJson = buildRichCardContent({
       title: '本地 Codex 会话',

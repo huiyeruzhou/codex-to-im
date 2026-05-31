@@ -124,6 +124,94 @@ describe('feishu-adapter structured streaming regions', () => {
     );
   });
 
+  it('preserves Feishu post code blocks as fenced markdown', () => {
+    const parsed = _testOnly.parseFeishuPostContent(JSON.stringify({
+      title: '',
+      content: [
+        [{ tag: 'text', text: 'before', style: [] }],
+        [{ tag: 'code_block', language: 'rust', text: 'KEY=AHAHAHAH' }],
+        [{ tag: 'text', text: 'after', style: [] }],
+      ],
+    }));
+
+    assert.equal(parsed.imageKeys.length, 0);
+    assert.equal(parsed.warnings.length, 0);
+    assert.match(parsed.extractedText, /before/);
+    assert.match(parsed.extractedText, /```rust\nKEY=AHAHAHAH\n```/);
+    assert.match(parsed.extractedText, /after/);
+  });
+
+  it('renders Feishu post titles as markdown H1 headings', () => {
+    const parsed = _testOnly.parseFeishuPostContent(JSON.stringify({
+      title: '标题',
+      content: [
+        [{ tag: 'text', text: 'bridge已启动那句，能不能带个标题', style: [] }],
+      ],
+    }));
+
+    assert.equal(parsed.imageKeys.length, 0);
+    assert.equal(parsed.warnings.length, 0);
+    assert.equal(parsed.extractedText, '# 标题\n\nbridge已启动那句，能不能带个标题');
+  });
+
+  it('keeps unsupported Feishu post elements visible and reports parse warnings', () => {
+    const parsed = _testOnly.parseFeishuPostContent(JSON.stringify({
+      title: '',
+      content: [
+        [{ tag: 'text', text: 'before', style: [] }],
+        [{ tag: 'unsupported_widget', value: 'secret' }],
+      ],
+    }));
+
+    assert.match(parsed.extractedText, /before/);
+    assert.match(parsed.extractedText, /\[unsupported Feishu post element: unsupported_widget\]/);
+    assert.deepEqual(parsed.warnings, ['暂不支持飞书富文本元素：unsupported_widget']);
+  });
+
+  it('replies with a user-visible notice for unsupported Feishu message types', async () => {
+    const replies: Array<Record<string, any>> = [];
+    const adapter = new FeishuAdapter({
+      id: 'feishu-default',
+      provider: 'feishu',
+      enabled: true,
+      alias: '飞书',
+      config: {},
+    });
+    (adapter as any).restClient = {
+      im: {
+        message: {
+          reply: async (payload: Record<string, any>) => {
+            replies.push(payload);
+            return { data: { message_id: 'notice-1' } };
+          },
+        },
+      },
+    };
+
+    await (adapter as any).processIncomingEvent({
+      sender: {
+        sender_type: 'user',
+        sender_id: { open_id: 'user-1' },
+      },
+      message: {
+        message_id: 'msg-sticker-1',
+        chat_id: 'chat-1',
+        chat_type: 'p2p',
+        message_type: 'sticker',
+        content: '{"sticker_key":"sticker-1"}',
+        create_time: '1780209968114',
+      },
+    });
+
+    assert.equal(replies.length, 1);
+    assert.equal(replies[0].path.message_id, 'msg-sticker-1');
+    assert.equal(replies[0].data.msg_type, 'text');
+    const content = JSON.parse(replies[0].data.content);
+    assert.match(content.text, /暂不支持飞书消息类型：sticker/);
+    assert.match(content.text, /不会转发给 Codex/);
+    assert.equal(await adapter.consumeOne(), null);
+  });
+
   it('does not add typing reactions while starting or ending a stream', async () => {
     const reactionCreateCalls: Array<Record<string, any>> = [];
     const reactionDeleteCalls: Array<Record<string, any>> = [];
