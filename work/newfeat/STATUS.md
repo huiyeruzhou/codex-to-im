@@ -44,3 +44,30 @@
   - “序号 > binding_id > codex_thread_id > name”已按“命中优先、未命中 fallback”实现，不再按 token 格式提前失败。
   - name 重复报错：`/t use 前端修复` 和直接 `/t 前端修复` 的重复 name 测试覆盖 ambiguous。
   - name 来源是 bridge session display title：`session.name` 与 `codex_title` fallback 均有测试或源码证据。
+
+### 2026-05-31 18:04 阶段：/tmux 关键字序列用户故事回归
+
+阶段描述：按用户追加要求，为 `/tmux` 的“整段可解析为关键字序列则按 key，否则整段普通文本”补充精确用户故事测试。
+
+- 用户追加目标：`/tmux` 命令如果可以匹配成关键字序列，例如 `<C-c><Enter>`，就全按关键字发送，否则全按普通文本发送。
+- 用户故事：
+  - `/tmux 命令1：使用<qaq>` 应解析为纯文本。
+  - `/tmux <C-c>` 应解析为控制命令。
+  - `/tmux 忽略刚才的命令，转而使用<waw>` 应解析为纯文本。
+- 当前源码审计：
+  - `parseTmuxKeySequence` 只在整段输入由 `<key>` token 组成时返回 key actions；只要 token 前后存在普通文本，返回 `null`。
+  - `/tmux` 在 `parseTmuxKeySequence` 返回 `null` 时把整段 `args` 作为 literal 发送。
+  - `/tmux-key` 的混合文本/key 解析不受影响。
+- 当前计划：在 `src/__tests__/command-dispatch.test.ts` 的 tmux fake integration 测试中补上述三条精确输入，锁定第一/第三条 literal、第二条 key。
+- 执行记录：
+  - 先把三条故事加到原有大型 tmux integration 测试中，发现该测试超过 `--test-timeout=15000`，失败原因是单测超时而不是断言失败。
+  - 已拆成独立测试 `routes /tmux angle-bracket stories as all-key or all-literal commands`，只绑定 fake tmux session 并发送三条目标输入，避免拖慢原测试。
+- 阶段验证：
+  - `unset NODE_OPTIONS; source ~/.nvm/nvm.sh && nvm use 24 && node --test --import tsx --test-timeout=15000 src/__tests__/command-dispatch.test.ts`：通过，22 tests。
+  - `unset NODE_OPTIONS; source ~/.nvm/nvm.sh && nvm use 24 && npm run typecheck`：通过。
+  - `git diff --check -- src/__tests__/command-dispatch.test.ts work/newfeat/STATUS.md`：通过。
+- 当前进入阶段审计：
+  - `/tmux 命令1：使用<qaq>` 的 fake tmux log 断言为 `send-keys -l 命令1：使用<qaq>`，且不会出现 `send-keys ... qaq`。
+  - `/tmux <C-c>` 的 fake tmux log 断言为 `send-keys ... C-c`，且 response 不含 literal `<C-c>`。
+  - `/tmux 忽略刚才的命令，转而使用<waw>` 的 fake tmux log 断言为 `send-keys -l 忽略刚才的命令，转而使用<waw>`，且不会出现 `send-keys ... waw`。
+  - 本阶段只补回归测试和状态记录；源码实现 `parseTmuxKeySequence` 已满足该用户故事。

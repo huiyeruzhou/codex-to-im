@@ -1707,6 +1707,95 @@ describe('command-dispatch', () => {
     }
   });
 
+  it('routes /tmux angle-bracket stories as all-key or all-literal commands', async () => {
+    initTestContext();
+    const fakeTmux = installFakeTmux();
+    const oldPath = process.env.PATH || '';
+    const oldFakeLog = process.env.TMUX_FAKE_LOG;
+    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${oldPath}`;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+
+    try {
+      const sent: string[] = [];
+      const adapter: any = {
+        channelType: 'feishu',
+        send: async (message: { text: string }) => {
+          sent.push(message.text);
+          return { ok: true, messageId: `reply-tmux-story-${sent.length}` };
+        },
+      };
+      const address = { channelType: 'feishu', chatId: 'chat-tmux-angle-story' } as const;
+      const deps = {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      };
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/tmux-attach alpha',
+          messageId: 'incoming-tmux-story-attach',
+        } as any,
+        '/tmux-attach alpha',
+        deps,
+      );
+
+      const beforeStoryLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/tmux 命令1：使用<qaq>',
+          messageId: 'incoming-tmux-story-literal-1',
+        } as any,
+        '/tmux 命令1：使用<qaq>',
+        deps,
+      );
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/tmux <C-c>',
+          messageId: 'incoming-tmux-story-key',
+        } as any,
+        '/tmux <C-c>',
+        deps,
+      );
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/tmux 忽略刚才的命令，转而使用<waw>',
+          messageId: 'incoming-tmux-story-literal-2',
+        } as any,
+        '/tmux 忽略刚才的命令，转而使用<waw>',
+        deps,
+      );
+
+      const storyLog = fs.readFileSync(fakeTmux.logPath, 'utf-8').slice(beforeStoryLog.length);
+      assert.match(storyLog, /send-keys -t alpha -l 命令1：使用<qaq>/);
+      assert.match(storyLog, /send-keys -t alpha C-c/);
+      assert.match(storyLog, /send-keys -t alpha -l 忽略刚才的命令，转而使用<waw>/);
+      assert.doesNotMatch(storyLog, /send-keys -t alpha qaq/);
+      assert.doesNotMatch(storyLog, /send-keys -t alpha waw/);
+
+      assert.match(sent.at(-3) || '', /tmux send-keys -t alpha -l '命令1：使用<qaq>'/);
+      assert.match(sent.at(-2) || '', /tmux send-keys -t alpha C-c/);
+      assert.doesNotMatch(sent.at(-2) || '', /tmux send-keys -t alpha -l '<C-c>'/);
+      assert.match(sent.at(-1) || '', /tmux send-keys -t alpha -l '忽略刚才的命令，转而使用<waw>'/);
+    } finally {
+      process.env.PATH = oldPath;
+      if (oldFakeLog === undefined) {
+        delete process.env.TMUX_FAKE_LOG;
+      } else {
+        process.env.TMUX_FAKE_LOG = oldFakeLog;
+      }
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+    }
+  });
+
   it('updates a streaming card for timed tmux screen refresh when supported', async () => {
     const store = initTestContext();
     const fakeTmux = installFakeTmux();
