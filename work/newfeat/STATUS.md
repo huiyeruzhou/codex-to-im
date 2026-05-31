@@ -232,3 +232,12 @@
   - 将本状态记录 amend 到当前提交。
   - 使用临时 worktree 从当前 HEAD 创建干净工作区，fetch/rebase 到 `origin/master`，在临时 worktree 中解决冲突。
   - 从临时 worktree push `HEAD:master`，避免当前脏工作树影响 rebase。
+- 用户纠偏：
+  - 2026-05-31 22:15 CST 用户表示：如果远端重构提交非常大，就把本地强推上去。
+- 调整后计划：
+  - 中止普通 rebase，避免在重复的大型重构提交上解决无意义冲突。
+  - 使用 `--force-with-lease=master:2346308b2e3581809bfc76ce85f9b158dd775561` 推送本地 `master` 到远端 `master`，只在远端仍停留在当前已 fetch 的 `origin/master` 时覆盖。
+  - 推送前保留本地备份分支 `backup/master-before-push-20260531`，并保留 push 前 stash 中的无关未提交改动。
+- 执行记录：
+  - 2026-05-31 22:16 CST 执行 `git push --force-with-lease=refs/heads/master:2346308b2e3581809bfc76ce85f9b158dd775561 origin master:master` 成功，远端 `master` 从 `2346308` 强制更新到本地提交 `a8d4fab`。
+  - 由于本推送结果需要按仓库规则落盘，准备再次 amend 当前状态记录并用新的远端提交作为 lease 做最终推送。

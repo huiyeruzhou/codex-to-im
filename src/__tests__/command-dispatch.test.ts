@@ -216,6 +216,213 @@ describe('command-dispatch', () => {
     assert.match(sent.at(-1) || '', /不能通过 IM 命令传 `--run`/);
   });
 
+  it('runs /shell through codex sandbox independent of yolo mode', async () => {
+    const store = initTestContext();
+    const address = { channelType: 'feishu', chatId: 'chat-shell-run' } as const;
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-shell-run-'));
+    const binding = router.createBinding(address, workDir);
+    const session = store.getSession(binding.bridgeSessionId);
+    assert.ok(session);
+    store.updateSession(session.id, { codex_sandbox_mode: 'danger-full-access' });
+    router.updateBinding(binding.id, { mode: 'yolo' });
+
+    const sent: string[] = [];
+    const requests: Array<{ command: string; cwd: string; sandboxMode: string; shell: string }> = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      send: async (message: { text: string }) => {
+        sent.push(message.text);
+        return { ok: true, messageId: `reply-shell-${sent.length}` };
+      },
+    };
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/shell echo ok',
+        messageId: 'incoming-shell-run',
+      } as any,
+      '/shell echo ok',
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+        shellRunner: async (request) => {
+          requests.push({
+            command: request.command,
+            cwd: request.cwd,
+            sandboxMode: request.sandboxMode,
+            shell: request.shell,
+          });
+          return { exitCode: 0, stdout: 'ok\n', stderr: '' };
+        },
+      },
+    );
+
+    assert.deepEqual(requests, [{
+      command: 'echo ok',
+      cwd: workDir,
+      sandboxMode: 'workspace-write',
+      shell: process.env.SHELL || '/bin/bash',
+    }]);
+    assert.match(sent.at(-1) || '', /\/shell 执行完成/);
+    assert.match(sent.at(-1) || '', /Codex sandbox.*workspace-write/s);
+    assert.match(sent.at(-1) || '', /ok/);
+  });
+
+  it('runs real /shell commands for listing, workspace write, and invalid directory write failure', async () => {
+    initTestContext();
+    const address = { channelType: 'feishu', chatId: 'chat-shell-real' } as const;
+    const cwd = fs.mkdtempSync(path.join(process.cwd(), '.tmp-cti-shell-real-'));
+    fs.writeFileSync(path.join(cwd, 'visible.txt'), 'ok\n', 'utf-8');
+    const outsideDir = fs.mkdtempSync(path.join(os.homedir(), '.cti-shell-outside-'));
+    const outsidePath = path.join(outsideDir, 'blocked.txt');
+    router.createBinding(address, cwd);
+
+    const sent: string[] = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      send: async (message: { text: string }) => {
+        sent.push(message.text);
+        return { ok: true, messageId: `reply-shell-real-${sent.length}` };
+      },
+    };
+    const deps = {
+      getActiveTask: () => undefined,
+      diagnoseSessionHealth: async () => null,
+      diagnoseAllActiveSessions: async () => [],
+    };
+
+    try {
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/shell ls',
+          messageId: 'incoming-shell-real-ls',
+        } as any,
+        '/shell ls',
+        deps,
+      );
+      assert.match(sent.at(-1) || '', /\/shell 执行完成/);
+      assert.match(sent.at(-1) || '', /退出码[\s\S]*0/);
+      assert.match(sent.at(-1) || '', /visible\.txt/);
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/shell echo shell-ok > temp.txt',
+          messageId: 'incoming-shell-real-write',
+        } as any,
+        '/shell echo shell-ok > temp.txt',
+        deps,
+      );
+      assert.match(sent.at(-1) || '', /退出码[\s\S]*0/);
+      assert.equal(fs.readFileSync(path.join(cwd, 'temp.txt'), 'utf-8'), 'shell-ok\n');
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: `/shell echo nope > ${outsidePath}`,
+          messageId: 'incoming-shell-real-invalid-dir',
+        } as any,
+        `/shell echo nope > ${outsidePath}`,
+        deps,
+      );
+      assert.match(sent.at(-1) || '', /退出码[\s\S]*[1-9]/);
+      assert.equal(fs.existsSync(outsidePath), false);
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true });
+      fs.rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it('audits /shell high-risk and malformed commands before running', async () => {
+    initTestContext();
+    const address = { channelType: 'feishu', chatId: 'chat-shell-audit' } as const;
+    router.createBinding(address, fs.mkdtempSync(path.join(os.tmpdir(), 'cti-shell-audit-')));
+
+    const sent: string[] = [];
+    let runnerCalls = 0;
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      send: async (message: { text: string }) => {
+        sent.push(message.text);
+        return { ok: true, messageId: `reply-shell-audit-${sent.length}` };
+      },
+    };
+    const deps = {
+      getActiveTask: () => undefined,
+      diagnoseSessionHealth: async () => null,
+      diagnoseAllActiveSessions: async () => [],
+      shellRunner: async () => {
+        runnerCalls += 1;
+        return { exitCode: 0, stdout: 'forced\n', stderr: '' };
+      },
+    };
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/shell rm -rf dist',
+        messageId: 'incoming-shell-rm',
+      } as any,
+      '/shell rm -rf dist',
+      deps,
+    );
+    assert.equal(runnerCalls, 0);
+    assert.match(sent.at(-1) || '', /\/shell 需要确认/);
+    assert.match(sent.at(-1) || '', /--force/);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/shell / tmp',
+        messageId: 'incoming-shell-slash',
+      } as any,
+      '/shell / tmp',
+      deps,
+    );
+    assert.equal(runnerCalls, 0);
+    assert.match(sent.at(-1) || '', /\/shell 已拒绝执行/);
+    assert.match(sent.at(-1) || '', /绝对路径被空格拆开/);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/shell --sandbox danger-full-access echo no',
+        messageId: 'incoming-shell-danger-sandbox',
+      } as any,
+      '/shell --sandbox danger-full-access echo no',
+      deps,
+    );
+    assert.equal(runnerCalls, 0);
+    assert.match(sent.at(-1) || '', /不允许 danger-full-access/);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/shell --force rm -rf dist',
+        messageId: 'incoming-shell-force',
+      } as any,
+      '/shell --force rm -rf dist',
+      deps,
+    );
+    assert.equal(runnerCalls, 1);
+    assert.match(sent.at(-1) || '', /已确认高风险操作/);
+    assert.match(sent.at(-1) || '', /forced/);
+  });
+
   it('switches /thread 0 into the hidden draft session and keeps normal mode', async () => {
     const store = initTestContext();
     const sent: string[] = [];

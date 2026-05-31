@@ -55,6 +55,10 @@ import {
   handleHotUpdateCommand,
   type HotUpdateRunner,
 } from './hot-update.js';
+import {
+  handleShellCommand,
+  type ShellCommandRunner,
+} from './shell.js';
 import type { AutoTaskCardAction } from '../command-callbacks.js';
 import {
   finalizeStreamFeedback,
@@ -84,6 +88,7 @@ export interface BridgeCommandDispatchDeps {
   hotUpdateRunner?: HotUpdateRunner;
   hotUpdateCwd?: string;
   hotUpdateEnv?: NodeJS.ProcessEnv;
+  shellRunner?: ShellCommandRunner;
 }
 
 export async function handleBridgeCommand(
@@ -109,8 +114,11 @@ export async function handleBridgeCommand(
     || command === '/tmux-status'
     || command === '/tmux-screen'
     || command === '/tmux-set';
+  const isShellCommand = command === '/shell';
   const dangerCheck = isTmuxKeystrokeCommand
     ? { dangerous: text.includes('\0') || text.length > 64_000, reason: text.includes('\0') ? 'null byte detected' : 'excessively long input' }
+    : isShellCommand
+      ? { dangerous: text.includes('\0') || text.length > 64_000, reason: text.includes('\0') ? 'null byte detected' : 'excessively long input' }
     : isDangerousInput(text);
   if (dangerCheck.dangerous) {
     store.insertAuditLog({
@@ -433,6 +441,16 @@ export async function handleBridgeCommand(
         cwd: deps.hotUpdateCwd,
         env: deps.hotUpdateEnv,
         runner: deps.hotUpdateRunner,
+      });
+      break;
+    }
+
+    case '/shell': {
+      response = await handleShellCommand({
+        args,
+        binding: commandBinding,
+        markdown: responseParseMode === 'Markdown',
+        runner: deps.shellRunner,
       });
       break;
     }

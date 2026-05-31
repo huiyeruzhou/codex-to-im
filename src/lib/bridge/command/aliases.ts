@@ -81,6 +81,7 @@ const KNOWN_BRIDGE_COMMANDS = new Set([
   '/health',
   '/history',
   '/hot-update',
+  '/shell',
   '/cat',
   '/file',
   '/stop',
