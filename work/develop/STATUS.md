@@ -162,3 +162,27 @@
   - `unset NODE_OPTIONS; source ~/.nvm/nvm.sh && nvm use 24 && npm run typecheck`：通过。
 - 用户追加下阶段目标（2026-05-31 17:??）：当前 `/t` fallback 修正完成后，下一个阶段做 `/tmux` 优化：`/tmux` 命令如果参数能匹配成关键字序列（例如 `<C-c><Enter>`），就全部按关键字发送；否则全部按普通文本发送。
 - 阶段边界：上述 `/tmux` 优化不混入当前 `/t` 提交，待 `/t` 阶段 amend 完成后作为下一阶段处理。
+- `/t` 阶段提交：`ece2f92 Support direct thread target resolution`。
+
+### 2026-05-31 17:48 阶段：/tmux 关键字序列解析优化
+
+阶段描述：按用户最新要求，优化 `/tmux` 命令的参数分流：只有整段参数可解析为 tmux 关键字序列时才按关键字发送，否则整段都按普通文本发送。
+
+- 阶段目标：`/tmux <C-c><Enter>` 这类输入应按 tmux key 序列发送；如果参数不能完整匹配为关键字序列，则不做局部混合解析，而是全量作为普通文本发送。
+- 当前计划：审计 `src/lib/bridge/command/tmux.ts` 的 key/text 解析函数和现有测试，补实现与回归测试，验证后单独提交。
+- 审计发现：此前 `/tmux` 永远把参数作为 literal 发送并按 `tmux_auto_enter` 自动补 Enter；只有 `/tmux-key` 调用 `parseTmuxSendActions`，且 `/tmux-key` 支持文字与 `<...>` 按键混合。
+- 已修改 `src/lib/bridge/command/tmux.ts`：
+  - 新增 `parseTmuxKeySequence`，只接受整段由 `<key>` token 组成的输入，中间允许空白但不允许普通文本。
+  - `/tmux <C-c>`、`/tmux <C-c><Enter>` 这类纯特殊键序列按 key actions 发送。
+  - `/tmux <C-c> hello` 这类不能完整解析成 key 序列的输入整体作为普通文本发送。
+  - 纯 key 序列分支不再追加 `tmux_auto_enter` 的隐式 Enter，普通文本分支仍保留既有自动回车行为。
+  - `/tmux-key` 的混合文本/按键解析保持不变。
+- 已补 `src/__tests__/command-dispatch.test.ts` 回归：
+  - `/tmux <C-c>` 发送 `C-c`，不发送 literal，也不隐式补 Enter。
+  - `/tmux <C-c><Enter>` 发送 `C-c` 和 `Enter` 两个 key，不按 literal 发送。
+  - `/tmux <C-c> hello` 整体作为 literal 发送，并在自动回车开启时补 Enter。
+- 阶段验证：
+  - `unset NODE_OPTIONS; source ~/.nvm/nvm.sh && nvm use 24 && node --test --import tsx --test-timeout=15000 src/__tests__/command-dispatch.test.ts`：通过，21 tests。
+  - `unset NODE_OPTIONS; source ~/.nvm/nvm.sh && nvm use 24 && npm run typecheck`：通过。
+  - `git diff --check -- src/lib/bridge/command/tmux.ts src/__tests__/command-dispatch.test.ts work/develop/STATUS.md`：通过。
+- 当前进入阶段审计：本阶段只修改 `/tmux` key/text 分流与对应测试，未混入 `/t` 或 `/auto` 代码变更；用户要求的“能匹配成关键字序列就全按关键字，否则全普通文本”已由实现和回归测试覆盖。

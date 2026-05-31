@@ -224,7 +224,8 @@ function buildTmuxSwitchCommandCard(
 
 function tmuxDirectHelp(): string[] {
   return [
-    '普通文本：直接写在 `/tmux` 后面，例如 `/tmux pwd`；尖括号会按原文发送。',
+    '普通文本：直接写在 `/tmux` 后面，例如 `/tmux pwd`；如果整段不是特殊键序列，尖括号会按原文发送。',
+    '纯特殊键序列：`/tmux <C-c><Enter>` 会按顺序发送 Ctrl+C 和 Enter。',
     '特殊键：使用 `/tmux-key` 和尖括号，例如 `/tmux-key <Enter>`、`/tmux-key <Tab>`、`/tmux-key <Esc>`。',
     'Ctrl/Cmd：写成 `/tmux-key <C-c>`、`/tmux-key <Ctrl+C>` 或 `/tmux-key <Cmd+C>`，都会按 tmux 的 `C-c` 形式发送。',
     'Option/Alt：写成 `/tmux-key <Option+Enter>`、`/tmux-key <Alt+Enter>` 或 tmux 原生命名 `/tmux-key <M-Enter>`。',
@@ -354,6 +355,27 @@ function parseTmuxSendActions(raw: string): { actions?: TmuxSendAction[]; error?
   const trailing = raw.slice(lastIndex);
   if (trailing) actions.push({ type: 'literal', text: trailing });
   return { actions };
+}
+
+function parseTmuxKeySequence(raw: string): TmuxSendAction[] | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  const actions: TmuxSendAction[] = [];
+  const pattern = /<([^<>]+)>/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(trimmed)) !== null) {
+    if (trimmed.slice(lastIndex, match.index).trim()) return null;
+    const parsedKey = parseSpecialKeyToken(match[1]);
+    if (parsedKey.error) return null;
+    actions.push({ type: 'key', key: parsedKey.key! });
+    lastIndex = pattern.lastIndex;
+  }
+
+  if (trimmed.slice(lastIndex).trim()) return null;
+  return actions.length > 0 ? actions : null;
 }
 
 function shouldAppendAutoEnter(actions: TmuxSendAction[], session: BridgeSession): boolean {
@@ -764,9 +786,10 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
           markdown,
         );
       }
+      const keySequenceActions = command === '/tmux' ? parseTmuxKeySequence(args) : null;
       const parsed = command === '/tmux-key'
         ? parseTmuxSendActions(args)
-        : { actions: [{ type: 'literal', text: args }] as TmuxSendAction[] };
+        : { actions: keySequenceActions || [{ type: 'literal', text: args }] as TmuxSendAction[] };
       if (parsed.error) {
         return buildCommandFields(
           'tmux 按键用法',
@@ -776,7 +799,7 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
         );
       }
       const actions = parsed.actions || [];
-      const actionsToSend = command === '/tmux'
+      const actionsToSend = command === '/tmux' && !keySequenceActions
         ? applyAutoEnter(actions, session)
         : actions;
       const sendResult = await tmuxCore.sendActions(target, actionsToSend, { delayMs: SEND_ACTION_DELAY_MS });

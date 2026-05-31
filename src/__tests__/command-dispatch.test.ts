@@ -1416,6 +1416,63 @@ describe('command-dispatch', () => {
       const explicitEnterLogDelta = afterExplicitEnterLog.slice(beforeExplicitEnterLog.length);
       assert.match(explicitEnterLogDelta, /send-keys -t alpha -l echo <literal>/);
 
+      const beforeKeyOnlyLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/tmux <C-c>',
+          messageId: 'incoming-tmux-direct-key-only',
+        } as any,
+        '/tmux <C-c>',
+        deps,
+      );
+      const keyOnlyResponse = sent.at(-1) || '';
+      assert.match(keyOnlyResponse, /tmux send-keys -t alpha C-c/);
+      assert.doesNotMatch(keyOnlyResponse, /tmux send-keys -t alpha -l '<C-c>'/);
+      const keyOnlyLogDelta = fs.readFileSync(fakeTmux.logPath, 'utf-8').slice(beforeKeyOnlyLog.length);
+      assert.match(keyOnlyLogDelta, /send-keys -t alpha C-c/);
+      assert.doesNotMatch(keyOnlyLogDelta, /send-keys -t alpha Enter/);
+      assert.doesNotMatch(keyOnlyLogDelta, /send-keys -t alpha -l <C-c>/);
+
+      const beforeKeySequenceLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/tmux <C-c><Enter>',
+          messageId: 'incoming-tmux-direct-key-sequence',
+        } as any,
+        '/tmux <C-c><Enter>',
+        deps,
+      );
+      const keySequenceResponse = sent.at(-1) || '';
+      assert.match(keySequenceResponse, /tmux send-keys -t alpha C-c/);
+      assert.match(keySequenceResponse, /tmux send-keys -t alpha Enter/);
+      assert.doesNotMatch(keySequenceResponse, /tmux send-keys -t alpha -l '<C-c><Enter>'/);
+      const keySequenceLogDelta = fs.readFileSync(fakeTmux.logPath, 'utf-8').slice(beforeKeySequenceLog.length);
+      assert.match(keySequenceLogDelta, /send-keys -t alpha C-c/);
+      assert.match(keySequenceLogDelta, /send-keys -t alpha Enter/);
+      assert.doesNotMatch(keySequenceLogDelta, /send-keys -t alpha -l <C-c><Enter>/);
+
+      const beforeMixedDirectLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/tmux <C-c> hello',
+          messageId: 'incoming-tmux-direct-mixed-falls-back-literal',
+        } as any,
+        '/tmux <C-c> hello',
+        deps,
+      );
+      const mixedDirectResponse = sent.at(-1) || '';
+      assert.match(mixedDirectResponse, /tmux send-keys -t alpha -l '<C-c> hello'/);
+      assert.match(mixedDirectResponse, /tmux send-keys -t alpha Enter/);
+      const mixedDirectLogDelta = fs.readFileSync(fakeTmux.logPath, 'utf-8').slice(beforeMixedDirectLog.length);
+      assert.match(mixedDirectLogDelta, /send-keys -t alpha -l <C-c> hello/);
+      assert.doesNotMatch(mixedDirectLogDelta, /send-keys -t alpha C-c/);
+
       await handleBridgeCommand(
         adapter,
         {
@@ -1602,6 +1659,7 @@ describe('command-dispatch', () => {
       assert.match(log, /send-keys -t alpha -l pwd/);
       assert.match(log, /send-keys -t alpha -l echo auto/);
       assert.match(log, /send-keys -t alpha -l echo <literal>/);
+      assert.match(log, /send-keys -t alpha -l <C-c> hello/);
       assert.match(log, /send-keys -t alpha -l echo off/);
       assert.match(log, /send-keys -t alpha Enter/);
       assert.match(log, /send-keys -t alpha C-c/);
