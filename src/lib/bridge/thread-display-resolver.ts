@@ -152,7 +152,8 @@ export class ThreadDisplayService {
     const index = /^\d+$/.test(token) ? Number(token) : null;
     if (index !== null) {
       if (!Number.isInteger(index) || index < 1) return {};
-      return { binding: bindings[index - 1], index };
+      const binding = bindings[index - 1];
+      if (binding) return { binding, index };
     }
 
     const bindingMatches = bindings.filter((binding) => (

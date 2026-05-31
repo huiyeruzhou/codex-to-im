@@ -813,6 +813,71 @@ describe('command-dispatch', () => {
       adapter,
       {
         address,
+        text: '/t 后端修复',
+        messageId: 'incoming-t-direct-name',
+      } as any,
+      '/t 后端修复',
+      deps,
+    );
+    assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, second.id);
+    assert.match(sent.at(-1) || '', /当前线程已切换/);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: `/t ${first.id}`,
+        messageId: 'incoming-t-direct-binding-id-priority',
+      } as any,
+      `/t ${first.id}`,
+      deps,
+    );
+    assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, first.id);
+    assert.match(sent.at(-1) || '', /当前线程已切换/);
+
+    store.updateSessionCodexThreadId(second.bridgeSessionId, '546754');
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/t use 546754',
+        messageId: 'incoming-t-use-numeric-thread-id-fallback',
+      } as any,
+      '/t use 546754',
+      deps,
+    );
+    assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, second.id);
+    assert.match(sent.at(-1) || '', /当前线程已切换/);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: `/t ${first.id}`,
+        messageId: 'incoming-t-direct-binding-id-before-numeric-thread',
+      } as any,
+      `/t ${first.id}`,
+      deps,
+    );
+    assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, first.id);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/t 546754',
+        messageId: 'incoming-t-direct-numeric-thread-id-fallback',
+      } as any,
+      '/t 546754',
+      deps,
+    );
+    assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, second.id);
+    assert.match(sent.at(-1) || '', /当前线程已切换/);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
         text: '/t rm 后端修复',
         messageId: 'incoming-t-rm-name',
       } as any,
@@ -838,6 +903,19 @@ describe('command-dispatch', () => {
     );
 
     assert.match(sent.at(-1) || '', /匹配到多个绑定线程/);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/t 前端修复',
+        messageId: 'incoming-t-direct-duplicate-name',
+      } as any,
+      '/t 前端修复',
+      deps,
+    );
+
+    assert.match(sent.at(-1) || '', /匹配到多个/);
   });
 
   it('creates, lists, and removes /auto tasks on the current bridge session', async () => {

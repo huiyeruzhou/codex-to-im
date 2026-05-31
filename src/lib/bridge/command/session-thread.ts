@@ -6,6 +6,7 @@ import {
 import {
   DEFAULT_CODEX_THREAD_LIST_LIMIT,
   MAX_CODEX_THREAD_LIST_LIMIT,
+  parseListIndex,
   parseCodexThreadListArgs,
 } from './aliases.js';
 import {
@@ -131,6 +132,94 @@ function selectCodexThreadForCommand(
     thread: fallback.thread ? { ...fallback.thread, title: threadDisplay.codex(fallback.thread).title } : undefined,
     threadId: fallback.threadId,
   };
+}
+
+function selectCodexThreadByThreadId(
+  raw: string,
+  displayedThreads: CodexSessionSummary[],
+): {
+  thread?: CodexSessionSummary;
+  threadId?: string;
+  ambiguous?: boolean;
+} {
+  const token = raw.trim();
+  const lowerToken = token.toLowerCase();
+  const exactThread = displayedThreads.find((session) => session.threadId.toLowerCase() === lowerToken);
+  if (exactThread) return { thread: exactThread, threadId: exactThread.threadId };
+
+  const prefixMatches = displayedThreads.filter((session) => session.threadId.toLowerCase().startsWith(lowerToken));
+  if (prefixMatches.length > 1) return { ambiguous: true };
+  if (prefixMatches.length === 1) return { thread: prefixMatches[0], threadId: prefixMatches[0].threadId };
+
+  const fallback = getCommandCodexThreadByIdSafe(raw, 'thread switch by id');
+  return {
+    thread: fallback.thread,
+    threadId: fallback.threadId,
+  };
+}
+
+function selectDirectThreadTarget(
+  threadDisplay: CommandThreadDisplay,
+  raw: string,
+  bindings: ChannelBinding[],
+  displayedThreads: CodexSessionSummary[],
+): {
+  binding?: ChannelBinding;
+  thread?: CodexSessionSummary;
+  threadId?: string;
+  ambiguous?: boolean;
+  index?: number;
+} {
+  const token = raw.trim();
+  const lowerToken = token.toLowerCase();
+  const index = parseListIndex(token);
+  if (index !== null) {
+    const selected = selectCodexThreadForCommand(threadDisplay, raw, displayedThreads);
+    if (selected.threadId || selected.ambiguous) {
+      return {
+        thread: selected.thread,
+        threadId: selected.threadId,
+        ambiguous: selected.ambiguous,
+        index: selected.index,
+      };
+    }
+  }
+
+  const bindingIdMatches = bindings.filter((binding) => (
+    binding.id.toLowerCase() === lowerToken
+    || binding.id.toLowerCase().startsWith(lowerToken)
+    || binding.bridgeSessionId.toLowerCase() === lowerToken
+    || binding.bridgeSessionId.toLowerCase().startsWith(lowerToken)
+  ));
+  if (bindingIdMatches.length > 1) return { ambiguous: true };
+  if (bindingIdMatches.length === 1) return { binding: bindingIdMatches[0] };
+
+  const bindingThreadMatches = bindings.filter((binding) => {
+    const threadId = threadDisplay.bindingThreadId(binding);
+    return Boolean(threadId && (threadId.toLowerCase() === lowerToken || threadId.toLowerCase().startsWith(lowerToken)));
+  });
+  if (bindingThreadMatches.length > 1) return { ambiguous: true };
+  if (bindingThreadMatches.length === 1) return { binding: bindingThreadMatches[0] };
+
+  const codexThreadMatch = selectCodexThreadByThreadId(raw, displayedThreads);
+  if (codexThreadMatch.ambiguous) return { ambiguous: true };
+  if (codexThreadMatch.threadId) return codexThreadMatch;
+
+  const bindingNameMatches = bindings.filter((binding) => threadDisplay.binding(binding).title.trim() === token);
+  const codexNameMatches = displayedThreads.filter((session) => session.title.trim() === token);
+  const targets = new Map<string, { binding?: ChannelBinding; thread?: CodexSessionSummary; threadId?: string }>();
+  for (const binding of bindingNameMatches) {
+    const threadId = threadDisplay.bindingThreadId(binding);
+    targets.set(threadId ? `thread:${threadId}` : `binding:${binding.id}`, { binding });
+  }
+  for (const thread of codexNameMatches) {
+    const key = `thread:${thread.threadId}`;
+    if (!targets.has(key)) {
+      targets.set(key, { thread, threadId: thread.threadId });
+    }
+  }
+  if (targets.size > 1) return { ambiguous: true };
+  return Array.from(targets.values())[0] || {};
 }
 
 function getRawCodexTitle(threadId: string | undefined, fallback?: string): string | undefined {
@@ -592,9 +681,40 @@ export async function handleThreadSwitchCommand(options: {
     return { response: '读取本地 Codex 会话列表失败，请稍后重试。' };
   }
   const decoratedThreads = options.threadDisplay.decorateCodexSessions(displayedThreads, options.msg.address.channelType, options.msg.address.chatId);
-  const selected = selectCodexThreadForCommand(options.threadDisplay, threadArgs, decoratedThreads);
+  const bindings = listBindingsForChat(options.store, options.msg.address.channelType, options.msg.address.chatId);
+  const selected = selectDirectThreadTarget(options.threadDisplay, threadArgs, bindings, decoratedThreads);
   if (selected.ambiguous) {
     return { response: '匹配到多个本地 Codex 会话，请先发送 `/t` 查看列表，再用 `/t 1` 这种序号切换。' };
+  }
+  if (selected.binding) {
+    const previousActive = options.store.getChannelBinding(options.msg.address.channelType, options.msg.address.chatId);
+    const updatedBinding = setActiveBindingForChat(options.store, selected.binding.id);
+    auditCommandBindingChange(
+      options.store,
+      'use_binding',
+      options.msg,
+      previousActive,
+      updatedBinding,
+      parsedArgs.force ? 'forced' : undefined,
+    );
+    const richCard = buildThreadCardRefresh(options.threadDisplay, options.deps.threadCardRefreshScope, options.msg.address, options.deps.threadCardSelectedId);
+    return {
+      response: buildCommandFields(
+        '当前线程已切换',
+        [
+          ...(previousActive && previousActive.id !== updatedBinding.id
+            ? [['原线程', options.threadDisplay.binding(previousActive).title] as [string, string]]
+            : []),
+          ['当前', options.threadDisplay.binding(updatedBinding).title],
+          ['binding_id', options.threadDisplay.bindingShortId(updatedBinding)],
+          ['thread_id', options.threadDisplay.bindingThreadId(updatedBinding) || '-'],
+        ],
+        ['接下来直接发送文本即可继续。'],
+        options.markdown,
+      ),
+      richCard,
+      threadTableCardScope: richCard && options.deps.threadCardRefreshScope ? options.deps.threadCardRefreshScope : undefined,
+    };
   }
   if (!selected.threadId) {
     if (selected.index !== undefined) {
