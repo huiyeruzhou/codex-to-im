@@ -822,6 +822,35 @@ describe('command-dispatch', () => {
     assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, second.id);
     assert.match(sent.at(-1) || '', /当前线程已切换/);
 
+    const codexTitleOnly = router.createBinding(address, 'D:\\workspace\\codex-title-only');
+    store.updateSession(codexTitleOnly.bridgeSessionId, { name: '', codex_title: '标题回退' });
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/t use 标题回退',
+        messageId: 'incoming-t-use-codex-title-fallback',
+      } as any,
+      '/t use 标题回退',
+      deps,
+    );
+    assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, codexTitleOnly.id);
+    assert.match(sent.at(-1) || '', /当前线程已切换/);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/t rm 标题回退',
+        messageId: 'incoming-t-rm-codex-title-fallback',
+      } as any,
+      '/t rm 标题回退',
+      deps,
+    );
+    assert.equal(store.listChannelBindings().some((binding) => binding.id === codexTitleOnly.id), false);
+    assert.match(sent.at(-1) || '', /已移除绑定线程/);
+
     await handleBridgeCommand(
       adapter,
       {
