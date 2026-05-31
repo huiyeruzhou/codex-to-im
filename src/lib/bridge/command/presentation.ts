@@ -452,6 +452,11 @@ export function buildCodexThreadsCommandCard(
           type: 'danger',
         },
         {
+          text: '归档',
+          callbackData: buildThreadActionCallbackData('global', 'archive'),
+          type: 'danger',
+        },
+        {
           text: '激活',
           callbackData: buildThreadActionCallbackData('global', 'use'),
           type: 'default',
@@ -524,6 +529,11 @@ export function buildBoundThreadsCommandCard(
             {
               text: '解绑',
               callbackData: buildThreadActionCallbackData('bound', 'rm'),
+              type: 'danger',
+            },
+            {
+              text: '归档',
+              callbackData: buildThreadActionCallbackData('bound', 'archive'),
               type: 'danger',
             },
             {

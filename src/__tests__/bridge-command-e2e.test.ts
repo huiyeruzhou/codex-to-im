@@ -705,6 +705,51 @@ describe('bridge command e2e', () => {
     assert.equal(adapter.sent.at(-1)?.richCard?.selects?.[0]?.selectedCallbackData, selectCallback);
   });
 
+  it('archives the selected Codex thread from the /t rich card', async () => {
+    const store = initBridgeTestContext({ dynamicSettings: true });
+    const adapter = new RecordingAdapter();
+    const address = { channelType: 'feishu', chatId: 'chat-thread-card-archive' } as const;
+    const threadId = '33333333-3333-4333-8333-444444444444';
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-thread-card-archive-'));
+    const { sessionPath } = writeCodexSessionJsonlFixture({
+      threadId,
+      workDir,
+      lines: [{
+        timestamp: '2026-05-28T00:00:00.000Z',
+        type: 'session_meta',
+        payload: {
+          id: threadId,
+          timestamp: '2026-05-28T00:00:00.000Z',
+          cwd: workDir,
+          originator: 'Codex CLI',
+        },
+      }],
+    });
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t', 'incoming-thread-card-archive-list'));
+    const card = adapter.sent.at(-1)?.richCard;
+    const selectCallback = card?.selects?.[0]?.options?.[0]?.callbackData;
+    const archiveCallback = card?.actions?.flat().find((action) => action.text === '归档')?.callbackData;
+    assert.ok(selectCallback);
+    assert.ok(archiveCallback);
+
+    await _testOnly.handleMessage(adapter, {
+      ...inboundMessage(address, '', 'reply-archive-1'),
+      callbackData: selectCallback,
+      callbackMessageId: 'reply-archive-1',
+    });
+    await _testOnly.handleMessage(adapter, {
+      ...inboundMessage(address, '', 'reply-archive-1'),
+      callbackData: archiveCallback,
+      callbackMessageId: 'reply-archive-1',
+    });
+
+    assert.match(adapter.sent.at(-1)?.text || '', /已归档本地 Codex 会话/);
+    assert.equal(fs.existsSync(sessionPath), false);
+    assert.equal(store.getChannelBinding(address.channelType, address.chatId), null);
+    assert.match(adapter.sent.at(-1)?.richCardUpdateMessageId || '', /reply-archive-1/);
+  });
+
   it('keeps renamed thread titles identical in /current and /t dropdown surfaces', async () => {
     initBridgeTestContext({ dynamicSettings: true });
     const adapter = new RecordingAdapter();

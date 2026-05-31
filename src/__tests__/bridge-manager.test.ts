@@ -441,6 +441,7 @@ describe('bridge-manager resolveCommandAlias', () => {
     const card = buildCodexThreadsCommandCard(sessions, true, 200);
     assert.equal(card?.table?.rows.length, 200);
     assert.equal(card?.selects?.[0]?.options.length, 200);
+    assert.ok(card?.actions?.flat().some((action) => action.text === '归档'));
     assert.match(card?.footer?.[0] || '', /已达到 200 条显示上限/);
     assert.deepEqual(card?.table?.columns.map((column) => column.name), [
       'index',

@@ -814,7 +814,7 @@ describe('command-dispatch', () => {
     ]);
     assert.deepEqual(
       richCards.at(-1)?.actions?.flat().map((action) => action.text),
-      ['解绑', '激活', '刷新'],
+      ['解绑', '归档', '激活', '刷新'],
     );
     assert.equal(richCards.at(-1)?.table?.columns[0]?.horizontalAlign, 'center');
     assert.equal(richCards.at(-1)?.table?.rows[0]?.index, "<number_tag background_color='grey-500' font_color='white'>1</number_tag>");
@@ -1100,6 +1100,69 @@ describe('command-dispatch', () => {
     const archivedEntries = fs.readdirSync(path.join(process.env.CODEX_HOME!, 'archived_sessions'));
     assert.equal(archivedEntries.length, 1);
     assert.match(archivedEntries[0] || '', /019e7d66-0000-7000-8000-000000000101\.jsonl$/);
+
+    fs.rmSync(path.join(process.env.CODEX_HOME!, 'sessions'), { recursive: true, force: true });
+    fs.rmSync(path.join(process.env.CODEX_HOME!, 'archived_sessions'), { recursive: true, force: true });
+  });
+
+  it('archives a bound Codex thread with /t archive using the binding id', async () => {
+    const store = initTestContext();
+    fs.rmSync(path.join(process.env.CODEX_HOME!, 'sessions'), { recursive: true, force: true });
+    fs.rmSync(path.join(process.env.CODEX_HOME!, 'archived_sessions'), { recursive: true, force: true });
+    fs.rmSync(path.join(process.env.CODEX_HOME!, 'session_index.jsonl'), { force: true });
+
+    const { sessionPath } = writeCodexSessionJsonlFixture({
+      threadId: '019e7d66-0000-7000-8000-000000000201',
+      workDir: '/tmp/archive-binding-id',
+      lines: [{
+        timestamp: '2026-05-28T00:00:00.000Z',
+        type: 'session_meta',
+        payload: {
+          id: '019e7d66-0000-7000-8000-000000000201',
+          timestamp: '2026-05-28T00:00:00.000Z',
+          cwd: '/tmp/archive-binding-id',
+          originator: 'Codex CLI',
+        },
+      }],
+    });
+    const address = { channelType: 'feishu', chatId: 'chat-t-archive-binding-id' } as const;
+    const binding = router.bindToCodexThread(address, '019e7d66-0000-7000-8000-000000000201', {
+      workingDirectory: '/tmp/archive-binding-id',
+      codexTitle: 'Archive binding id',
+    });
+
+    const sent: string[] = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      send: async (message: { text: string }) => {
+        sent.push(message.text);
+        return { ok: true, messageId: `reply-t-archive-binding-${sent.length}` };
+      },
+    };
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: `/t archive ${binding.id.slice(0, 8)}`,
+        messageId: 'incoming-t-archive-binding',
+      } as any,
+      `/t archive ${binding.id.slice(0, 8)}`,
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      },
+    );
+
+    assert.match(sent.at(-1) || '', /已归档本地 Codex 会话/);
+    assert.match(sent.at(-1) || '', /archive-binding-id/);
+    assert.equal(fs.existsSync(sessionPath), false);
+    assert.equal(store.getChannelBinding(address.channelType, address.chatId), null);
+    const archivedEntries = fs.readdirSync(path.join(process.env.CODEX_HOME!, 'archived_sessions'));
+    assert.equal(archivedEntries.length, 1);
+    assert.match(archivedEntries[0] || '', /019e7d66-0000-7000-8000-000000000201\.jsonl$/);
 
     fs.rmSync(path.join(process.env.CODEX_HOME!, 'sessions'), { recursive: true, force: true });
     fs.rmSync(path.join(process.env.CODEX_HOME!, 'archived_sessions'), { recursive: true, force: true });

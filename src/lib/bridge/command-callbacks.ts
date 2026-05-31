@@ -6,6 +6,7 @@ export const AUTO_TASK_ACTION_CALLBACK_PREFIX = 'cti-auto-action:';
 
 export type AutoTaskCardAction = 'rm' | 'set1';
 export type ThreadCardScope = 'global' | 'bound' | 'auto';
+export type ThreadCardAction = 'bind' | 'rm' | 'use' | 'archive';
 
 export interface ParsedCommandCallback {
   commandText: string;
@@ -43,7 +44,7 @@ export function buildThreadCardUpdateKey(scope: ThreadCardScope, channelType: st
   return `thread-card:${scope}:${channelType}:${chatId}`;
 }
 
-export function buildThreadActionCallbackData(scope: ThreadCardScope, action: 'bind' | 'rm' | 'use'): string {
+export function buildThreadActionCallbackData(scope: ThreadCardScope, action: ThreadCardAction): string {
   return `${THREAD_SELECT_ACTION_CALLBACK_PREFIX}${scope}:${action}`;
 }
 

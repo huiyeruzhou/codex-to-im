@@ -47,6 +47,7 @@ import {
   AUTO_TASK_ACTION_CALLBACK_PREFIX,
   AUTO_TASK_SELECT_CALLBACK_PREFIX,
   type AutoTaskCardAction,
+  type ThreadCardAction,
   THREAD_SELECT_ACTION_CALLBACK_PREFIX,
   THREAD_SELECT_CALLBACK_PREFIX,
 } from './command-callbacks.js';
@@ -1198,14 +1199,17 @@ function parseAutoTaskActionCallback(callbackData: string): AutoTaskCardAction |
 
 function parseThreadSelectActionCallback(callbackData: string): {
   scope: 'global' | 'bound';
-  action: 'bind' | 'rm' | 'use';
+  action: ThreadCardAction;
 } | null | undefined {
   if (!callbackData.startsWith(THREAD_SELECT_ACTION_CALLBACK_PREFIX)) return undefined;
   const raw = callbackData.slice(THREAD_SELECT_ACTION_CALLBACK_PREFIX.length).trim();
   const parts = raw.split(':').filter(Boolean);
   const scope = parts.length === 2 ? parts[0] : 'global';
   const action = parts.length === 2 ? parts[1] : parts[0];
-  if ((scope !== 'global' && scope !== 'bound') || (action !== 'bind' && action !== 'rm' && action !== 'use')) {
+  if (
+    (scope !== 'global' && scope !== 'bound')
+    || (action !== 'bind' && action !== 'rm' && action !== 'use' && action !== 'archive')
+  ) {
     return null;
   }
   return { scope, action };
@@ -1306,7 +1310,7 @@ async function handleMessage(
       }
       const threadId = getState().threadCardSelections.get(threadSelectionKey(msg));
       if (!threadId) {
-        await deliverBridgeNotice(adapter, msg.address, '请先在下拉列表中选择一个本地 Codex 会话，再点击绑定、解绑或激活。');
+        await deliverBridgeNotice(adapter, msg.address, '请先在下拉列表中选择一个线程，再点击绑定、解绑、归档或激活。');
         ack();
         return;
       }
@@ -1315,10 +1319,14 @@ async function handleMessage(
           ? `/t add ${threadId}`
           : threadAction.action === 'rm'
             ? `/t rm ${threadId}`
-            : `/t ${threadId}`
+            : threadAction.action === 'archive'
+              ? `/t archive ${threadId}`
+              : `/t ${threadId}`
         : threadAction.action === 'rm'
           ? `/t rm ${threadId}`
-          : `/t use ${threadId}`;
+          : threadAction.action === 'archive'
+            ? `/t archive ${threadId}`
+            : `/t use ${threadId}`;
       await handleCommand(
         adapter,
         { ...msg, text: commandText, callbackData: undefined },

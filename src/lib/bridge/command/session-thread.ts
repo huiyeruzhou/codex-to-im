@@ -512,23 +512,37 @@ export async function handleThreadBindingCommand(options: {
       if (!displayedThreads) {
         return { response: '读取本地 Codex 会话列表失败，请稍后重试。' };
       }
+      const bindings = listBindingsForChat(options.store, options.msg.address.channelType, options.msg.address.chatId);
       const decoratedThreads = options.threadDisplay.decorateCodexSessions(displayedThreads, options.msg.address.channelType, options.msg.address.chatId);
-      const selected = selectCodexThreadForCommand(options.threadDisplay, targetToken, decoratedThreads);
+      const selected = selectDirectThreadTarget(options.threadDisplay, targetToken, bindings, decoratedThreads);
       if (selected.ambiguous) {
         return { response: '匹配到多个本地 Codex 会话，请先发送 `/t` 查看列表，再用 `/t archive 1` 这种序号归档。' };
       }
-      if (!selected.threadId) {
+      if (selected.binding) {
+        const threadId = options.threadDisplay.bindingThreadId(selected.binding);
+        if (!threadId) {
+          return { response: '这个绑定线程不是本地 Codex 会话，不能归档。可用 `/t rm <序号|binding-id>` 只解除绑定。' };
+        }
+        const session = options.store.getSession(selected.binding.bridgeSessionId);
+        target = {
+          threadId,
+          title: options.threadDisplay.binding(selected.binding).title,
+          cwd: selected.binding.workingDirectory || session?.working_directory,
+          bridgeSessionId: selected.binding.bridgeSessionId,
+        };
+      } else if (!selected.threadId) {
         if (selected.index !== undefined) {
           return { response: `本地 Codex 会话列表没有第 ${selected.index} 条。先发送 \`/t\` 查看列表，或直接使用 thread id。` };
         }
         return { response: '没有找到对应的本地 Codex 会话。先发送 `/t` 查看列表，再用 `/t archive 1` 归档。' };
+      } else {
+        target = {
+          threadId: selected.threadId,
+          title: selected.thread?.title,
+          cwd: selected.thread?.cwd,
+          index: selected.index,
+        };
       }
-      target = {
-        threadId: selected.threadId,
-        title: selected.thread?.title,
-        cwd: selected.thread?.cwd,
-        index: selected.index,
-      };
     } else {
       target = resolveCurrentCodexThreadTarget(options.store, options.threadDisplay, options.msg.address);
       if (!target.threadId) {
