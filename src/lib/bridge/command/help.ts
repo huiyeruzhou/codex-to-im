@@ -1,7 +1,4 @@
-import {
-  DEFAULT_CODEX_THREAD_LIST_LIMIT,
-  MAX_CODEX_THREAD_LIST_LIMIT,
-} from './aliases.js';
+import { MAX_CODEX_THREAD_LIST_LIMIT } from './aliases.js';
 
 export function buildHelpCommandResponse(): string {
   return [
@@ -14,16 +11,17 @@ export function buildHelpCommandResponse(): string {
     '- `/check all` 查看所有运行中会话的健康状态',
     '- `//...` 向模型发送以 `/` 开头的文本',
     '- `/h` 帮助',
-    `- \`/t\` 最近 ${DEFAULT_CODEX_THREAD_LIST_LIMIT} 条本地 Codex 会话`,
-    `- \`/t all\` 最多 ${MAX_CODEX_THREAD_LIST_LIMIT} 条本地 Codex 会话`,
+    `- \`/t\` 文本默认最近 10 条，卡片最多 ${MAX_CODEX_THREAD_LIST_LIMIT} 条本地 Codex 会话`,
+    `- \`/t all\` 文本和卡片都最多 ${MAX_CODEX_THREAD_LIST_LIMIT} 条本地 Codex 会话`,
     `- \`/t n 100\` 最近 100 条本地 Codex 会话（最多 ${MAX_CODEX_THREAD_LIST_LIMIT} 条）`,
     '- `/t 1` 接管第 1 条会话，并设为当前线程',
     '- `/t ls` 查看当前聊天已绑定线程',
     '- `/t add 1` 添加第 1 条本地 Codex 会话但不切走当前线程',
+    '- `/t archive` 归档当前本地 Codex 会话并解除相关绑定；也可用 `/t archive 1` 指定全局列表第 1 条',
     '- `/t use 1` 切换当前绑定线程（也可用 thread id、binding id 或名称）',
     '- `/t rm 1` 移除指定绑定线程（也可用 thread id、binding id 或名称）',
     '- `/t rename <名称>` 重命名当前线程',
-    '- 序号范围：`/t 1` 和 `/t add 1` 使用 `/t` 全局本地 Codex 会话表；`/t use 1` 和 `/t rm 1` 使用 `/t ls` 当前聊天局部绑定表',
+    '- 序号范围：`/t 1`、`/t add 1` 和 `/t archive 1` 使用 `/t` 全局本地 Codex 会话表；`/t use 1` 和 `/t rm 1` 使用 `/t ls` 当前聊天局部绑定表',
     '- `/n` 在当前工作目录下新建线程（仅保证 IM 可继续，不会自动出现在本地 Codex 会话列表）',
     '- `/n proj1` 在默认工作空间下新建项目会话',
     '- 直接发文本：继续当前会话；未绑定时进入临时草稿线程',
@@ -31,6 +29,7 @@ export function buildHelpCommandResponse(): string {
     '- `/his msg` 最近消息卡片',
     '- `/his json` 直接发送原始 session JSONL 文件',
     '- `/his limit 12` 修改 `/his msg` 返回条数（1-20）',
+    '- `/hot-update` 使用当前 Bridge 环境派发本项目热更新；`/hot-update --dry-run` 只检查不执行',
     '- `/auto ls` 查看当前 bridge session 的自动化任务',
     '- `/auto new <scriptpath> <times>` 创建自动化任务；脚本 stdout 会作为下一轮 Codex prompt',
     '- `/auto rm <序号>` 删除自动化任务',
@@ -54,6 +53,7 @@ export function buildHelpCommandResponse(): string {
     '- `/net` 查看或切换 Codex 网络；可用 `on | off | default`',
     '- `/ui` 查看 UI 显示设置；`/ui on|off` 切换 SDK 工具输入输出显示',
     '- `/model` 查看当前模型；`/model gpt-5.4` 可切换，`/model default` 回退到默认模型',
+    '- `/set` 查看全局配置；`/set <key> <value>` 修改 UI 设置页里的非 channel 配置',
     '- `/t 0` 临时草稿线程',
     '- `/t 0 reset` 重置草稿线程',
     '- `/stop` 停止当前任务',

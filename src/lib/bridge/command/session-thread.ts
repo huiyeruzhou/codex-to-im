@@ -1,6 +1,9 @@
 import { getOrCreateDraftSession } from '../../../internal-sessions.js';
+import { readConfiguredCodexModel } from '../../../codex/models.js';
+import { DEFAULT_WORKSPACE_ROOT } from '../../../config.js';
 import {
   listBindingsForChat,
+  SessionRegistryService,
   setActiveBindingForChat,
 } from '../session-registry.js';
 import {
@@ -11,6 +14,7 @@ import {
 } from './aliases.js';
 import {
   buildCodexThreadsCommandResponse,
+  buildCodexThreadLimitNotice,
   buildCommandFields,
   formatCommandDateTime,
   formatCommandPath,
@@ -29,12 +33,17 @@ import {
   type ThreadCardScope,
 } from './thread-display.js';
 import {
+  getBridgeSessionCodexThreadId,
+  getBridgeSessionDisplayTitle,
+} from '../display/session-display-query.js';
+import { getSessionDisplayName } from '../display/session-title.js';
+import type { ChannelBinding, InboundMessage, OutboundRichCard } from '../types.js';
+import {
   getCommandCodexThreadByIdSafe,
+  archiveCommandCodexThread,
   listCommandCodexThreads,
   type CodexSessionSummary,
 } from './session-source.js';
-import { getSessionDisplayName } from '../display/session-title.js';
-import type { ChannelBinding, InboundMessage, OutboundRichCard } from '../types.js';
 import {
   formatSessionCodexProvider,
   formatSessionMode,
@@ -227,6 +236,54 @@ function getRawCodexTitle(threadId: string | undefined, fallback?: string): stri
   return getCommandCodexThreadByIdSafe(threadId, 'thread raw title').thread?.title || fallback;
 }
 
+function createCommandSessionRegistry(store: BridgeStore): SessionRegistryService {
+  return new SessionRegistryService(store, {
+    codexThreads: {
+      getThread(codexThreadId) {
+        const session = getCommandCodexThreadByIdSafe(codexThreadId, 'command registry lookup').thread;
+        return session
+          ? { codexThreadId: session.threadId, title: session.title, cwd: session.cwd }
+          : null;
+      },
+      archiveThread: (codexThreadId) => Boolean(archiveCommandCodexThread(codexThreadId)),
+    },
+    readDefaultModel: () => readConfiguredCodexModel(),
+    defaultWorkingDirectory: () => DEFAULT_WORKSPACE_ROOT,
+  });
+}
+
+function findBridgeSessionByCodexThread(store: BridgeStore, threadId: string) {
+  return store.listSessions().find((session) => getBridgeSessionCodexThreadId(session) === threadId) || null;
+}
+
+function resolveCurrentCodexThreadTarget(
+  store: BridgeStore,
+  threadDisplay: CommandThreadDisplay,
+  address: InboundMessage['address'],
+): {
+  threadId?: string;
+  title?: string;
+  cwd?: string;
+  binding?: ChannelBinding;
+  bridgeSessionId?: string;
+} {
+  const binding = store.getChannelBinding(address.channelType, address.chatId);
+  if (!binding) return {};
+
+  const session = store.getSession(binding.bridgeSessionId);
+  const threadId = getBridgeSessionCodexThreadId(session || { codex_thread_id: '' });
+  if (!threadId) return { binding, bridgeSessionId: binding.bridgeSessionId };
+
+  const codexThread = getCommandCodexThreadByIdSafe(threadId, 'thread archive current').thread;
+  return {
+    threadId,
+    title: codexThread?.title || (session ? getBridgeSessionDisplayTitle(session) : threadDisplay.binding(binding).title),
+    cwd: codexThread?.cwd || session?.working_directory || binding.workingDirectory,
+    binding,
+    bridgeSessionId: binding.bridgeSessionId,
+  };
+}
+
 function auditCommandBindingChange(
   store: BridgeStore,
   action: BindingChangeAction,
@@ -257,9 +314,9 @@ function buildThreadCardRefresh(
   }
   if (scope === 'global') {
     return threadDisplay.refreshedCodexThreadsCard(
-      listCommandCodexThreads(DEFAULT_CODEX_THREAD_LIST_LIMIT),
-      false,
-      DEFAULT_CODEX_THREAD_LIST_LIMIT,
+      listCommandCodexThreads(MAX_CODEX_THREAD_LIST_LIMIT),
+      true,
+      MAX_CODEX_THREAD_LIST_LIMIT,
       address.channelType,
       address.chatId,
       selectedId,
@@ -287,7 +344,7 @@ export function buildStartCommandResponse(): string {
     '直接发送文本，就会继续当前聊天绑定的会话。',
     '',
     '常用流程',
-    '1. /t 查看最近本地 Codex 会话',
+    '1. /t 查看本地 Codex 会话',
     '2. /t 1 接管第 1 条本地 Codex 会话并设为当前线程',
     '3. /t add 2 可把更多本地 Codex 会话加入当前聊天',
     '4. /t ls 查看绑定，/t use 1 切换当前线程',
@@ -381,9 +438,9 @@ export async function handleThreadBindingCommand(options: {
   if (subcommand === 'add') {
     const targetToken = subArgs.trim();
     if (!targetToken) {
-      return { response: '用法：/t add <序号|thread-id|名称>。发送 `/t` 查看最近本地 Codex 会话，或发送 `/t ls` 查看已绑定线程。' };
+      return { response: '用法：/t add <序号|thread-id|名称>。发送 `/t` 查看本地 Codex 会话，或发送 `/t ls` 查看已绑定线程。' };
     }
-    const displayedThreads = listCommandCodexThreads(DEFAULT_CODEX_THREAD_LIST_LIMIT);
+    const displayedThreads = listCommandCodexThreads(MAX_CODEX_THREAD_LIST_LIMIT);
     if (!displayedThreads) {
       return { response: '读取本地 Codex 会话列表失败，请稍后重试。' };
     }
@@ -394,9 +451,9 @@ export async function handleThreadBindingCommand(options: {
     }
     if (!selected.threadId) {
       if (selected.index !== undefined) {
-        return { response: `最近本地 Codex 会话列表没有第 ${selected.index} 条。先发送 \`/t\` 查看最近会话，或直接使用 thread id。` };
+        return { response: `本地 Codex 会话列表没有第 ${selected.index} 条。先发送 \`/t\` 查看列表，或直接使用 thread id。` };
       }
-      return { response: '没有找到对应的本地 Codex 会话。先发送 `/t` 查看最近会话，再用 `/t add 1` 添加。' };
+      return { response: '没有找到对应的本地 Codex 会话。先发送 `/t` 查看列表，再用 `/t add 1` 添加。' };
     }
 
     const previousActive = options.store.getChannelBinding(options.msg.address.channelType, options.msg.address.chatId);
@@ -433,6 +490,93 @@ export async function handleThreadBindingCommand(options: {
         updatedBinding.active !== false
           ? ['接下来直接发送文本即可继续。']
           : ['当前线程未改变。需要切换时发送 `/t use <序号|binding-id|thread-id|名称>`。'],
+        options.markdown,
+      ),
+      richCard,
+      threadTableCardScope: richCard && options.deps.threadCardRefreshScope ? options.deps.threadCardRefreshScope : undefined,
+    };
+  }
+
+  if (subcommand === 'archive') {
+    const targetToken = subArgs.trim();
+    let target: {
+      threadId?: string;
+      title?: string;
+      cwd?: string;
+      index?: number;
+      bridgeSessionId?: string;
+    } = {};
+
+    if (targetToken) {
+      const displayedThreads = listCommandCodexThreads(MAX_CODEX_THREAD_LIST_LIMIT);
+      if (!displayedThreads) {
+        return { response: '读取本地 Codex 会话列表失败，请稍后重试。' };
+      }
+      const decoratedThreads = options.threadDisplay.decorateCodexSessions(displayedThreads, options.msg.address.channelType, options.msg.address.chatId);
+      const selected = selectCodexThreadForCommand(options.threadDisplay, targetToken, decoratedThreads);
+      if (selected.ambiguous) {
+        return { response: '匹配到多个本地 Codex 会话，请先发送 `/t` 查看列表，再用 `/t archive 1` 这种序号归档。' };
+      }
+      if (!selected.threadId) {
+        if (selected.index !== undefined) {
+          return { response: `本地 Codex 会话列表没有第 ${selected.index} 条。先发送 \`/t\` 查看列表，或直接使用 thread id。` };
+        }
+        return { response: '没有找到对应的本地 Codex 会话。先发送 `/t` 查看列表，再用 `/t archive 1` 归档。' };
+      }
+      target = {
+        threadId: selected.threadId,
+        title: selected.thread?.title,
+        cwd: selected.thread?.cwd,
+        index: selected.index,
+      };
+    } else {
+      target = resolveCurrentCodexThreadTarget(options.store, options.threadDisplay, options.msg.address);
+      if (!target.threadId) {
+        return {
+          response: target.bridgeSessionId
+            ? '当前聊天绑定的不是本地 Codex 会话。请发送 `/t archive <序号|thread-id|名称>` 指定要归档的 Codex 会话。'
+            : '当前聊天还没有绑定本地 Codex 会话。请发送 `/t archive <序号|thread-id|名称>` 指定要归档的 Codex 会话。',
+        };
+      }
+    }
+
+    const threadId = target.threadId;
+    if (!threadId) {
+      return { response: '没有找到对应的本地 Codex 会话。先发送 `/t` 查看列表，再用 `/t archive 1` 归档。' };
+    }
+    const bridgeSessionBeforeArchive = findBridgeSessionByCodexThread(options.store, threadId);
+    const bindingsBeforeArchive = options.store.listChannelBindings()
+      .filter((binding) => binding.bridgeSessionId === bridgeSessionBeforeArchive?.id);
+
+    let result: ReturnType<SessionRegistryService['archiveCodexThread']>;
+    try {
+      result = createCommandSessionRegistry(options.store).archiveCodexThread(threadId);
+    } catch (error) {
+      return { response: toUserVisibleBindingError(error, '归档本地 Codex 会话失败。') };
+    }
+
+    for (const binding of bindingsBeforeArchive) {
+      options.deps.onBindingRemoved?.(binding);
+    }
+    await reconcileMirrorSubscriptionsBestEffort(options.deps, 'codex archive');
+    const activeAfterArchive = options.store.getChannelBinding(options.msg.address.channelType, options.msg.address.chatId);
+    const richCard = buildThreadCardRefresh(options.threadDisplay, options.deps.threadCardRefreshScope, options.msg.address, options.deps.threadCardSelectedId);
+    const title = target.title || (bridgeSessionBeforeArchive ? getBridgeSessionDisplayTitle(bridgeSessionBeforeArchive) : threadId.slice(0, 8));
+
+    return {
+      response: buildCommandFields(
+        '已归档本地 Codex 会话',
+        [
+          ['标题', title],
+          ['thread_id', threadId],
+          ['目录', formatCommandPath(target.cwd || bridgeSessionBeforeArchive?.working_directory)],
+          ['解除绑定', `${bindingsBeforeArchive.length}`],
+          ['清理 Bridge 会话', `${result.deletedBridgeSessionIds.length}`],
+          ['当前', activeAfterArchive ? options.threadDisplay.binding(activeAfterArchive).title : '未绑定'],
+        ],
+        activeAfterArchive
+          ? ['已自动切到当前聊天的其它绑定线程。']
+          : ['当前聊天已解除该 Codex 会话绑定；之后直接发送文本会自动进入临时草稿线程。'],
         options.markdown,
       ),
       richCard,
@@ -572,7 +716,7 @@ export async function handleThreadBindingCommand(options: {
     };
   }
 
-  return { response: '用法：/t、/t ls、/t add <序号|thread-id|名称>、/t use <序号|binding-id|thread-id|名称>、/t rm/remove <序号|binding-id|thread-id|名称>、/t rename <名称>' };
+  return { response: '用法：/t、/t ls、/t add <序号|thread-id|名称>、/t archive [序号|thread-id|名称]、/t use <序号|binding-id|thread-id|名称>、/t rm/remove <序号|binding-id|thread-id|名称>、/t rename <名称>' };
 }
 
 export async function handleThreadSwitchCommand(options: {
@@ -637,7 +781,7 @@ export async function handleThreadSwitchCommand(options: {
   }
 
   if (!threadArgs) {
-    return { response: `用法：/thread <序号>，或 /thread 0 进入临时草稿线程；发送 /t all 查看最多 ${MAX_CODEX_THREAD_LIST_LIMIT} 条，或 /t n 100 查看最近 100 条本地 Codex 会话` };
+    return { response: `用法：/thread <序号>，或 /thread 0 进入临时草稿线程；发送 /t 查看最近 ${DEFAULT_CODEX_THREAD_LIST_LIMIT} 条文本列表和最多 ${MAX_CODEX_THREAD_LIST_LIMIT} 条卡片列表，或 /t n 100 查看最近 100 条本地 Codex 会话` };
   }
   if (threadArgs === 'all') {
     const codexSessions = listCommandCodexThreads(MAX_CODEX_THREAD_LIST_LIMIT);
@@ -720,11 +864,11 @@ export async function handleThreadSwitchCommand(options: {
     if (selected.index !== undefined) {
       return {
         response: displayedThreads.length > 0
-          ? `当前只找到 ${displayedThreads.length} 条本地 Codex 会话，没有第 ${selected.index} 条。先发送 \`/t\` 查看最近会话，或发送 \`/t all\` 查看更多后再选择。`
+          ? `当前只找到 ${displayedThreads.length} 条本地 Codex 会话，没有第 ${selected.index} 条。先发送 \`/t\` 查看最多 ${MAX_CODEX_THREAD_LIST_LIMIT} 条卡片列表后再选择。`
           : '没有找到本地 Codex 会话。先在 本机 Codex 中打开一个会话，再回来试一次。',
       };
     }
-    return { response: '没有找到对应的本地 Codex 会话。先发送 `/t` 查看最近会话，再用 `/t 1` 接管。' };
+    return { response: '没有找到对应的本地 Codex 会话。先发送 `/t` 查看列表，再用 `/t 1` 接管。' };
   }
   if (!selected.thread) {
     let binding: ReturnType<typeof router.bindToCodexThread>;
@@ -805,33 +949,50 @@ export function handleCodexThreadsCommand(options: {
     return { response: `用法：/threads、/threads all、/threads n 100（最多 ${MAX_CODEX_THREAD_LIST_LIMIT} 条）` };
   }
   const { showAll, limit } = listArgs;
-  const codexSessions = listCommandCodexThreads(limit);
-  if (!codexSessions) {
+  const textCodexSessions = listCommandCodexThreads(limit);
+  if (!textCodexSessions) {
     return { response: '读取本地 Codex 会话列表失败，请稍后重试。' };
   }
-  if (codexSessions.length === 0) {
+  if (textCodexSessions.length === 0) {
     return {
       response: showAll
         ? '没有找到本地 Codex 会话。先在 本机 Codex 中打开一个会话，再回来试一次。'
-        : '没有找到最近本地 Codex 会话。先在 本机 Codex 中打开一个会话，再回来试一次。',
+        : '没有找到本地 Codex 会话。先在 本机 Codex 中打开一个会话，再回来试一次。',
     };
   }
-  const decoratedSessions = options.threadDisplay.decorateCodexSessions(codexSessions, options.msg.address.channelType, options.msg.address.chatId);
+  const isDefaultListRequest = options.args.trim() === '';
+  const cardShowAll = isDefaultListRequest || showAll;
+  const cardLimit = isDefaultListRequest ? MAX_CODEX_THREAD_LIST_LIMIT : limit;
+  const cardCodexSessions = cardLimit === limit
+    ? textCodexSessions
+    : listCommandCodexThreads(cardLimit);
+  const bindingStates = options.threadDisplay.codexBindingStates(options.msg.address.channelType, options.msg.address.chatId);
+  const decoratedTextSessions = options.threadDisplay.decorateCodexSessions(textCodexSessions, options.msg.address.channelType, options.msg.address.chatId);
+  const decoratedCardSessions = cardCodexSessions
+    ? options.threadDisplay.decorateCodexSessions(cardCodexSessions, options.msg.address.channelType, options.msg.address.chatId)
+    : null;
+  const cardLimitNotice = decoratedCardSessions && cardLimit !== limit
+    ? buildCodexThreadLimitNotice(decoratedCardSessions.length, cardLimit)
+    : null;
+  const richCard = decoratedCardSessions
+    ? options.threadDisplay.refreshedCodexThreadsCard(
+        decoratedCardSessions,
+        cardShowAll,
+        cardLimit,
+        options.msg.address.channelType,
+        options.msg.address.chatId,
+      )
+    : undefined;
   return {
     response: buildCodexThreadsCommandResponse(
-      decoratedSessions,
+      decoratedTextSessions,
       options.markdown,
       showAll,
       limit,
-      options.threadDisplay.codexBindingStates(options.msg.address.channelType, options.msg.address.chatId),
+      bindingStates,
+      cardLimitNotice ? [cardLimitNotice] : [],
     ),
-    richCard: options.threadDisplay.refreshedCodexThreadsCard(
-      decoratedSessions,
-      showAll,
-      limit,
-      options.msg.address.channelType,
-      options.msg.address.chatId,
-    ),
-    threadTableCardScope: 'global',
+    richCard,
+    threadTableCardScope: richCard ? 'global' : undefined,
   };
 }

@@ -19,7 +19,7 @@ export function resolveCommandAlias(rawCommand: string, args: string): string {
     case '/h':
       return '/help';
     case '/t':
-      return /^(ls|add|use|rm|remove|rename)\b/i.test(args.trim())
+      return /^(ls|add|archive|use|rm|remove|rename)\b/i.test(args.trim())
         ? '/t'
         : !args
         ? '/threads'
@@ -45,6 +45,8 @@ export function resolveCommandAlias(rawCommand: string, args: string): string {
       return '/ui';
     case '/his':
       return '/history';
+    case '/hotupdate':
+      return '/hot-update';
     default:
       return rawCommand;
   }
@@ -64,6 +66,7 @@ const KNOWN_BRIDGE_COMMANDS = new Set([
   '/tmux-status',
   '/tmux-screen',
   '/tmux-set',
+  '/set',
   '/auto',
   '/reasoning',
   '/cwd',
@@ -77,6 +80,7 @@ const KNOWN_BRIDGE_COMMANDS = new Set([
   '/current',
   '/health',
   '/history',
+  '/hot-update',
   '/cat',
   '/file',
   '/stop',

@@ -1,4 +1,5 @@
 import {
+  archiveCodexSession,
   getCodexSessionByThreadId,
   listCodexSessions,
   type CodexSessionSummary,
@@ -7,11 +8,20 @@ import { validateSessionId } from '../security/validators.js';
 
 export type { CodexSessionSummary };
 
-export function listCommandCodexThreads(limit: number): CodexSessionSummary[] | null {
+export function listCommandCodexThreads(limit?: number): CodexSessionSummary[] | null {
   try {
     return listCodexSessions(limit);
   } catch (error) {
     console.error('[command-session-source] Failed to list Codex sessions:', error);
+    return null;
+  }
+}
+
+export function archiveCommandCodexThread(threadId: string): CodexSessionSummary | null {
+  try {
+    return archiveCodexSession(threadId);
+  } catch (error) {
+    console.error(`[command-session-source] Failed to archive Codex thread ${threadId}:`, error);
     return null;
   }
 }

@@ -226,7 +226,7 @@ describe('bridge command e2e', () => {
     assert.equal(binding.workingDirectory, workDir);
 
     store.addMessage(binding.bridgeSessionId, 'user', '端到端用户消息');
-    store.addMessage(binding.bridgeSessionId, 'assistant', '端到端助手回复');
+    store.addMessage(binding.bridgeSessionId, 'assistant', '**端到端助手回复**\n\n```ts\nconst ok = true;\n```');
 
     await _testOnly.handleMessage(adapter, inboundMessage(address, '/his limit 12', 'incoming-limit'));
     assert.equal(loadConfig().historyMessageLimit, 12);
@@ -247,6 +247,13 @@ describe('bridge command e2e', () => {
     assert.match(lastText, /返回条数.*2 \/ 配置 12/s);
     assert.match(lastText, /端到端用户消息/);
     assert.match(lastText, /端到端助手回复/);
+    const richCard = adapter.sent.at(-1)?.richCard;
+    assert.equal(richCard?.title, '最近对话');
+    assert.equal(richCard?.template, 'blue');
+    assert.equal(richCard?.sections.length, 3);
+    assert.equal(richCard?.sections[0]?.fields?.[1]?.[1], 'Bridge 缓存');
+    assert.match(richCard?.sections[2]?.markdown || '', /\*\*端到端助手回复\*\*/);
+    assert.doesNotMatch(richCard?.sections[2]?.markdown || '', /^```text/);
   });
 
   it('handles /auto skill install and uninstall idempotently', async () => {

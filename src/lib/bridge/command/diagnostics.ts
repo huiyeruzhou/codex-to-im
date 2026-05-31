@@ -28,7 +28,7 @@ import { buildFencedCodeBlock } from '../markdown/fence.js';
 import { sanitizeInput } from '../security/validators.js';
 import type { CommandThreadDisplay } from './thread-display.js';
 import { getCodexThreadId } from '../turns/turn-classifier.js';
-import type { ChannelBinding, InboundMessage, OutboundAttachment } from '../types.js';
+import type { ChannelBinding, InboundMessage, OutboundAttachment, OutboundRichCard } from '../types.js';
 import {
   formatDisplayedModel,
   getCodexSessionByThreadIdSafe,
@@ -88,7 +88,7 @@ function resolveHistorySessionFile(
   return null;
 }
 
-function buildHistoryMessagesCard(
+function buildHistoryMessagesText(
   messages: Array<{ role: string; content: string }>,
   options: {
     title: string;
@@ -118,6 +118,36 @@ function buildHistoryMessagesCard(
   }).join('\n\n');
 
   return [header, body].join('\n\n').trim();
+}
+
+function buildHistoryMessagesRichCard(
+  messages: Array<{ role: string; content: string }>,
+  options: {
+    title: string;
+    source: string;
+    limit: number;
+  },
+): OutboundRichCard {
+  return {
+    title: '最近对话',
+    subtitle: '`/his raw` 查看解析文本；`/his json` 发送原始 session JSONL；`/his limit 12` 修改返回条数。',
+    template: 'blue',
+    sections: [
+      {
+        title: '概览',
+        fields: [
+          ['标题', options.title],
+          ['来源', options.source],
+          ['返回条数', `${messages.length} / 配置 ${options.limit}`],
+        ],
+      },
+      ...messages.map((message, index) => ({
+        title: `${index + 1}. ${formatHistoryRole(message.role)}`,
+        markdown: truncateHistoryContent(formatStoredMessageContent(message.content), 1600),
+      })),
+    ],
+    maxSections: Math.max(1, messages.length + 1),
+  };
 }
 
 export async function handleHealthCommand(options: {
@@ -162,7 +192,7 @@ export function handleCurrentCommand(options: {
     return buildCommandFields(
       '当前会话',
       [],
-      ['当前聊天还没有绑定会话。可先发送 `/t` 查看最近本地 Codex 会话，再用 `/t 1` 接管；或发送 `/new proj1` / `/new 绝对路径` 创建项目会话。'],
+      ['当前聊天还没有绑定会话。可先发送 `/t` 查看本地 Codex 会话，再用 `/t 1` 接管；或发送 `/new proj1` / `/new 绝对路径` 创建项目会话。'],
       options.markdown,
     );
   }
@@ -241,6 +271,7 @@ export async function handleHistoryCommand(options: {
   store: BridgeStore;
   threadDisplay: CommandThreadDisplay;
   markdown: boolean;
+  richCard?: (card: OutboundRichCard) => void;
 }): Promise<string> {
   const historyParts = options.args.trim().split(/\s+/).filter(Boolean);
   const historyArg = (historyParts[0] || '').toLowerCase();
@@ -314,7 +345,12 @@ export async function handleHistoryCommand(options: {
   const messageSource = codexMessages.length > 0 ? 'Codex session JSONL' : 'Bridge 缓存';
 
   if (historyArg === 'msg') {
-    return buildHistoryMessagesCard(messages, {
+    options.richCard?.(buildHistoryMessagesRichCard(messages, {
+      title: threadTitle,
+      source: messageSource,
+      limit,
+    }));
+    return buildHistoryMessagesText(messages, {
       title: threadTitle,
       source: messageSource,
       limit,

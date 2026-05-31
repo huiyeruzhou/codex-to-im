@@ -507,6 +507,46 @@ describe('readCodexSessionEventStreamByFilePath', () => {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   });
 
+  it('returns the newest JSONL messages in chronological order when limited', () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-codex-message-limit-'));
+    const filePath = path.join(tempRoot, 'rollout.jsonl');
+    fs.writeFileSync(
+      filePath,
+      [
+        JSON.stringify({
+          timestamp: '2026-05-28T00:00:01.000Z',
+          type: 'event_msg',
+          payload: { type: 'user_message', message: '第一条' },
+        }),
+        JSON.stringify({
+          timestamp: '2026-05-28T00:00:02.000Z',
+          type: 'event_msg',
+          payload: { type: 'agent_message', message: '第二条' },
+        }),
+        JSON.stringify({
+          timestamp: '2026-05-28T00:00:03.000Z',
+          type: 'event_msg',
+          payload: { type: 'user_message', message: '第三条' },
+        }),
+        JSON.stringify({
+          timestamp: '2026-05-28T00:00:04.000Z',
+          type: 'event_msg',
+          payload: { type: 'agent_message', message: '第四条' },
+        }),
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const messages = readCodexSessionMessagesByFilePath(filePath, 2);
+
+    assert.deepEqual(messages, [
+      { role: 'user', content: '第三条' },
+      { role: 'assistant', content: '第四条' },
+    ]);
+
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  });
+
   it('falls back to task_complete.last_agent_message for final answers', () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-codex-events-'));
     const filePath = path.join(tempRoot, 'rollout.jsonl');

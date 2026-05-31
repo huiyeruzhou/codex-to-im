@@ -29,7 +29,7 @@ export class CommandThreadDisplay {
       return buildCommandFields(
         '当前聊天绑定',
         [],
-        ['还没有绑定线程。发送 `/t` 查看最近本地 Codex 会话，再用 `/t add 1` 添加。'],
+        ['还没有绑定线程。发送 `/t` 查看本地 Codex 会话，再用 `/t add 1` 添加。'],
         markdown,
       );
     }
@@ -40,7 +40,7 @@ export class CommandThreadDisplay {
   refreshedCodexThreadsCard(
     codexSessions: CodexSessionSummary[] | null | undefined,
     showAll: boolean,
-    limit: number,
+    limit: number | undefined,
     channelType: string,
     chatId: string,
     selectedThreadId?: string | null,

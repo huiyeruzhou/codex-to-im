@@ -326,6 +326,8 @@ describe('bridge-manager resolveCommandAlias', () => {
       ['/t', '', '/threads'],
       ['/t', 'all', '/threads'],
       ['/t', 'n 10', '/threads'],
+      ['/t', 'archive', '/t'],
+      ['/t', 'archive 1', '/t'],
       ['/t', '1', '/thread'],
       ['/m', '', '/mode'],
       ['/p', 'tmux', '/provider'],
@@ -347,7 +349,7 @@ describe('bridge-manager resolveCommandAlias', () => {
     assert.equal(_testOnly.toModelPromptText('//'), '/');
   });
 
-  it('caps Codex thread list requests at 200 items', () => {
+  it('parses Codex thread list requests', () => {
     assert.deepEqual(parseCodexThreadListArgs(''), { showAll: false, limit: 10 });
     assert.deepEqual(parseCodexThreadListArgs('all'), { showAll: true, limit: 200 });
     assert.deepEqual(parseCodexThreadListArgs('n 100'), { showAll: false, limit: 100 });
@@ -408,8 +410,8 @@ describe('bridge-manager resolveCommandAlias', () => {
     assert.match(response, /^本地 Codex 会话（当前显示 1 条，最多 200 条）/);
   });
 
-  it('does not build Codex thread rich cards above the card limit', () => {
-    const sessions = Array.from({ length: 21 }, (_, index) => ({
+  it('adds a visible notice when the Codex thread text list reaches its limit', () => {
+    const sessions = Array.from({ length: 200 }, (_, index) => ({
       threadId: `thread-${index + 1}`,
       filePath: `/tmp/thread-${index + 1}.jsonl`,
       cwd: `/tmp/project-${index + 1}`,
@@ -420,10 +422,26 @@ describe('bridge-manager resolveCommandAlias', () => {
       activeEstimate: false,
     }));
 
-    assert.equal(buildCodexThreadsCommandCard(sessions, false), null);
-    const card = buildCodexThreadsCommandCard(sessions.slice(0, 20), false);
-    assert.equal(card?.table?.rows.length, 20);
-    assert.equal(card?.selects?.[0]?.options.length, 20);
+    const response = buildCodexThreadsCommandResponse(sessions, true, true, 200);
+    assert.match(response, /已达到 200 条显示上限/);
+  });
+
+  it('builds Codex thread rich cards up to the card limit without text fallback', () => {
+    const sessions = Array.from({ length: 200 }, (_, index) => ({
+      threadId: `thread-${index + 1}`,
+      filePath: `/tmp/thread-${index + 1}.jsonl`,
+      cwd: `/tmp/project-${index + 1}`,
+      originator: 'Codex Desktop',
+      firstSeenAt: '2026-03-31T00:00:00.000Z',
+      lastEventAt: '2026-03-31T00:00:00.000Z',
+      title: `Project ${index + 1}`,
+      activeEstimate: false,
+    }));
+
+    const card = buildCodexThreadsCommandCard(sessions, true, 200);
+    assert.equal(card?.table?.rows.length, 200);
+    assert.equal(card?.selects?.[0]?.options.length, 200);
+    assert.match(card?.footer?.[0] || '', /已达到 200 条显示上限/);
     assert.deepEqual(card?.table?.columns.map((column) => column.name), [
       'index',
       'title',

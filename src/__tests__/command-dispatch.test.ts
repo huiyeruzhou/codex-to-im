@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { CONFIG_PATH, CONFIG_V2_PATH, CTI_HOME } from '../config.js';
+import { CONFIG_PATH, CONFIG_V2_PATH, CTI_HOME, loadConfig } from '../config.js';
 import { JsonFileStore } from '../store.js';
 import { initBridgeContext } from '../lib/bridge/context.js';
 import { handleBridgeCommand } from '../lib/bridge/command.js';
@@ -13,7 +13,9 @@ import { buildCommandCallbackData, parseCommandCallbackData } from '../lib/bridg
 import * as router from '../lib/bridge/channel-router.js';
 import { getThreadTableMessageRecord } from '../lib/bridge/command/thread-table-message-pins.js';
 import { listAutoTasks } from '../lib/bridge/auto-tasks.js';
+import { writeCodexSessionJsonlFixture } from './test-bridge-utils.js';
 import type { OutboundRichCard } from '../lib/bridge/types.js';
+import type { HotUpdateRunRequest } from '../lib/bridge/command/hot-update.js';
 
 const DATA_DIR = path.join(CTI_HOME, 'data');
 
@@ -39,8 +41,8 @@ const noopLlm = {
   },
 };
 
-function initTestContext(): JsonFileStore {
-  const store = new JsonFileStore(makeSettings());
+function initTestContext(options: { dynamicSettings?: boolean } = {}): JsonFileStore {
+  const store = new JsonFileStore(makeSettings(), { dynamicSettings: options.dynamicSettings });
   initBridgeContext({
     store,
     llm: noopLlm,
@@ -111,6 +113,107 @@ describe('command-dispatch', () => {
     });
     assert.equal(parseCommandCallbackData('perm:allow:1'), undefined);
     assert.equal(parseCommandCallbackData('cti-command::not-a-command'), null);
+  });
+
+  it('dispatches /hot-update through the project script dry-run without touching the live bridge', async () => {
+    initTestContext();
+    const sent: string[] = [];
+    const capturedRuns: HotUpdateRunRequest[] = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      send: async (message: { text: string }) => {
+        sent.push(message.text);
+        return { ok: true, messageId: `reply-hot-update-${sent.length}` };
+      },
+    };
+    const address = { channelType: 'feishu', chatId: 'chat-hot-update' } as const;
+    const env = {
+      ...process.env,
+      CTI_HOT_UPDATE_TEST_MARKER: 'from-current-bridge-env',
+    };
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/hot-update --dry-run --pull --skip-tests',
+        messageId: 'incoming-hot-update',
+      } as any,
+      '/hot-update --dry-run --pull --skip-tests',
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+        hotUpdateCwd: path.join(process.cwd(), 'src', '__tests__'),
+        hotUpdateEnv: env,
+        hotUpdateRunner: async (request) => {
+          capturedRuns.push(request);
+          assert.equal(request.env.CTI_HOT_UPDATE_TEST_MARKER, 'from-current-bridge-env');
+          assert.equal(path.basename(request.cwd), 'codex-to-im');
+          assert.equal(request.scriptPath, path.join(request.cwd, 'scripts', 'hot-update-bridge.sh'));
+          assert.deepEqual(request.args, ['--dry-run', '--pull', '--skip-tests']);
+          return {
+            stdout: [
+              '[hot-update] dry-run: yes',
+              `[hot-update] project: ${request.cwd}`,
+              `[hot-update] pwd: ${request.cwd}`,
+              '[hot-update] node: v24.12.0',
+              '[hot-update] worker args: --run --pull --skip-tests',
+              '[hot-update] git pull: planned',
+              '[hot-update] npm run build: planned',
+              '[hot-update] npm test: skipped',
+              '[hot-update] restart: planned',
+            ].join('\n'),
+            stderr: '',
+          };
+        },
+      },
+    );
+
+    assert.equal(capturedRuns.length, 1);
+    assert.match(sent.at(-1) || '', /热更新 dry-run 通过/);
+    assert.match(sent.at(-1) || '', /命令：bash scripts\/hot-update-bridge\.sh --dry-run --pull --skip-tests/);
+    assert.match(sent.at(-1) || '', /node: v24\.12\.0/);
+    assert.match(sent.at(-1) || '', /worker args: --run --pull --skip-tests/);
+    assert.match(sent.at(-1) || '', /npm test: skipped/);
+  });
+
+  it('rejects /hot-update --run from IM commands before invoking the script', async () => {
+    initTestContext();
+    const sent: string[] = [];
+    let invoked = false;
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      send: async (message: { text: string }) => {
+        sent.push(message.text);
+        return { ok: true, messageId: `reply-hot-update-reject-${sent.length}` };
+      },
+    };
+    const address = { channelType: 'feishu', chatId: 'chat-hot-update-reject' } as const;
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/hot-update --run',
+        messageId: 'incoming-hot-update-run',
+      } as any,
+      '/hot-update --run',
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+        hotUpdateRunner: async () => {
+          invoked = true;
+          return { stdout: '', stderr: '' };
+        },
+      },
+    );
+
+    assert.equal(invoked, false);
+    assert.match(sent.at(-1) || '', /不能通过 IM 命令传 `--run`/);
   });
 
   it('switches /thread 0 into the hidden draft session and keeps normal mode', async () => {
@@ -419,6 +522,122 @@ describe('command-dispatch', () => {
     assert.doesNotMatch(sent[0] || '', /旧任务在运行/);
   });
 
+  it('views and updates global non-channel config with /set and applies it to /new', async () => {
+    const store = initTestContext({ dynamicSettings: true });
+    const sent: string[] = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      send: async (message: { text: string }) => {
+        sent.push(message.text);
+        return { ok: true, messageId: `reply-set-${sent.length}` };
+      },
+    };
+    const address = { channelType: 'feishu', chatId: 'chat-set-command' } as const;
+    const deps = {
+      getActiveTask: () => undefined,
+      diagnoseSessionHealth: async () => null,
+      diagnoseAllActiveSessions: async () => [],
+    };
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-set-workspace-'));
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/set',
+        messageId: 'incoming-set-show',
+      } as any,
+      '/set',
+      deps,
+    );
+    assert.match(sent.at(-1) || '', /全局配置/);
+    assert.match(sent.at(-1) || '', /defaultWorkspaceRoot/);
+    assert.match(sent.at(-1) || '', /codexNetworkAccess/);
+    assert.doesNotMatch(sent.at(-1) || '', /channels/);
+    assert.equal(store.getChannelBinding(address.channelType, address.chatId), null);
+    assert.equal(store.listSessions().length, 0);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: `/set defaultWorkspaceRoot ${workspaceRoot}`,
+        messageId: 'incoming-set-workspace',
+      } as any,
+      `/set defaultWorkspaceRoot ${workspaceRoot}`,
+      deps,
+    );
+    assert.match(sent.at(-1) || '', /已更新全局配置/);
+    assert.match(sent.at(-1) || '', /defaultWorkspaceRoot/);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/set defaultMode yolo',
+        messageId: 'incoming-set-mode',
+      } as any,
+      '/set defaultMode yolo',
+      deps,
+    );
+    assert.match(sent.at(-1) || '', /默认模式.*yolo/s);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/set codexNetworkAccess off',
+        messageId: 'incoming-set-network',
+      } as any,
+      '/set codexNetworkAccess off',
+      deps,
+    );
+    assert.match(sent.at(-1) || '', /Codex 网络访问.*off/s);
+    assert.equal(loadConfig().codexNetworkAccess, false);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/set historyMessageLimit 12',
+        messageId: 'incoming-set-history',
+      } as any,
+      '/set historyMessageLimit 12',
+      deps,
+    );
+    assert.equal(loadConfig().historyMessageLimit, 12);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/set defaultMode impossible',
+        messageId: 'incoming-set-invalid',
+      } as any,
+      '/set defaultMode impossible',
+      deps,
+    );
+    assert.match(sent.at(-1) || '', /配置未更新/);
+    assert.match(sent.at(-1) || '', /normal 或 yolo/);
+    assert.equal(loadConfig().defaultMode, 'yolo');
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/new set-proj',
+        messageId: 'incoming-new-after-set',
+      } as any,
+      '/new set-proj',
+      deps,
+    );
+    const binding = store.getChannelBinding(address.channelType, address.chatId);
+    assert.ok(binding);
+    assert.equal(binding?.workingDirectory, path.join(workspaceRoot, 'set-proj'));
+    assert.equal(binding?.mode, 'yolo');
+    assert.equal(store.getSession(binding!.bridgeSessionId)?.preferred_mode, 'yolo');
+  });
+
   it('blocks thread switching while the current task is running unless forced', async () => {
     const store = initTestContext();
     const sent: string[] = [];
@@ -688,6 +907,202 @@ describe('command-dispatch', () => {
     assert.equal(store.listChannelBindings().filter((binding) => binding.chatId === address.chatId).length, 0);
     assert.match(sent.at(-1) || '', /已移除绑定线程/);
     assert.equal(richCards.length, 2);
+  });
+
+  it('keeps /t text fallback at 10 rows while the rich card shows up to 200 rows', async () => {
+    initTestContext();
+    fs.rmSync(path.join(process.env.CODEX_HOME!, 'sessions'), { recursive: true, force: true });
+    fs.rmSync(path.join(process.env.CODEX_HOME!, 'session_index.jsonl'), { force: true });
+
+    for (let index = 0; index < 200; index += 1) {
+      const padded = String(index + 1).padStart(3, '0');
+      const timestamp = new Date(Date.UTC(2026, 4, 28, 0, 0, index)).toISOString();
+      writeCodexSessionJsonlFixture({
+        threadId: `thread-${padded}`,
+        workDir: `/tmp/project-${padded}`,
+        lines: [
+          {
+            timestamp,
+            type: 'session_meta',
+            payload: {
+              id: `thread-${padded}`,
+              timestamp,
+              cwd: `/tmp/project-${padded}`,
+              originator: 'Codex CLI',
+            },
+          },
+        ],
+      });
+    }
+
+    const sent: Array<{ text: string; richCard?: OutboundRichCard }> = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      send: async (message: { text: string; richCard?: OutboundRichCard }) => {
+        sent.push(message);
+        return { ok: true, messageId: `reply-t-default-${sent.length}` };
+      },
+    };
+    const address = { channelType: 'feishu', chatId: 'chat-t-default' } as const;
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/t',
+        messageId: 'incoming-t-default',
+      } as any,
+      '/t',
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      },
+    );
+
+    const message = sent.at(-1);
+    assert.match(message?.text || '', /最近 10 条本地 Codex 会话/);
+    assert.match(message?.text || '', /已达到 200 条显示上限/);
+    assert.equal(message?.richCard?.title, '本地 Codex 会话（200/200）');
+    assert.equal(message?.richCard?.table?.rows.length, 200);
+    assert.equal(message?.richCard?.selects?.[0]?.options.length, 200);
+    assert.match(message?.richCard?.footer?.[0] || '', /已达到 200 条显示上限/);
+
+    fs.rmSync(path.join(process.env.CODEX_HOME!, 'sessions'), { recursive: true, force: true });
+  });
+
+  it('archives the current Codex thread with /t archive and unbinds the chat', async () => {
+    const store = initTestContext();
+    fs.rmSync(path.join(process.env.CODEX_HOME!, 'sessions'), { recursive: true, force: true });
+    fs.rmSync(path.join(process.env.CODEX_HOME!, 'archived_sessions'), { recursive: true, force: true });
+    fs.rmSync(path.join(process.env.CODEX_HOME!, 'session_index.jsonl'), { force: true });
+
+    const { sessionPath } = writeCodexSessionJsonlFixture({
+      threadId: '019e7d66-0000-7000-8000-000000000001',
+      workDir: '/tmp/archive-current',
+    });
+    const address = { channelType: 'feishu', chatId: 'chat-t-archive-current' } as const;
+    const binding = router.bindToCodexThread(address, '019e7d66-0000-7000-8000-000000000001', {
+      workingDirectory: '/tmp/archive-current',
+      codexTitle: 'Archive current',
+    });
+    assert.ok(binding);
+
+    const sent: string[] = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      send: async (message: { text: string }) => {
+        sent.push(message.text);
+        return { ok: true, messageId: `reply-t-archive-current-${sent.length}` };
+      },
+    };
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/t archive',
+        messageId: 'incoming-t-archive-current',
+      } as any,
+      '/t archive',
+      {
+        getActiveTask: () => ({ abortController: new AbortController() }),
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      },
+    );
+
+    assert.match(sent.at(-1) || '', /已归档本地 Codex 会话/);
+    assert.match(sent.at(-1) || '', /解除绑定.*1/s);
+    assert.equal(fs.existsSync(sessionPath), false);
+    const archivedEntries = fs.readdirSync(path.join(process.env.CODEX_HOME!, 'archived_sessions'));
+    assert.equal(archivedEntries.length, 1);
+    assert.match(archivedEntries[0] || '', /019e7d66-0000-7000-8000-000000000001\.jsonl$/);
+    assert.equal(store.getChannelBinding(address.channelType, address.chatId), null);
+    assert.equal(store.listChannelBindings().some((item) => item.bridgeSessionId === binding.bridgeSessionId), false);
+    assert.equal(store.getSession(binding.bridgeSessionId), null);
+
+    fs.rmSync(path.join(process.env.CODEX_HOME!, 'sessions'), { recursive: true, force: true });
+    fs.rmSync(path.join(process.env.CODEX_HOME!, 'archived_sessions'), { recursive: true, force: true });
+  });
+
+  it('archives a selected Codex thread with /t archive using the global list index', async () => {
+    const store = initTestContext();
+    fs.rmSync(path.join(process.env.CODEX_HOME!, 'sessions'), { recursive: true, force: true });
+    fs.rmSync(path.join(process.env.CODEX_HOME!, 'archived_sessions'), { recursive: true, force: true });
+    fs.rmSync(path.join(process.env.CODEX_HOME!, 'session_index.jsonl'), { force: true });
+
+    const older = writeCodexSessionJsonlFixture({
+      threadId: '019e7d66-0000-7000-8000-000000000101',
+      workDir: '/tmp/archive-index-old',
+      lines: [{
+        timestamp: '2026-05-28T00:00:01.000Z',
+        type: 'session_meta',
+        payload: {
+          id: '019e7d66-0000-7000-8000-000000000101',
+          timestamp: '2026-05-28T00:00:01.000Z',
+          cwd: '/tmp/archive-index-old',
+          originator: 'Codex CLI',
+        },
+      }],
+    });
+    const newer = writeCodexSessionJsonlFixture({
+      threadId: '019e7d66-0000-7000-8000-000000000102',
+      workDir: '/tmp/archive-index-new',
+      lines: [{
+        timestamp: '2026-05-28T00:00:00.000Z',
+        type: 'session_meta',
+        payload: {
+          id: '019e7d66-0000-7000-8000-000000000102',
+          timestamp: '2026-05-28T00:00:00.000Z',
+          cwd: '/tmp/archive-index-new',
+          originator: 'Codex CLI',
+        },
+      }],
+    });
+    const address = { channelType: 'feishu', chatId: 'chat-t-archive-index' } as const;
+    router.bindToCodexThread(address, '019e7d66-0000-7000-8000-000000000101', {
+      workingDirectory: '/tmp/archive-index-old',
+      codexTitle: 'Archive index old',
+    });
+
+    const sent: string[] = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      send: async (message: { text: string }) => {
+        sent.push(message.text);
+        return { ok: true, messageId: `reply-t-archive-index-${sent.length}` };
+      },
+    };
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/t archive 1',
+        messageId: 'incoming-t-archive-index',
+      } as any,
+      '/t archive 1',
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      },
+    );
+
+    assert.match(sent.at(-1) || '', /019e7d66-0000-7000-8000-000000000101/);
+    assert.equal(fs.existsSync(older.sessionPath), false);
+    assert.equal(fs.existsSync(newer.sessionPath), true);
+    assert.equal(store.getChannelBinding(address.channelType, address.chatId), null);
+    const archivedEntries = fs.readdirSync(path.join(process.env.CODEX_HOME!, 'archived_sessions'));
+    assert.equal(archivedEntries.length, 1);
+    assert.match(archivedEntries[0] || '', /019e7d66-0000-7000-8000-000000000101\.jsonl$/);
+
+    fs.rmSync(path.join(process.env.CODEX_HOME!, 'sessions'), { recursive: true, force: true });
+    fs.rmSync(path.join(process.env.CODEX_HOME!, 'archived_sessions'), { recursive: true, force: true });
   });
 
   it('renders actionable rich cards for empty /t ls and /auto ls tables', async () => {

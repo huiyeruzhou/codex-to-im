@@ -8,7 +8,7 @@ BRIDGE_LOG="$LOG_DIR/bridge.log"
 
 usage() {
   cat <<'USAGE'
-Usage: bash scripts/hot-update-bridge.sh [--pull] [--skip-tests] [--run]
+Usage: bash scripts/hot-update-bridge.sh [--pull] [--skip-tests] [--dry-run] [--run]
 
 Dispatch a detached Codex-to-IM hot update so the current bridge-hosted
 Codex session can survive the bridge stop/start sequence.
@@ -16,6 +16,8 @@ Codex session can survive the bridge stop/start sequence.
 Options:
   --pull         Run git pull before build/test/restart.
   --skip-tests   Skip npm test during this hot update.
+  --dry-run      Validate environment and print the planned detached update
+                 without dispatching a worker, building, testing, or restarting.
   --run          Internal worker mode. Do not call directly from a bridge session.
 USAGE
 }
@@ -23,6 +25,7 @@ USAGE
 USE_PULL=0
 SKIP_TESTS=0
 RUN_WORKER=0
+DRY_RUN=0
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -34,6 +37,9 @@ while [ "$#" -gt 0 ]; do
       ;;
     --run)
       RUN_WORKER=1
+      ;;
+    --dry-run)
+      DRY_RUN=1
       ;;
     -h|--help)
       usage
@@ -48,7 +54,18 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
+validate_project_dir() {
+  if [ "$(basename "$PROJECT_DIR")" != "codex-to-im" ]; then
+    echo "[hot-update] refusing to run outside a codex-to-im project directory" >&2
+    exit 1
+  fi
+}
+
 ensure_node24() {
+  # npm test can export npm_config_prefix, which makes nvm refuse to run.
+  # Hot update owns its Node runtime selection, so clear the incompatible prefix.
+  unset npm_config_prefix NPM_CONFIG_PREFIX
+
   if [ -s "$HOME/.nvm/nvm.sh" ]; then
     # shellcheck source=/dev/null
     source "$HOME/.nvm/nvm.sh"
@@ -85,10 +102,7 @@ run_worker() {
   echo "[hot-update] project: $PROJECT_DIR"
   echo "[hot-update] bridge log: $BRIDGE_LOG"
 
-  if [ "$(basename "$PROJECT_DIR")" != "codex-to-im" ]; then
-    echo "[hot-update] refusing to run outside a codex-to-im project directory" >&2
-    exit 1
-  fi
+  validate_project_dir
 
   ensure_node24
   echo "[hot-update] node: $(node -v)"
@@ -131,6 +145,40 @@ run_worker() {
   echo "[hot-update] completed $(date -Is)"
 }
 
+run_dry_run() {
+  cd "$PROJECT_DIR"
+  validate_project_dir
+  ensure_node24
+
+  local args=(--run)
+  if [ "$USE_PULL" = "1" ]; then
+    args+=(--pull)
+  fi
+  if [ "$SKIP_TESTS" = "1" ]; then
+    args+=(--skip-tests)
+  fi
+
+  echo "[hot-update] dry-run: yes"
+  echo "[hot-update] project: $PROJECT_DIR"
+  echo "[hot-update] pwd: $(pwd)"
+  echo "[hot-update] script: $PROJECT_DIR/scripts/hot-update-bridge.sh"
+  echo "[hot-update] CTI_HOME: $CTI_HOME"
+  echo "[hot-update] log dir: $LOG_DIR"
+  echo "[hot-update] bridge log: $BRIDGE_LOG"
+  echo "[hot-update] node: $(node -v)"
+  if node_supports_env_proxy; then
+    echo "[hot-update] --use-env-proxy: supported"
+  else
+    echo "[hot-update] --use-env-proxy: not supported"
+  fi
+  echo "[hot-update] worker args: ${args[*]}"
+  echo "[hot-update] dispatch command: bash scripts/hot-update-bridge.sh ${args[*]}"
+  echo "[hot-update] git pull: $([ "$USE_PULL" = "1" ] && echo planned || echo skipped)"
+  echo "[hot-update] npm run build: planned"
+  echo "[hot-update] npm test: $([ "$SKIP_TESTS" = "1" ] && echo skipped || echo planned)"
+  echo "[hot-update] restart: planned"
+}
+
 dispatch_worker() {
   local log_stamp
   log_stamp="$(date +%Y%m%d-%H%M%S)"
@@ -163,7 +211,9 @@ dispatch_worker() {
   echo "Tests skipped: $([ "$SKIP_TESTS" = "1" ] && echo yes || echo no)"
 }
 
-if [ "$RUN_WORKER" = "1" ]; then
+if [ "$DRY_RUN" = "1" ]; then
+  run_dry_run
+elif [ "$RUN_WORKER" = "1" ]; then
   run_worker
 else
   dispatch_worker

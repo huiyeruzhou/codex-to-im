@@ -3,11 +3,7 @@ import type { OutboundRichCard } from '../types.js';
 import { buildCommandCallbackData } from '../command-callbacks.js';
 import { buildFencedCodeBlock } from '../markdown/fence.js';
 import type { CodexSessionSummary } from '../../../codex/session-index.js';
-import {
-  DEFAULT_CODEX_THREAD_LIST_LIMIT,
-  MAX_CODEX_THREAD_LIST_LIMIT,
-  parseListIndex,
-} from './aliases.js';
+import { MAX_CODEX_THREAD_LIST_LIMIT, parseListIndex } from './aliases.js';
 import { formatCreatorBadge, resolveCreatorKind } from '../display/session-creator.js';
 import {
   buildThreadActionCallbackData,
@@ -23,7 +19,7 @@ export {
   type ThreadCardScope,
 } from '../command-callbacks.js';
 
-const CODEX_THREADS_CARD_MAX_ITEMS = 20;
+const BOUND_THREADS_CARD_MAX_ITEMS = 20;
 
 export interface CodexThreadCardBindingState {
   threadId: string;
@@ -365,30 +361,45 @@ export function buildBoundThreadsCommandResponse(
   );
 }
 
+function hasReachedCodexThreadDisplayLimit(actualCount: number, limit: number | undefined): boolean {
+  return limit === MAX_CODEX_THREAD_LIST_LIMIT && actualCount >= MAX_CODEX_THREAD_LIST_LIMIT;
+}
+
+export function buildCodexThreadLimitNotice(actualCount: number, limit: number | undefined): string | null {
+  if (!hasReachedCodexThreadDisplayLimit(actualCount, limit)) return null;
+  return `已达到 ${MAX_CODEX_THREAD_LIST_LIMIT} 条显示上限，可能还有更多本地 Codex 会话未显示；可用 \`/t n 100\` 或名称/thread id 缩小范围。`;
+}
+
 export function buildCodexThreadsCommandResponse(
   codexSessions: CodexSessionSummary[],
   markdown: boolean,
   showAll: boolean,
-  _limit = DEFAULT_CODEX_THREAD_LIST_LIMIT,
+  limit?: number,
   bindingStates: CodexThreadCardBindingState[] = [],
+  extraFooter: string[] = [],
 ): string {
   const actualCount = codexSessions.length;
   const title = showAll
     ? `本地 Codex 会话（当前显示 ${actualCount} 条，最多 ${MAX_CODEX_THREAD_LIST_LIMIT} 条）`
     : `最近 ${actualCount} 条本地 Codex 会话`;
+  const limitNotice = buildCodexThreadLimitNotice(actualCount, limit);
   return buildThreadCommandTableResponse(
     title,
     buildCodexThreadCommandTableRows(codexSessions, bindingStates),
-    showAll
+    [
+      ...(limitNotice ? [limitNotice] : []),
+      ...extraFooter,
+      ...(showAll
       ? [
           '发送 `/t 1` 可接管第 1 条本地 Codex 会话。',
-          `发送 \`/t\` 可只看最近 ${DEFAULT_CODEX_THREAD_LIST_LIMIT} 条。`,
+          `卡片默认显示最多 ${MAX_CODEX_THREAD_LIST_LIMIT} 条本地 Codex 会话；文本 fallback 默认显示 10 条。`,
+          `发送 \`/t n 100\` 可只看最近 100 条本地 Codex 会话（最多 ${MAX_CODEX_THREAD_LIST_LIMIT} 条）。`,
         ]
       : [
           '发送 `/t 1` 可接管第 1 条本地 Codex 会话。',
-          `发送 \`/t all\` 可查看最多 ${MAX_CODEX_THREAD_LIST_LIMIT} 条本地 Codex 会话。`,
-          `发送 \`/t n 100\` 可查看最近 100 条本地 Codex 会话（最多 ${MAX_CODEX_THREAD_LIST_LIMIT} 条）。`,
-        ],
+          `发送 \`/t\` 或 \`/t all\` 可查看最多 ${MAX_CODEX_THREAD_LIST_LIMIT} 条本地 Codex 会话。`,
+        ]),
+    ],
     markdown,
   );
 }
@@ -396,7 +407,7 @@ export function buildCodexThreadsCommandResponse(
 export function buildCodexThreadsCommandCard(
   codexSessions: CodexSessionSummary[],
   showAll: boolean,
-  _limit = DEFAULT_CODEX_THREAD_LIST_LIMIT,
+  limit?: number,
   bindingStates: CodexThreadCardBindingState[] = [],
   options: {
     channelType?: string;
@@ -404,11 +415,11 @@ export function buildCodexThreadsCommandCard(
     selectedThreadId?: string | null;
   } = {},
 ): OutboundRichCard | null {
-  if (codexSessions.length > CODEX_THREADS_CARD_MAX_ITEMS) return null;
   const actualCount = codexSessions.length;
   const title = showAll
     ? `本地 Codex 会话（${actualCount}/${MAX_CODEX_THREAD_LIST_LIMIT}）`
     : `最近 ${actualCount} 条本地 Codex 会话`;
+  const limitNotice = buildCodexThreadLimitNotice(actualCount, limit);
   const selectedCallbackData = options.selectedThreadId
     ? `${THREAD_SELECT_CALLBACK_PREFIX}${encodeURIComponent(options.selectedThreadId)}`
     : undefined;
@@ -458,14 +469,15 @@ export function buildCodexThreadsCommandCard(
     ],
     footer: showAll
       ? [
-          '纯文本命令：`/t 1` 接管第 1 条，`/t add 1` 添加但不激活，`/t` 返回最近列表。',
-          '`/t` 和 `/t add` 的序号来自这张全局本地 Codex 会话表；`/t use` 和 `/t rm` 的序号来自 `/t ls` 的局部绑定表。',
-          `超过 ${CODEX_THREADS_CARD_MAX_ITEMS} 条时只发送文本列表，避免卡片过长。`,
+          ...(limitNotice ? [limitNotice] : []),
+          '纯文本命令：`/t 1` 接管第 1 条，`/t add 1` 添加但不激活，`/t archive 1` 归档第 1 条。',
+          '`/t`、`/t add` 和 `/t archive` 的序号来自这张全局本地 Codex 会话表；`/t use` 和 `/t rm` 的序号来自 `/t ls` 的局部绑定表。',
         ]
       : [
+          ...(limitNotice ? [limitNotice] : []),
           '纯文本命令：`/t 1` 接管第 1 条，`/t add 1` 添加但不激活。',
-          '`/t` 和 `/t add` 的序号来自这张全局本地 Codex 会话表；`/t use` 和 `/t rm` 的序号来自 `/t ls` 的局部绑定表。',
-          `更多：\`/t all\` 最多 ${MAX_CODEX_THREAD_LIST_LIMIT} 条，\`/t n 100\` 查看最近 100 条。`,
+          '`/t`、`/t add` 和 `/t archive` 的序号来自这张全局本地 Codex 会话表；`/t use` 和 `/t rm` 的序号来自 `/t ls` 的局部绑定表。',
+          `更多：\`/t\` 或 \`/t all\` 最多 ${MAX_CODEX_THREAD_LIST_LIMIT} 条。`,
         ],
   };
   if (options.channelType && options.chatId) {
@@ -483,7 +495,7 @@ export function buildBoundThreadsCommandCard(
     selectedBindingId?: string | null;
   } = {},
 ): OutboundRichCard | null {
-  if (bindings.length > CODEX_THREADS_CARD_MAX_ITEMS) return null;
+  if (bindings.length > BOUND_THREADS_CARD_MAX_ITEMS) return null;
   const selectedCallbackData = options.selectedBindingId
     ? `${THREAD_SELECT_CALLBACK_PREFIX}${encodeURIComponent(options.selectedBindingId)}`
     : undefined;

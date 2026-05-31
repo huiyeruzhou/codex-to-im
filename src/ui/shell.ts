@@ -310,7 +310,7 @@ export function renderUiShellHtml(): string {
               </div>
             </div>
 
-            <div class="notice" style="margin-bottom: 16px;">最短使用路径：先发 <code>/t</code> 查看最近会话，再发 <code>/t 1</code> 接管；之后直接发送文本即可继续当前会话。</div>
+            <div class="notice" style="margin-bottom: 16px;">最短使用路径：先发 <code>/t</code> 查看本地 Codex 会话，再发 <code>/t 1</code> 接管；之后直接发送文本即可继续当前会话。</div>
 
             <div class="command-sections">
               <section class="command-section">
@@ -323,16 +323,17 @@ export function renderUiShellHtml(): string {
                   <div class="command-item"><div class="command-col-command"><code>/check all</code></div><div class="command-col-original"><code>/health all</code></div><div class="command-col-desc">查看所有运行中会话的健康状态。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>//...</code></div><div class="command-col-original">—</div><div class="command-col-desc">向模型发送以 <code>/</code> 开头的文本，避免被当成桥接命令。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/h</code></div><div class="command-col-original"><code>/help</code></div><div class="command-col-desc">查看帮助。</div></div>
-          <div class="command-item"><div class="command-col-command"><code>/t</code></div><div class="command-col-original"><code>/threads</code></div><div class="command-col-desc">列出最近 10 条本地 Codex 会话。</div></div>
-          <div class="command-item"><div class="command-col-command"><code>/t all</code></div><div class="command-col-original"><code>/threads all</code></div><div class="command-col-desc">最多列出 200 条本地 Codex 会话。</div></div>
+          <div class="command-item"><div class="command-col-command"><code>/t</code></div><div class="command-col-original"><code>/threads</code></div><div class="command-col-desc">文本默认最近 10 条；卡片最多列出 200 条本地 Codex 会话。</div></div>
+          <div class="command-item"><div class="command-col-command"><code>/t all</code></div><div class="command-col-original"><code>/threads all</code></div><div class="command-col-desc">文本和卡片都最多列出 200 条本地 Codex 会话。</div></div>
           <div class="command-item"><div class="command-col-command"><code>/t n 100</code></div><div class="command-col-original"><code>/threads n 100</code></div><div class="command-col-desc">列出最近 100 条本地 Codex 会话，最多 200 条。</div></div>
               <div class="command-item"><div class="command-col-command"><code>/t &lt;序号|thread id|名称&gt;</code></div><div class="command-col-original"><code>/thread &lt;序号|thread id|名称&gt;</code></div><div class="command-col-desc">按序号、thread id 或唯一名称接管本地 Codex 会话，并设为当前线程。</div></div>
               <div class="command-item"><div class="command-col-command"><code>/t ls</code></div><div class="command-col-original"><code>/t ls</code></div><div class="command-col-desc">查看当前聊天已绑定线程；<code>*</code> 标记已绑定，当前激活线程会加粗显示。</div></div>
               <div class="command-item"><div class="command-col-command"><code>/t add &lt;序号|thread id|名称&gt;</code></div><div class="command-col-original"><code>/t add &lt;序号|thread id|名称&gt;</code></div><div class="command-col-desc">把Codex thread加入当前聊天，不一定切换当前线程。</div></div>
+              <div class="command-item"><div class="command-col-command"><code>/t archive [序号|thread id|名称]</code></div><div class="command-col-original"><code>/t archive [序号|thread id|名称]</code></div><div class="command-col-desc">归档当前或指定本地 Codex 会话，并解除相关绑定。</div></div>
               <div class="command-item"><div class="command-col-command"><code>/t use &lt;序号|thread id|binding id|名称&gt;</code></div><div class="command-col-original"><code>/t use &lt;序号|thread id|binding id|名称&gt;</code></div><div class="command-col-desc">切换当前聊天的激活线程；序号按 <code>/t ls</code> 的绑定顺序。</div></div>
               <div class="command-item"><div class="command-col-command"><code>/t rm &lt;序号|thread id|binding id|名称&gt;</code></div><div class="command-col-original"><code>/t rm &lt;序号|thread id|binding id|名称&gt;</code></div><div class="command-col-desc">移除当前聊天的指定绑定线程；同名时需改用序号或 ID。</div></div>
               <div class="command-item"><div class="command-col-command"><code>/t rename &lt;名称&gt;</code></div><div class="command-col-original"><code>/t rename &lt;名称&gt;</code></div><div class="command-col-desc">重命名当前线程；名称不能是纯数字或类似线程/绑定 ID。</div></div>
-              <div class="command-item"><div class="command-col-command"><code>/t 序号范围</code></div><div class="command-col-original"><code>/t</code> / <code>/t ls</code></div><div class="command-col-desc"><code>/t</code> 和 <code>/t add</code> 使用全局本地 Codex 会话列表序号；<code>/t use</code> 和 <code>/t rm</code> 使用 <code>/t ls</code> 当前聊天局部绑定列表序号。</div></div>
+              <div class="command-item"><div class="command-col-command"><code>/t 序号范围</code></div><div class="command-col-original"><code>/t</code> / <code>/t ls</code></div><div class="command-col-desc"><code>/t</code>、<code>/t add</code> 和 <code>/t archive</code> 使用全局本地 Codex 会话列表序号；<code>/t use</code> 和 <code>/t rm</code> 使用 <code>/t ls</code> 当前聊天局部绑定列表序号。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/n [绝对路径 | 项目名]</code></div><div class="command-col-original"><code>/new [绝对路径 | 项目名]</code></div><div class="command-col-desc">不带参数时在当前正式会话目录下新建线程；相对项目名会在“默认工作空间”下创建目录；当前若是临时草稿线程则会报错。通过 IM 创建的新线程当前只保证在 IM 中可继续，不会自动出现在本机 Codex 会话列表中。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>直接发送文本</code></div><div class="command-col-original">—</div><div class="command-col-desc">继续当前已绑定会话；未绑定时会自动进入临时草稿线程，等同先使用 <code>/t 0</code>。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/his</code></div><div class="command-col-original"><code>/history</code></div><div class="command-col-desc">查看最近 N 条消息的解析纯文本视图；优先读取 Codex session JSONL，找不到再退回 Bridge 缓存。</div></div>

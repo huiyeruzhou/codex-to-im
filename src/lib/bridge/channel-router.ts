@@ -104,7 +104,7 @@ export function createBinding(
         defaultModel,
         undefined,
         workingDirectory,
-        'code',
+        undefined,
       )
     : getOrCreateDraftSession(store, address);
 

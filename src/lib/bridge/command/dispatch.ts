@@ -38,6 +38,7 @@ import {
   handleSandboxCommand,
   handleUiCommand,
 } from './runtime-settings.js';
+import { handleSetCommand } from './global-settings.js';
 import { buildGlobalStatusResponse } from './status.js';
 import {
   CommandThreadDisplay,
@@ -50,6 +51,10 @@ import {
 import {
   handleAutoCommand,
 } from './auto.js';
+import {
+  handleHotUpdateCommand,
+  type HotUpdateRunner,
+} from './hot-update.js';
 import type { AutoTaskCardAction } from '../command-callbacks.js';
 import {
   finalizeStreamFeedback,
@@ -76,6 +81,9 @@ export interface BridgeCommandDispatchDeps {
   startAutoTask?(taskId: string): void;
   stopAutoTask?(taskId: string): void;
   onBindingRemoved?(binding: ChannelBinding): void;
+  hotUpdateRunner?: HotUpdateRunner;
+  hotUpdateCwd?: string;
+  hotUpdateEnv?: NodeJS.ProcessEnv;
 }
 
 export async function handleBridgeCommand(
@@ -125,7 +133,7 @@ export async function handleBridgeCommand(
   let auditResponse = true;
   let threadTableCardScope: ThreadCardScope | undefined;
   const currentBinding = deps.scopedBinding || store.getChannelBinding(msg.address.channelType, msg.address.chatId);
-  const shouldApplyDefaultTargetForCommand = !new Set(['/status', '/threads', '/t']).has(command);
+  const shouldApplyDefaultTargetForCommand = !new Set(['/status', '/threads', '/t', '/set']).has(command);
   const commandBinding = !shouldApplyDefaultTargetForCommand
     ? currentBinding
     : currentBinding || (store.getChannelDefaultTarget(msg.address.channelType) ? router.resolve(msg.address) : null);
@@ -330,6 +338,14 @@ export async function handleBridgeCommand(
       break;
     }
 
+    case '/set': {
+      response = handleSetCommand({
+        args,
+        markdown: responseParseMode === 'Markdown',
+      });
+      break;
+    }
+
     case '/model': {
       response = handleModelCommand({
         msg,
@@ -404,6 +420,19 @@ export async function handleBridgeCommand(
         store,
         threadDisplay,
         markdown: responseParseMode === 'Markdown',
+        richCard: (card) => {
+          responseRichCard = card;
+        },
+      });
+      break;
+    }
+
+    case '/hot-update': {
+      response = await handleHotUpdateCommand({
+        args,
+        cwd: deps.hotUpdateCwd,
+        env: deps.hotUpdateEnv,
+        runner: deps.hotUpdateRunner,
       });
       break;
     }
