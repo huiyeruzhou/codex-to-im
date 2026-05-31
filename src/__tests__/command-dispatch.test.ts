@@ -2,6 +2,7 @@ import './test-setup.js';
 import { beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -13,6 +14,7 @@ import { buildCommandCallbackData, parseCommandCallbackData } from '../lib/bridg
 import * as router from '../lib/bridge/channel-router.js';
 import { getThreadTableMessageRecord } from '../lib/bridge/command/thread-table-message-pins.js';
 import { listAutoTasks } from '../lib/bridge/auto-tasks.js';
+import { buildCodexSandboxArgs, resolveCodexCliExecutable } from '../lib/bridge/command/shell.js';
 import { writeCodexSessionJsonlFixture } from './test-bridge-utils.js';
 import type { OutboundRichCard } from '../lib/bridge/types.js';
 import type { HotUpdateRunRequest } from '../lib/bridge/command/hot-update.js';
@@ -227,7 +229,13 @@ describe('command-dispatch', () => {
     router.updateBinding(binding.id, { mode: 'yolo' });
 
     const sent: string[] = [];
-    const requests: Array<{ command: string; cwd: string; sandboxMode: string; shell: string }> = [];
+    const requests: Array<{
+      command: string;
+      cwd: string;
+      networkAccess: boolean;
+      sandboxMode: string;
+      shell: string;
+    }> = [];
     const adapter: any = {
       channelType: 'feishu',
       provider: 'feishu',
@@ -253,6 +261,7 @@ describe('command-dispatch', () => {
           requests.push({
             command: request.command,
             cwd: request.cwd,
+            networkAccess: request.networkAccess,
             sandboxMode: request.sandboxMode,
             shell: request.shell,
           });
@@ -264,12 +273,106 @@ describe('command-dispatch', () => {
     assert.deepEqual(requests, [{
       command: 'echo ok',
       cwd: workDir,
+      networkAccess: true,
       sandboxMode: 'workspace-write',
       shell: process.env.SHELL || '/bin/bash',
     }]);
     assert.match(sent.at(-1) || '', /\/shell 执行完成/);
     assert.match(sent.at(-1) || '', /Codex sandbox.*workspace-write/s);
+    assert.match(sent.at(-1) || '', /网络.*on/s);
     assert.match(sent.at(-1) || '', /ok/);
+  });
+
+  it('unwraps transported markdown links for /shell commands', async () => {
+    initTestContext();
+    const address = { channelType: 'feishu', chatId: 'chat-shell-markdown-link' } as const;
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-shell-markdown-link-'));
+    router.createBinding(address, workDir);
+
+    const sent: string[] = [];
+    const commands: string[] = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      send: async (message: { text: string }) => {
+        sent.push(message.text);
+        return { ok: true, messageId: `reply-shell-md-${sent.length}` };
+      },
+    };
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/shell curl [baidu.com](http://baidu.com/)',
+        messageId: 'incoming-shell-md-link',
+      } as any,
+      '/shell curl [baidu.com](http://baidu.com/)',
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+        shellRunner: async (request) => {
+          commands.push(request.command);
+          return { exitCode: 0, stdout: 'ok\n', stderr: '' };
+        },
+      },
+    );
+
+    assert.deepEqual(commands, ['curl baidu.com']);
+    assert.match(sent.at(-1) || '', /curl baidu\.com/);
+    assert.doesNotMatch(sent.at(-1) || '', /http:\/\/baidu\.com/);
+  });
+
+  it('builds /shell codex sandbox args with default network access', () => {
+    const args = buildCodexSandboxArgs({
+      command: 'curl baidu.com',
+      cwd: '/tmp/cti-shell',
+      networkAccess: true,
+      sandboxMode: 'workspace-write',
+      shell: '/bin/bash',
+      timeoutMs: 60_000,
+    });
+
+    assert.deepEqual(args, [
+      'sandbox',
+      '-c',
+      'permissions.cti_shell_workspace_network.extends=":workspace"',
+      '-c',
+      'permissions.cti_shell_workspace_network.network.enabled=true',
+      '-c',
+      'permissions.cti_shell_workspace_network.network.mode="full"',
+      '--permissions-profile',
+      'cti_shell_workspace_network',
+      '--cd',
+      '/tmp/cti-shell',
+      '/bin/bash',
+      '-lc',
+      'curl baidu.com',
+    ]);
+  });
+
+  it('prefers a global codex executable over node_modules for /shell', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-codex-path-'));
+    const projectBin = path.join(tempDir, 'project', 'node_modules', '.bin');
+    const globalBin = path.join(tempDir, 'global-bin');
+    fs.mkdirSync(projectBin, { recursive: true });
+    fs.mkdirSync(globalBin, { recursive: true });
+    const projectCodex = path.join(projectBin, 'codex');
+    const globalCodex = path.join(globalBin, 'codex');
+    fs.writeFileSync(projectCodex, '#!/usr/bin/env sh\nexit 0\n', 'utf-8');
+    fs.writeFileSync(globalCodex, '#!/usr/bin/env sh\nexit 0\n', 'utf-8');
+    fs.chmodSync(projectCodex, 0o755);
+    fs.chmodSync(globalCodex, 0o755);
+
+    try {
+      assert.equal(
+        resolveCodexCliExecutable({ PATH: `${projectBin}${path.delimiter}${globalBin}` }),
+        globalCodex,
+      );
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it('runs real /shell commands for listing, workspace write, and invalid directory write failure', async () => {
@@ -339,6 +442,55 @@ describe('command-dispatch', () => {
     } finally {
       fs.rmSync(cwd, { recursive: true, force: true });
       fs.rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it('allows /shell to connect to localhost when sandbox network is enabled', async () => {
+    initTestContext();
+    const address = { channelType: 'feishu', chatId: 'chat-shell-localhost' } as const;
+    const cwd = fs.mkdtempSync(path.join(process.cwd(), '.tmp-cti-shell-localhost-'));
+    router.createBinding(address, cwd);
+
+    const server = net.createServer((socket) => {
+      socket.end('cti-localhost-ok\n');
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', resolve);
+    });
+    const addressInfo = server.address();
+    assert.ok(addressInfo && typeof addressInfo === 'object');
+
+    const sent: string[] = [];
+    const adapter: any = {
+      channelType: 'feishu',
+      provider: 'feishu',
+      send: async (message: { text: string }) => {
+        sent.push(message.text);
+        return { ok: true, messageId: `reply-shell-localhost-${sent.length}` };
+      },
+    };
+
+    try {
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: `/shell bash -lc 'exec 3<>/dev/tcp/127.0.0.1/${addressInfo.port}; cat <&3'`,
+          messageId: 'incoming-shell-localhost',
+        } as any,
+        `/shell bash -lc 'exec 3<>/dev/tcp/127.0.0.1/${addressInfo.port}; cat <&3'`,
+        {
+          getActiveTask: () => undefined,
+          diagnoseSessionHealth: async () => null,
+          diagnoseAllActiveSessions: async () => [],
+        },
+      );
+      assert.match(sent.at(-1) || '', /退出码[\s\S]*0/);
+      assert.match(sent.at(-1) || '', /cti-localhost-ok/);
+    } finally {
+      server.close();
+      fs.rmSync(cwd, { recursive: true, force: true });
     }
   });
 

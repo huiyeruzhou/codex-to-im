@@ -1,4 +1,6 @@
 import { execFile } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
 import { promisify } from 'node:util';
 
 import type { ChannelBinding } from '../types.js';
@@ -11,6 +13,8 @@ const execFileAsync = promisify(execFile);
 const DEFAULT_SHELL_SANDBOX_MODE = 'workspace-write';
 const SHELL_COMMAND_TIMEOUT_MS = 60_000;
 const SHELL_COMMAND_MAX_OUTPUT_BYTES = 96_000;
+const CODEX_SHELL_WORKSPACE_NETWORK_PROFILE = 'cti_shell_workspace_network';
+const CODEX_SHELL_READ_ONLY_NETWORK_PROFILE = 'cti_shell_read_only_network';
 
 type ShellSandboxMode = 'read-only' | 'workspace-write';
 
@@ -18,6 +22,7 @@ export interface ShellCommandRunRequest {
   command: string;
   cwd: string;
   sandboxMode: ShellSandboxMode;
+  networkAccess: boolean;
   shell: string;
   timeoutMs: number;
 }
@@ -42,16 +47,36 @@ interface ShellAuditFinding {
   message: string;
 }
 
-function codexSandboxPermissionProfile(sandboxMode: ShellSandboxMode): string {
-  return sandboxMode === 'read-only' ? ':read-only' : ':workspace';
+function codexSandboxPermissionProfile(request: ShellCommandRunRequest): string {
+  if (!request.networkAccess) {
+    return request.sandboxMode === 'read-only' ? ':read-only' : ':workspace';
+  }
+  return request.sandboxMode === 'read-only'
+    ? CODEX_SHELL_READ_ONLY_NETWORK_PROFILE
+    : CODEX_SHELL_WORKSPACE_NETWORK_PROFILE;
 }
 
-function buildCodexSandboxArgs(request: ShellCommandRunRequest, legacyLinuxSubcommand = false): string[] {
+function buildCodexNetworkProfileConfigArgs(request: ShellCommandRunRequest): string[] {
+  if (!request.networkAccess) return [];
+  const profile = codexSandboxPermissionProfile(request);
+  const parentProfile = request.sandboxMode === 'read-only' ? ':read-only' : ':workspace';
+  return [
+    '-c',
+    `permissions.${profile}.extends=${JSON.stringify(parentProfile)}`,
+    '-c',
+    `permissions.${profile}.network.enabled=true`,
+    '-c',
+    `permissions.${profile}.network.mode="full"`,
+  ];
+}
+
+export function buildCodexSandboxArgs(request: ShellCommandRunRequest, legacyLinuxSubcommand = false): string[] {
   return [
     'sandbox',
     ...(legacyLinuxSubcommand ? ['linux'] : []),
+    ...buildCodexNetworkProfileConfigArgs(request),
     '--permissions-profile',
-    codexSandboxPermissionProfile(request.sandboxMode),
+    codexSandboxPermissionProfile(request),
     '--cd',
     request.cwd,
     request.shell,
@@ -61,7 +86,7 @@ function buildCodexSandboxArgs(request: ShellCommandRunRequest, legacyLinuxSubco
 }
 
 async function execCodexSandbox(request: ShellCommandRunRequest, legacyLinuxSubcommand = false) {
-  return execFileAsync('codex', buildCodexSandboxArgs(request, legacyLinuxSubcommand), {
+  return execFileAsync(resolveCodexCliExecutable(), buildCodexSandboxArgs(request, legacyLinuxSubcommand), {
     cwd: request.cwd,
     timeout: request.timeoutMs,
     maxBuffer: SHELL_COMMAND_MAX_OUTPUT_BYTES,
@@ -69,12 +94,56 @@ async function execCodexSandbox(request: ShellCommandRunRequest, legacyLinuxSubc
   });
 }
 
+function isExecutable(filePath: string): boolean {
+  try {
+    fs.accessSync(filePath, fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isNodeModulesBinPath(dirPath: string): boolean {
+  const parts = dirPath.split(path.sep).filter(Boolean);
+  return parts.at(-1) === '.bin' && parts.includes('node_modules');
+}
+
+export function resolveCodexCliExecutable(env: NodeJS.ProcessEnv = process.env): string {
+  const override = env.CTI_CODEX_CLI_PATH?.trim();
+  if (override) return override;
+
+  const pathValue = env.PATH || '';
+  const entries = pathValue.split(path.delimiter).filter(Boolean);
+  const names = process.platform === 'win32'
+    ? ['codex.cmd', 'codex.exe', 'codex']
+    : ['codex'];
+
+  for (const dir of entries) {
+    if (isNodeModulesBinPath(dir)) continue;
+    for (const name of names) {
+      const candidate = path.join(dir, name);
+      if (isExecutable(candidate)) return candidate;
+    }
+  }
+
+  for (const dir of entries) {
+    for (const name of names) {
+      const candidate = path.join(dir, name);
+      if (isExecutable(candidate)) return candidate;
+    }
+  }
+
+  return 'codex';
+}
+
 function shouldRetryWithLegacyLinuxSandbox(error: unknown): boolean {
   const err = error as { stderr?: string | Buffer; message?: string };
   const stderr = err.stderr ? String(err.stderr) : '';
   const message = err.message || '';
   return /unexpected argument ['"]--permissions-profile['"]/.test(stderr)
-    || /unexpected argument ['"]--permissions-profile['"]/.test(message);
+    || /unexpected argument ['"]--permissions-profile['"]/.test(message)
+    || /bwrap: execvp .*\/codex\/codex: No such file or directory/.test(stderr)
+    || /bwrap: execvp .*\/codex\/codex: No such file or directory/.test(message);
 }
 
 export const defaultShellCommandRunner: ShellCommandRunner = async (request) => {
@@ -146,10 +215,14 @@ export function parseShellCommandArgs(rawArgs: string): ParsedShellCommandArgs |
   }
 
   return {
-    command: rest.trim(),
+    command: normalizeShellCommandTransportMarkdown(rest).trim(),
     force,
     sandboxMode,
   };
+}
+
+export function normalizeShellCommandTransportMarkdown(command: string): string {
+  return command.replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/gi, (_match, label: string) => label);
 }
 
 function consumeLeadingToken(raw: string): { token: string; rest: string } | null {
@@ -263,6 +336,7 @@ export async function handleShellCommand(options: {
         ['命令', buildFencedCodeBlock(parsed.command, 'sh')],
         ['工作目录', formatCommandPath(options.binding.workingDirectory)],
         ['Codex sandbox', parsed.sandboxMode],
+        ['网络', 'on'],
         ['Shell', resolveUserShell()],
       ],
       [
@@ -278,6 +352,7 @@ export async function handleShellCommand(options: {
     command: parsed.command,
     cwd: options.binding.workingDirectory,
     sandboxMode: parsed.sandboxMode,
+    networkAccess: true,
     shell: resolveUserShell(),
     timeoutMs: SHELL_COMMAND_TIMEOUT_MS,
   });
@@ -289,6 +364,7 @@ export async function handleShellCommand(options: {
         ['命令', buildFencedCodeBlock(parsed.command, 'sh')],
         ['工作目录', formatCommandPath(options.binding.workingDirectory)],
         ['Codex sandbox', parsed.sandboxMode],
+        ['网络', 'on'],
         ['Shell', resolveUserShell()],
         ['退出码', result.exitCode === null ? '-' : String(result.exitCode)],
       ],
