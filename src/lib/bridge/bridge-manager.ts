@@ -1208,7 +1208,7 @@ function parseThreadSelectActionCallback(callbackData: string): {
   const action = parts.length === 2 ? parts[1] : parts[0];
   if (
     (scope !== 'global' && scope !== 'bound')
-    || (action !== 'bind' && action !== 'rm' && action !== 'use' && action !== 'archive')
+    || (action !== 'attach' && action !== 'detach' && action !== 'use' && action !== 'archive')
   ) {
     return null;
   }
@@ -1315,15 +1315,15 @@ async function handleMessage(
         return;
       }
       const commandText = threadAction.scope === 'global'
-        ? threadAction.action === 'bind'
-          ? `/t add ${threadId}`
-          : threadAction.action === 'rm'
-            ? `/t rm ${threadId}`
+        ? threadAction.action === 'attach'
+          ? `/t attach ${threadId}`
+          : threadAction.action === 'detach'
+            ? `/t detach ${threadId}`
             : threadAction.action === 'archive'
               ? `/t archive ${threadId}`
               : `/t ${threadId}`
-        : threadAction.action === 'rm'
-          ? `/t rm ${threadId}`
+        : threadAction.action === 'detach'
+          ? `/t detach ${threadId}`
           : threadAction.action === 'archive'
             ? `/t archive ${threadId}`
             : `/t use ${threadId}`;

@@ -6,7 +6,7 @@ export const AUTO_TASK_ACTION_CALLBACK_PREFIX = 'cti-auto-action:';
 
 export type AutoTaskCardAction = 'rm' | 'set1';
 export type ThreadCardScope = 'global' | 'bound' | 'auto';
-export type ThreadCardAction = 'bind' | 'rm' | 'use' | 'archive';
+export type ThreadCardAction = 'attach' | 'detach' | 'use' | 'archive';
 
 export interface ParsedCommandCallback {
   commandText: string;

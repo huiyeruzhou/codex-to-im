@@ -19,7 +19,7 @@ export function resolveCommandAlias(rawCommand: string, args: string): string {
     case '/h':
       return '/help';
     case '/t':
-      return /^(ls|add|archive|use|rm|remove|rename)\b/i.test(args.trim())
+      return /^(ls|attach|archive|use|detach|rename)\b/i.test(args.trim())
         ? '/t'
         : !args
         ? '/threads'

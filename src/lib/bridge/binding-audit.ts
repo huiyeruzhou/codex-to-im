@@ -8,6 +8,7 @@ export type BindingChangeAction =
   | 'switch_draft'
   | 'switch_codex'
   | 'add_codex'
+  | 'attach_bridge'
   | 'use_binding'
   | 'remove_binding'
   | 'new_session'

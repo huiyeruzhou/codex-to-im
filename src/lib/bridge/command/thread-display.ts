@@ -30,7 +30,7 @@ export class CommandThreadDisplay {
       return buildCommandFields(
         '当前聊天绑定',
         [],
-        ['还没有绑定线程。发送 `/t` 查看本地 Codex 会话，再用 `/t add 1` 添加。'],
+        ['还没有绑定线程。发送 `/t` 查看本地 Codex 会话，再用 `/t attach 1` 挂接。'],
         markdown,
       );
     }
@@ -133,14 +133,15 @@ export class CommandThreadDisplay {
   boundThreadCardItems(channelType: string, chatId: string): BoundThreadCardItem[] {
     return listBindingsForChat(this.store, channelType, chatId).map((binding) => {
       const display = this.binding(binding);
-      return {
-        title: display.title,
-        cwd: display.cwd,
-        lastActiveAt: display.lastActiveAt,
-        threadId: display.threadId,
-        bindingId: binding.id,
-        active: binding.active !== false,
-        originator: display.originator,
+        return {
+          title: display.title,
+          cwd: display.cwd,
+          lastActiveAt: display.lastActiveAt,
+          threadId: display.threadId,
+          bridgeSessionId: binding.bridgeSessionId,
+          bindingId: binding.id,
+          active: binding.active !== false,
+          originator: display.originator,
       };
     });
   }
@@ -150,6 +151,12 @@ export class CommandThreadDisplay {
       listBindingsForChat(this.store, channelType, chatId)
         .map((binding) => [binding.bridgeSessionId, binding]),
     );
+    const anyBindingsBySessionId = new Map<string, ChannelBinding>();
+    for (const binding of this.store.listChannelBindings()) {
+      if (!anyBindingsBySessionId.has(binding.bridgeSessionId)) {
+        anyBindingsBySessionId.set(binding.bridgeSessionId, binding);
+      }
+    }
     return this.store.listSessions()
       .filter((session) => (
         session.hidden !== true
@@ -158,13 +165,15 @@ export class CommandThreadDisplay {
       ))
       .map((session) => {
         const binding = currentChatBindingsBySessionId.get(session.id);
+        const anyBinding = binding || anyBindingsBySessionId.get(session.id);
         const display = binding ? this.binding(binding) : this.display.thread('', session.id);
         return {
           title: display.title,
           cwd: display.cwd || session.working_directory,
           lastActiveAt: display.lastActiveAt || session.updated_at,
           threadId: '',
-          bindingId: binding ? binding.id : session.id,
+          bridgeSessionId: session.id,
+          bindingId: anyBinding ? anyBinding.id : session.id,
           active: binding?.active !== false && Boolean(binding),
           originator: binding ? display.originator : 'Bridge',
         };

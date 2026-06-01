@@ -27,7 +27,7 @@ import {
   resolveNewSessionWorkingDirectory,
 } from '../bridge-session-support.js';
 import { recordBindingChange, type BindingChangeAction } from '../binding-audit.js';
-import type { BridgeStore } from '../host.js';
+import type { BridgeSession, BridgeStore } from '../host.js';
 import {
   CommandThreadDisplay,
   type ThreadCardScope,
@@ -336,13 +336,19 @@ function findBridgeSessionByCodexThread(store: BridgeStore, threadId: string) {
   return store.listSessions().find((session) => getBridgeSessionCodexThreadId(session) === threadId) || null;
 }
 
-function findBridgeOnlySessionByToken(store: BridgeStore, token: string) {
+function findVisibleBridgeSessionByToken(
+  store: BridgeStore,
+  token: string,
+  options: { unboundOnly?: boolean; threadlessOnly?: boolean } = {},
+): { session: BridgeSession | null; ambiguous: boolean } {
   const lowerToken = token.trim().toLowerCase();
   if (!lowerToken) return { session: null, ambiguous: false };
+  const sessionIdsWithBinding = new Set(store.listChannelBindings().map((binding) => binding.bridgeSessionId));
   const matches = store.listSessions().filter((session) => (
     session.hidden !== true
     && session.session_type !== 'draft'
-    && !getBridgeSessionCodexThreadId(session)
+    && (!options.unboundOnly || !sessionIdsWithBinding.has(session.id))
+    && (!options.threadlessOnly || !getBridgeSessionCodexThreadId(session))
     && (
       session.id.toLowerCase() === lowerToken
       || session.id.toLowerCase().startsWith(lowerToken)
@@ -353,6 +359,10 @@ function findBridgeOnlySessionByToken(store: BridgeStore, token: string) {
     session: matches.length === 1 ? matches[0] : null,
     ambiguous: matches.length > 1,
   };
+}
+
+function findBridgeOnlySessionByToken(store: BridgeStore, token: string) {
+  return findVisibleBridgeSessionByToken(store, token, { unboundOnly: true, threadlessOnly: true });
 }
 
 function resolveCurrentCodexThreadTarget(
@@ -447,8 +457,8 @@ export function buildStartCommandResponse(): string {
     '常用流程',
     '1. /t 查看本地 Codex 会话',
     '2. /t 1 接管第 1 条本地 Codex 会话并设为当前线程',
-    '3. /t add 2 可把更多本地 Codex 会话加入当前聊天',
-    '4. /t ls 查看绑定，/t use 1 切换当前线程',
+    '3. /t attach 2 可把更多本地 Codex 会话挂接到当前聊天',
+    '4. /t ls 查看绑定，/t use 1 切换当前线程，/t detach 1 脱离绑定',
     '',
     '发送 /h 查看完整说明。',
   ].join('\n');
@@ -552,7 +562,7 @@ export async function handleThreadBindingCommand(options: {
 }): Promise<SessionThreadCommandResult> {
   const parts = options.args.trim().split(/\s+/).filter(Boolean);
   const rawSubcommand = (parts[0] || '').toLowerCase();
-  const subcommand = rawSubcommand === 'remove' ? 'rm' : rawSubcommand;
+  const subcommand = rawSubcommand;
   const subArgs = parts.slice(1).join(' ');
 
   if (subcommand === 'ls') {
@@ -565,10 +575,10 @@ export async function handleThreadBindingCommand(options: {
     };
   }
 
-  if (subcommand === 'add') {
+  if (subcommand === 'attach') {
     const targetToken = subArgs.trim();
     if (!targetToken) {
-      return { response: '用法：/t add <序号|thread-id|名称>。发送 `/t` 查看本地 Codex 会话，或发送 `/t ls` 查看已绑定线程。' };
+      return { response: '用法：/t attach <序号|bridge-session-id|thread-id|名称>。发送 `/t` 查看本地 Codex / Bridge 会话，或发送 `/t ls` 查看已绑定线程。' };
     }
     const displayedThreads = listCommandCodexThreads(MAX_CODEX_THREAD_LIST_LIMIT);
     if (!displayedThreads) {
@@ -577,13 +587,58 @@ export async function handleThreadBindingCommand(options: {
     const decoratedThreads = options.threadDisplay.decorateCodexSessions(displayedThreads, options.msg.address.channelType, options.msg.address.chatId);
     const selected = selectCodexThreadForCommand(options.threadDisplay, targetToken, decoratedThreads);
     if (selected.ambiguous) {
-      return { response: '匹配到多个本地 Codex 会话，请先发送 `/t` 查看列表，再用 `/t add 1` 这种序号添加。' };
+      return { response: '匹配到多个本地 Codex 会话，请先发送 `/t` 查看列表，再用 `/t attach 1` 这种序号挂接。' };
     }
     if (!selected.threadId) {
       if (selected.index !== undefined) {
         return { response: `本地 Codex 会话列表没有第 ${selected.index} 条。先发送 \`/t\` 查看列表，或直接使用 thread id。` };
       }
-      return { response: '没有找到对应的本地 Codex 会话。先发送 `/t` 查看列表，再用 `/t add 1` 添加。' };
+      const bridgeMatch = findVisibleBridgeSessionByToken(options.store, targetToken);
+      if (bridgeMatch.ambiguous) {
+        return { response: '匹配到多个 Bridge 会话，请先发送 `/t` 查看列表，再使用更长的 bridge session id。' };
+      }
+      if (!bridgeMatch.session) {
+        return { response: '没有找到对应的本地 Codex 或 Bridge 会话。先发送 `/t` 查看列表，再用 `/t attach 1` 挂接。' };
+      }
+      const previousActive = options.store.getChannelBinding(options.msg.address.channelType, options.msg.address.chatId);
+      let binding: ReturnType<typeof router.bindToSession>;
+      try {
+        binding = router.bindToSession(options.msg.address, bridgeMatch.session.id, {
+          active: previousActive ? false : true,
+        });
+      } catch (error) {
+        return { response: toUserVisibleBindingError(error, '挂接 Bridge 会话失败。') };
+      }
+      if (!binding) {
+        return { response: '指定的 Bridge 会话不存在。先发送 `/t` 查看列表，再用 `/t attach <bridge_session_id>` 挂接。' };
+      }
+      const updatedBinding = options.store.listChannelBindings().find((item) => item.id === binding.id) || binding;
+      auditCommandBindingChange(
+        options.store,
+        'attach_bridge',
+        options.msg,
+        previousActive,
+        updatedBinding,
+        previousActive ? 'attached inactive' : 'attached active',
+      );
+      const richCard = buildThreadCardRefresh(options.threadDisplay, options.deps.threadCardRefreshScope, options.msg.address, options.deps.threadCardSelectedId);
+      return {
+        response: buildCommandFields(
+          updatedBinding.active !== false ? '已挂接并激活 Bridge 会话' : '已挂接 Bridge 会话',
+          [
+            ['标题', options.threadDisplay.binding(updatedBinding).title],
+            ['bridge_session_id', updatedBinding.bridgeSessionId.slice(0, 8)],
+            ['binding_id', options.threadDisplay.bindingShortId(updatedBinding)],
+            ['thread_id', options.threadDisplay.bindingThreadId(updatedBinding) || '-'],
+          ],
+          updatedBinding.active !== false
+            ? ['接下来直接发送文本即可继续。']
+            : ['当前线程未改变。需要切换时发送 `/t use <序号|bridge-session-id|binding-id|thread-id|名称>`。'],
+          options.markdown,
+        ),
+        richCard,
+        threadTableCardScope: richCard && options.deps.threadCardRefreshScope ? options.deps.threadCardRefreshScope : undefined,
+      };
     }
 
     const previousActive = options.store.getChannelBinding(options.msg.address.channelType, options.msg.address.chatId);
@@ -597,12 +652,12 @@ export async function handleThreadBindingCommand(options: {
         active: previousActive ? false : true,
       });
     } catch (error) {
-      return { response: toUserVisibleBindingError(error, '添加本地 Codex 会话失败。') };
+      return { response: toUserVisibleBindingError(error, '挂接本地 Codex 会话失败。') };
     }
     const updatedBinding = options.store.listChannelBindings().find((item) => item.id === binding.id) || binding;
     auditCommandBindingChange(
-      options.store,
-      'add_codex',
+        options.store,
+        'add_codex',
       options.msg,
       previousActive,
       updatedBinding,
@@ -611,7 +666,7 @@ export async function handleThreadBindingCommand(options: {
     const richCard = buildThreadCardRefresh(options.threadDisplay, options.deps.threadCardRefreshScope, options.msg.address, options.deps.threadCardSelectedId);
     return {
       response: buildCommandFields(
-        updatedBinding.active !== false ? '已添加并激活线程' : '已添加绑定线程',
+        updatedBinding.active !== false ? '已挂接并激活线程' : '已挂接绑定线程',
         [
           ['线程', options.threadDisplay.binding(updatedBinding).title],
           ['binding_id', options.threadDisplay.bindingShortId(updatedBinding)],
@@ -619,7 +674,7 @@ export async function handleThreadBindingCommand(options: {
         ],
         updatedBinding.active !== false
           ? ['接下来直接发送文本即可继续。']
-          : ['当前线程未改变。需要切换时发送 `/t use <序号|binding-id|thread-id|名称>`。'],
+          : ['当前线程未改变。需要切换时发送 `/t use <序号|bridge-session-id|binding-id|thread-id|名称>`。'],
         options.markdown,
       ),
       richCard,
@@ -642,7 +697,7 @@ export async function handleThreadBindingCommand(options: {
       if (!displayedThreads) {
         return { response: '读取本地 Codex 会话列表失败，请稍后重试。' };
       }
-      const bindings = listBindingsForChat(options.store, options.msg.address.channelType, options.msg.address.chatId);
+      const bindings = options.store.listChannelBindings();
       const decoratedThreads = options.threadDisplay.decorateCodexSessions(displayedThreads, options.msg.address.channelType, options.msg.address.chatId);
       const selected = selectDirectThreadTarget(options.threadDisplay, targetToken, bindings, decoratedThreads);
       if (selected.ambiguous) {
@@ -673,6 +728,7 @@ export async function handleThreadBindingCommand(options: {
               '已归档 Bridge 会话',
               [
                 ['标题', getBridgeSessionDisplayTitle(session)],
+                ['bridge_session_id', session.id.slice(0, 8)],
                 ['binding_id', options.threadDisplay.bindingShortId(selected.binding)],
                 ['目录', formatCommandPath(selected.binding.workingDirectory || session.working_directory)],
                 ['解除绑定', `${bindingsBeforeArchive.length}`],
@@ -735,7 +791,7 @@ export async function handleThreadBindingCommand(options: {
         if (selected.index !== undefined) {
           return { response: `本地 Codex 会话列表没有第 ${selected.index} 条。先发送 \`/t\` 查看列表，或直接使用 thread id。` };
         }
-        return { response: '没有找到对应的本地 Codex 或 Bridge 会话。先发送 `/t` 查看列表，再用 `/t archive 1` 或 `/t archive <binding_id>` 归档。' };
+        return { response: '没有找到对应的本地 Codex 或 Bridge 会话。先发送 `/t` 查看列表，再用 `/t archive 1` 或 `/t archive <bridge_session_id>` 归档。' };
       } else {
         target = {
           threadId: selected.threadId,
@@ -749,8 +805,8 @@ export async function handleThreadBindingCommand(options: {
       if (!target.threadId) {
         return {
           response: target.bridgeSessionId
-            ? '当前聊天绑定的不是本地 Codex 会话。请发送 `/t archive <序号|thread-id|名称>` 指定要归档的 Codex 会话。'
-            : '当前聊天还没有绑定本地 Codex 会话。请发送 `/t archive <序号|thread-id|名称>` 指定要归档的 Codex 会话。',
+            ? '当前聊天绑定的不是本地 Codex 会话。请发送 `/t archive <序号|bridge-session-id|thread-id|名称>` 指定要归档的会话。'
+            : '当前聊天还没有绑定本地 Codex 会话。请发送 `/t archive <序号|bridge-session-id|thread-id|名称>` 指定要归档的会话。',
         };
       }
     }
@@ -802,7 +858,7 @@ export async function handleThreadBindingCommand(options: {
   if (subcommand === 'use') {
     const targetToken = subArgs.trim();
     if (!targetToken) {
-      return { response: '用法：/t use <序号|binding-id|thread-id|名称>。发送 `/t ls` 查看已绑定线程。' };
+      return { response: '用法：/t use <序号|bridge-session-id|binding-id|thread-id|名称>。发送 `/t ls` 查看已绑定线程。' };
     }
     const bindings = listBindingsForChat(options.store, options.msg.address.channelType, options.msg.address.chatId);
     const selected = options.threadDisplay.resolveBoundBindingSelection(bindings, targetToken);
@@ -845,16 +901,16 @@ export async function handleThreadBindingCommand(options: {
     };
   }
 
-  if (subcommand === 'rm') {
+  if (subcommand === 'detach') {
     const parsedArgs = parseForceFlag(subArgs);
     const targetToken = parsedArgs.args;
     if (!targetToken) {
-      return { response: '用法：/t rm <序号|binding-id|thread-id|名称>。发送 `/t ls` 查看已绑定线程。' };
+      return { response: '用法：/t detach <序号|bridge-session-id|binding-id|thread-id|名称>。发送 `/t ls` 查看已绑定线程。' };
     }
     const bindings = listBindingsForChat(options.store, options.msg.address.channelType, options.msg.address.chatId);
     const selected = options.threadDisplay.resolveBoundBindingSelection(bindings, targetToken);
     if (selected.ambiguous) {
-      return { response: '匹配到多个绑定线程，请先发送 `/t ls` 查看列表，再用序号移除。' };
+      return { response: '匹配到多个绑定线程，请先发送 `/t ls` 查看列表，再用序号脱离。' };
     }
     if (!selected.binding) {
       return {
@@ -888,9 +944,9 @@ export async function handleThreadBindingCommand(options: {
     const richCard = buildThreadCardRefresh(options.threadDisplay, options.deps.threadCardRefreshScope, options.msg.address, options.deps.threadCardSelectedId);
     return {
       response: buildCommandFields(
-        '已移除绑定线程',
+        '已脱离绑定线程',
         [
-          ['移除', options.threadDisplay.binding(selected.binding).title],
+          ['脱离', options.threadDisplay.binding(selected.binding).title],
           ['当前', nextActive ? options.threadDisplay.binding(nextActive).title : '未绑定'],
         ],
         nextActive
@@ -931,7 +987,7 @@ export async function handleThreadBindingCommand(options: {
     };
   }
 
-  return { response: '用法：/t、/t ls、/t add <序号|thread-id|名称>、/t archive [序号|thread-id|名称]、/t use <序号|binding-id|thread-id|名称>、/t rm/remove <序号|binding-id|thread-id|名称>、/t rename <名称>' };
+  return { response: '用法：/t、/t ls、/t attach <序号|bridge-session-id|thread-id|名称>、/t archive [序号|bridge-session-id|thread-id|名称]、/t use <序号|bridge-session-id|binding-id|thread-id|名称>、/t detach <序号|bridge-session-id|binding-id|thread-id|名称>、/t rename <名称>' };
 }
 
 export async function handleThreadSwitchCommand(options: {
@@ -1085,6 +1141,46 @@ export async function handleThreadSwitchCommand(options: {
         response: displayedThreads.length > 0
           ? `当前只找到 ${displayedThreads.length} 条本地 Codex 会话，没有第 ${selected.index} 条。先发送 \`/t\` 查看最多 ${MAX_CODEX_THREAD_LIST_LIMIT} 条卡片列表后再选择。`
           : '没有找到本地 Codex 会话。先在 本机 Codex 中打开一个会话，再回来试一次。',
+      };
+    }
+    const bridgeMatch = findVisibleBridgeSessionByToken(options.store, threadArgs);
+    if (bridgeMatch.ambiguous) {
+      return { response: '匹配到多个 Bridge 会话，请先发送 `/t` 查看列表，再使用更长的 bridge session id。' };
+    }
+    if (bridgeMatch.session) {
+      let binding: ReturnType<typeof router.bindToSession>;
+      try {
+        binding = router.bindToSession(options.msg.address, bridgeMatch.session.id);
+      } catch (error) {
+        return { response: toUserVisibleBindingError(error, '切换 Bridge 会话失败。') };
+      }
+      if (!binding) {
+        return { response: '指定的 Bridge 会话不存在。先发送 `/t` 查看列表，再用 `/t <bridge_session_id>` 接管。' };
+      }
+      auditCommandBindingChange(
+        options.store,
+        'attach_bridge',
+        options.msg,
+        options.commandBinding,
+        binding,
+        parsedArgs.force ? 'forced' : undefined,
+      );
+      const richCard = buildThreadCardRefresh(options.threadDisplay, options.deps.threadCardRefreshScope, options.msg.address, options.deps.threadCardSelectedId);
+      return {
+        response: buildCommandFields(
+          '已切换到 Bridge 会话',
+          [
+            ['标题', options.threadDisplay.binding(binding).title],
+            ['bridge_session_id', binding.bridgeSessionId.slice(0, 8)],
+            ['binding_id', options.threadDisplay.bindingShortId(binding)],
+            ['thread_id', options.threadDisplay.bindingThreadId(binding) || '-'],
+            ['目录', formatCommandPath(binding.workingDirectory)],
+          ],
+          ['接下来直接发送文本即可继续。'],
+          options.markdown,
+        ),
+        richCard,
+        threadTableCardScope: richCard && options.deps.threadCardRefreshScope ? options.deps.threadCardRefreshScope : undefined,
       };
     }
     return { response: '没有找到对应的本地 Codex 会话。先发送 `/t` 查看列表，再用 `/t 1` 接管。' };

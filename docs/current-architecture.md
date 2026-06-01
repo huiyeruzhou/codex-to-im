@@ -375,9 +375,9 @@ Examples:
 - `/current`: detailed active binding/session state;
 - `/new`: create a new Bridge session and bind it to the chat;
 - `/t ls`: list bindings for this chat;
-- `/t add`: add a local Codex thread as a binding;
+- `/t attach`: attach a local Codex thread or Bridge session as a binding;
 - `/t use`: switch the active binding;
-- `/t rm`: remove a binding;
+- `/t detach`: detach a binding;
 - `/t rename`: rename the current session;
 - `/thread 0`: switch to hidden draft session;
 - `/mode`, `/provider`, `/reasoning`, `/sandbox`, `/network`, `/model`: update

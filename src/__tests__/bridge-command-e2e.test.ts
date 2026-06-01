@@ -512,7 +512,7 @@ describe('bridge command e2e', () => {
     await _testOnly.handleMessage(adapter, inboundMessage(address, `/auto new ${scriptPath} 3`, 'incoming-auto-unbind-auto-new'));
     assert.equal(listAutoTasks({ bridgeSessionId: sessionA, includeCompleted: true })[0].times, 3);
 
-    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t rm 1', 'incoming-auto-unbind-rm-binding'));
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t detach 1', 'incoming-auto-unbind-rm-binding'));
     const pausedTask = listAutoTasks({ bridgeSessionId: sessionA, includeCompleted: true })[0];
     assert.equal(pausedTask.times, 0);
     assert.equal(pausedTask.triggeredCount, 0);
@@ -561,7 +561,7 @@ describe('bridge command e2e', () => {
     await _testOnly.handleMessage(adapter, inboundMessage(address, `/auto new ${scriptPath} 3`, 'incoming-auto-rebind-auto-new'));
     assert.equal(listAutoTasks({ bridgeSessionId: sessionA, includeCompleted: true })[0].times, 3);
 
-    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t rm 1', 'incoming-auto-rebind-rm-binding'));
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t detach 1', 'incoming-auto-rebind-rm-binding'));
     const pausedTask = listAutoTasks({ bridgeSessionId: sessionA, includeCompleted: true })[0];
     assert.equal(pausedTask.times, 0);
     assert.equal(pausedTask.triggeredCount, 0);
@@ -646,10 +646,10 @@ describe('bridge command e2e', () => {
     assert.equal(llmCalls[3].sessionId, bindingB.bridgeSessionId);
     assert.equal(llmCalls[3].prompt, '再切回 B 后的普通消息');
 
-    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t rm 2', 'incoming-rm-b'));
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t detach 2', 'incoming-rm-b'));
     assert.equal(store.listChannelBindings().filter((binding) => binding.chatId === address.chatId).length, 1);
     assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, bindingA.id);
-    assert.match(adapter.sent.at(-1)?.text || '', /已移除绑定线程/);
+    assert.match(adapter.sent.at(-1)?.text || '', /已脱离绑定线程/);
   });
 
   it('applies Codex thread card buttons to the currently selected dropdown option', async () => {
@@ -697,7 +697,7 @@ describe('bridge command e2e', () => {
     const binding = store.getChannelBinding(address.channelType, address.chatId);
     assert.ok(binding);
     assert.equal(store.getSession(binding.bridgeSessionId)?.codex_thread_id, threadId);
-    assert.match(adapter.sent.at(-1)?.text || '', /已添加并激活线程/);
+    assert.match(adapter.sent.at(-1)?.text || '', /已挂接并激活线程/);
     assert.ok(adapter.sent.at(-1)?.richCard);
     assert.match(adapter.sent.at(-1)?.richCard?.updateKey || '', /^thread-card:global:/);
     assert.equal(adapter.sent.at(-1)?.richCard?.updateTtlMs, null);
@@ -750,12 +750,14 @@ describe('bridge command e2e', () => {
     assert.match(adapter.sent.at(-1)?.richCardUpdateMessageId || '', /reply-archive-1/);
   });
 
-  it('lists inactive /new bridge sessions in /t and archives one by binding id', async () => {
+  it('lists inactive /new bridge sessions in /t and archives by bridge session id', async () => {
     const store = initBridgeTestContext({ dynamicSettings: true });
     const adapter = new RecordingAdapter();
     const address = { channelType: 'feishu', chatId: 'chat-bridge-archive-binding-id' } as const;
+    const otherAddress = { channelType: 'feishu', chatId: 'chat-bridge-archive-other-chat' } as const;
     const workDirA = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-bridge-archive-a-'));
     const workDirB = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-bridge-archive-b-'));
+    const otherWorkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-bridge-archive-other-'));
     const unboundWorkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-bridge-archive-unbound-'));
     const unboundSession = store.createSession('Unbound bridge session', 'test-model', undefined, unboundWorkDir);
 
@@ -769,27 +771,40 @@ describe('bridge command e2e', () => {
     assert.notEqual(bindingB.id, bindingA.id);
     assert.equal(store.listChannelBindings().find((binding) => binding.id === bindingA.id)?.active, false);
 
+    await _testOnly.handleMessage(adapter, inboundMessage(otherAddress, `/new ${otherWorkDir}`, 'incoming-bridge-new-other'));
+    const otherBinding = store.getChannelBinding(otherAddress.channelType, otherAddress.chatId);
+    assert.ok(otherBinding);
+    store.updateSession(otherBinding.bridgeSessionId, { name: 'Other chat bridge session' });
+
     await _testOnly.handleMessage(adapter, inboundMessage(address, '/t', 'incoming-bridge-thread-list'));
     const listText = adapter.sent.at(-1)?.text || '';
-    assert.match(listText, /Bridge \/ Codex 会话/);
+    assert.match(listText, /Codex会话（本地会话0 \+ 未绑定的Bridge4）/);
     assert.match(listText, new RegExp(bindingA.id.slice(0, 8)));
     assert.match(listText, new RegExp(bindingB.id.slice(0, 8)));
+    assert.match(listText, new RegExp(otherBinding.id.slice(0, 8)));
     assert.match(listText, new RegExp(unboundSession.id.slice(0, 8)));
     assert.match(listText, /Unbound bridge session/);
-    assert.match(listText, /\/t archive <binding_id>/);
+    assert.match(listText, /Bridge 会话用 bridge_session_id 操作/);
     const listCard = adapter.sent.at(-1)?.richCard;
     const listCardJson = JSON.stringify(listCard);
-    assert.match(listCard?.title || '', /Bridge \/ Codex 会话/);
+    assert.equal(listCard?.title, 'Codex会话（本地会话0 + 未绑定的Bridge4）');
     assert.match(listCardJson, new RegExp(bindingA.id.slice(0, 8)));
     assert.match(listCardJson, new RegExp(bindingB.id.slice(0, 8)));
+    assert.match(listCardJson, new RegExp(otherBinding.id.slice(0, 8)));
     assert.match(listCardJson, new RegExp(unboundSession.id.slice(0, 8)));
     assert.match(listCardJson, /Unbound bridge session/);
 
-    await _testOnly.handleMessage(adapter, inboundMessage(address, `/t archive ${bindingA.id.slice(0, 8)}`, 'incoming-bridge-archive'));
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/t archive ${bindingA.bridgeSessionId.slice(0, 8)}`, 'incoming-bridge-archive'));
     assert.match(adapter.sent.at(-1)?.text || '', /已归档 Bridge 会话/);
     assert.equal(store.getSession(bindingA.bridgeSessionId), null);
     assert.equal(store.listChannelBindings().some((binding) => binding.id === bindingA.id), false);
     assert.ok(store.getSession(bindingB.bridgeSessionId));
+    assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, bindingB.id);
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/t archive ${otherBinding.bridgeSessionId.slice(0, 8)}`, 'incoming-bridge-archive-other-chat'));
+    assert.match(adapter.sent.at(-1)?.text || '', /已归档 Bridge 会话/);
+    assert.equal(store.getSession(otherBinding.bridgeSessionId), null);
+    assert.equal(store.listChannelBindings().some((binding) => binding.id === otherBinding.id), false);
     assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, bindingB.id);
 
     await _testOnly.handleMessage(adapter, inboundMessage(address, `/t archive ${unboundSession.id.slice(0, 8)}`, 'incoming-bridge-archive-unbound'));
@@ -842,7 +857,7 @@ describe('bridge command e2e', () => {
     assert.equal(String(listMessage?.richCard?.table?.rows?.[0]?.title || '').replace(/\*/g, ''), '统一后的标题');
     assert.equal(listMessage?.richCard?.selects?.[0]?.options?.[0]?.text, '1. 统一后的标题');
 
-    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t rm 1', 'incoming-title-unbind'));
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t detach 1', 'incoming-title-unbind'));
     await _testOnly.handleMessage(adapter, inboundMessage(address, '/t', 'incoming-title-list-unbound'));
     const unboundListMessage = adapter.sent.at(-1);
     assert.match(unboundListMessage?.text || '', /统一后的标题/);
@@ -937,7 +952,7 @@ describe('bridge command e2e', () => {
     const bindingA = store.getChannelBinding(address.channelType, address.chatId);
     assert.ok(bindingA);
 
-    await _testOnly.handleMessage(adapter, inboundMessage(address, `/t add ${threadB}`, 'incoming-mirror-add-b'));
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/t attach ${threadB}`, 'incoming-mirror-add-b'));
     const bindingsAfterAdd = store.listChannelBindings().filter((binding) => binding.chatId === address.chatId);
     const bindingB = bindingsAfterAdd.find((binding) => store.getSession(binding.bridgeSessionId)?.codex_thread_id === threadB);
     assert.ok(bindingB);
