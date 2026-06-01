@@ -185,11 +185,11 @@ If you only want to specify a directory, make it path-like, for example `/new ./
 - `/t n 100`: list the latest 100 local Codex threads, capped at 200.
 - `/t 1`: switch to local Codex thread 1.
 - `/t ls`: list threads bound to the current chat; `*` marks the active thread.
-- `/t attach <index|bridge-session-id|thread-id|name>`: attach a local Codex or Bridge session to the current chat without necessarily activating it.
-- `/t use <index|bridge-session-id|thread-id|binding-id|name>`: activate one of the current chat's bound threads.
-- `/t detach <index|bridge-session-id|thread-id|binding-id|name>`: detach a specific bound thread from the current chat.
+- `/t attach <index|thread-id|binding-id|name>`: attach a local Codex or Bridge session to the current chat without necessarily activating it.
+- `/t use <index|thread-id|binding-id|name>`: activate one of the current chat's bound threads.
+- `/t detach <index|thread-id|binding-id|name>`: detach a specific bound thread from the current chat.
 - `/t rename <name>`: rename the current thread; names cannot be pure numbers or look like thread/binding IDs.
-- Index scope: `/t 1`, `/t attach 1`, and `/t archive 1` use the global local-Codex/Bridge session list from `/t`; `/t use 1` and `/t detach 1` use the current chat's local binding list from `/t ls`.
+- Index scope: `/t 1`, `/t attach 1`, and `/t archive 1` use the global Bridge / Codex session list from `/t`; `/t use 1` and `/t detach 1` use the current chat's local binding list from `/t ls`.
 - `/t 0`: switch to the temporary thread for the current chat.
 - `/new`: create a new thread under the current formal session directory.
 - `/new <name>`: create a named thread under the current formal session directory; the name must be unique among threads bound to the current chat.

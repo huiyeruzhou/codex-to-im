@@ -173,7 +173,7 @@ export class CommandThreadDisplay {
           lastActiveAt: display.lastActiveAt || session.updated_at,
           threadId: '',
           bridgeSessionId: session.id,
-          bindingId: anyBinding ? anyBinding.id : session.id,
+          bindingId: anyBinding ? anyBinding.id : '',
           active: binding?.active !== false && Boolean(binding),
           originator: binding ? display.originator : 'Bridge',
         };

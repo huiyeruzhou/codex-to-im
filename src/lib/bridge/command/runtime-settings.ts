@@ -31,6 +31,7 @@ import {
   codexTmuxSessionName,
   startCodexResumeTmuxSession,
 } from '../tmux/runtime.js';
+import { shouldUseCodexTmuxTui } from '../../../codex/tmux-provider.js';
 import { getCodexThreadId } from '../turns/turn-classifier.js';
 import { getBridgeContext } from '../context.js';
 import type { ChannelBinding, InboundMessage } from '../types.js';
@@ -69,6 +70,12 @@ function readCodexThreadIdFromEvent(event: SSEEvent): string | null {
   }
 }
 
+function readErrorFromEvent(event: SSEEvent): string | null {
+  if (event.type !== 'error') return null;
+  const raw = typeof event.data === 'string' ? event.data.trim() : '';
+  return raw || null;
+}
+
 function parseSseDataLine(line: string): SSEEvent | null {
   if (!line.startsWith('data: ')) return null;
   try {
@@ -81,6 +88,7 @@ function parseSseDataLine(line: string): SSEEvent | null {
 async function readFirstCodexThreadId(stream: ReadableStream<string>, onThreadId?: () => void): Promise<string> {
   const reader = stream.getReader();
   let pending = '';
+  const errors: string[] = [];
   try {
     while (true) {
       const { done, value } = await reader.read();
@@ -96,10 +104,19 @@ async function readFirstCodexThreadId(stream: ReadableStream<string>, onThreadId
           onThreadId?.();
           return threadId;
         }
+        const error = event ? readErrorFromEvent(event) : null;
+        if (error) errors.push(error);
       }
     }
     const trailingEvent = parseSseDataLine(pending);
-    return trailingEvent ? readCodexThreadIdFromEvent(trailingEvent) || '' : '';
+    const trailingThreadId = trailingEvent ? readCodexThreadIdFromEvent(trailingEvent) : null;
+    if (trailingThreadId) return trailingThreadId;
+    const trailingError = trailingEvent ? readErrorFromEvent(trailingEvent) : null;
+    if (trailingError) errors.push(trailingError);
+    if (errors.length > 0) {
+      throw new Error(`无法通过 SDK 预创建 Codex thread：${errors.at(-1)}`);
+    }
+    return '';
   } finally {
     try { await reader.cancel(); } catch { /* stream may already be closed */ }
   }
@@ -112,7 +129,7 @@ export async function bootstrapCodexThreadWithSdk(
   const abortController = new AbortController();
   let threadId = '';
   const stream = llm.streamChat({
-    prompt: ' ',
+    prompt: 'Initialize this Codex session and wait for the next instruction.',
     sessionId: params.session.id,
     model: params.binding.model || params.session.model || undefined,
     forceModel: Boolean(params.binding.model || params.session.model),
@@ -206,8 +223,18 @@ export function formatSessionMode(binding: ChannelBinding | null | undefined, se
   return parseMode(binding?.mode || session?.preferred_mode || '') || 'normal';
 }
 
-export function formatSessionCodexProvider(session?: BridgeSession | null): string {
-  return session?.codex_provider || 'default';
+export function resolveEffectiveCodexProvider(store: BridgeStore, session?: BridgeSession | null): 'sdk' | 'tmux' {
+  if (session?.codex_provider === 'sdk' || session?.codex_provider === 'tmux') return session.codex_provider;
+  const configured = store.getSetting('bridge_default_provider');
+  if (configured === 'sdk' || configured === 'tmux') return configured;
+  return shouldUseCodexTmuxTui() ? 'tmux' : 'sdk';
+}
+
+export function formatSessionCodexProvider(store: BridgeStore, session?: BridgeSession | null): string {
+  const effective = resolveEffectiveCodexProvider(store, session);
+  return session?.codex_provider
+    ? effective
+    : `${effective} (全局默认)`;
 }
 
 function isTmuxProviderSession(session?: BridgeSession | null): boolean {
@@ -319,7 +346,7 @@ export function handleModeCommand(options: {
       '当前模式',
       [
         ['模式', mode],
-        ['Provider', formatSessionCodexProvider(session)],
+        ['Provider', formatSessionCodexProvider(options.store, session)],
       ],
       [MODE_OPTIONS_TEXT, '发送 `/m normal` 或 `/m yolo` 切换。完整命令也兼容：`/mode normal`。'],
       options.markdown,
@@ -347,7 +374,7 @@ export function handleModeCommand(options: {
     '已切换模式',
     [
       ['模式', requestedMode],
-      ['Provider', formatSessionCodexProvider(session)],
+      ['Provider', formatSessionCodexProvider(options.store, session)],
     ],
     [MODE_OPTIONS_TEXT],
     options.markdown,
@@ -372,7 +399,7 @@ export async function handleProviderCommand(options: {
       '当前 Codex Provider',
       [
         ['模式', formatSessionMode(binding, session)],
-        ['Provider', formatSessionCodexProvider(session)],
+        ['Provider', formatSessionCodexProvider(options.store, session)],
       ],
       [CODEX_PROVIDER_OPTIONS_TEXT, '发送 `/provider sdk` 或 `/provider tmux` 切换；修改从下一轮 Codex 请求开始生效。'],
       options.markdown,
