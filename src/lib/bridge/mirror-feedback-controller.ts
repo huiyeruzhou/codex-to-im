@@ -51,6 +51,7 @@ export interface MirrorFeedbackControllerDeps {
   getAdapter(channelType: string): BaseChannelAdapter | null | undefined;
   getThreadTitle(threadId: string, sessionId?: string, bindingId?: string): string | null | undefined;
   getStructuredStreamStatusConfig?(): MirrorStructuredStreamStatusConfig;
+  getShowToolCallDetails?(): boolean;
   nowIso(): string;
   eventBatchLimit: number;
   deliverResponse: DeliverResponseImpl;
@@ -437,6 +438,9 @@ export function createMirrorFeedbackController(
       onStatusProgress: updateMirrorStatusProgress,
       onTaskProgress: updateMirrorTaskProgress,
       onToolProgress: updateMirrorToolProgress,
+      get showToolCallDetails() {
+        return deps.getShowToolCallDetails?.() === true;
+      },
     },
     refreshMirrorStreamingStatus,
     stopMirrorStreaming,

@@ -225,7 +225,7 @@ export async function runInteractiveMessage(
   const processMessageImpl = deps.processMessageImpl ?? engine.processMessage;
   const resolveDisplayInfo = deps.resolveInteractiveTurnDisplayInfo;
   const runtimeSettings = deps.resolveInteractiveTurnRuntimeSettings(adapter.provider);
-  const showSdkToolDetails = runtimeSettings.writeSdkToolDetailsInText;
+  const showToolCallDetails = runtimeSettings.showToolCallDetails;
   const streamStatusIdleDetectionStartMs = Math.max(
     0,
     deps.streamStatusIdleDetectionStartMs ?? runtimeSettings.statusTiming.idleStartMs,
@@ -392,7 +392,7 @@ export async function runInteractiveMessage(
     taskState,
     streamUi,
     streamFeedback: streamUi.feedback,
-    showSdkToolDetails,
+    showToolCallDetails,
     nowMs,
     isCurrentTask: deps.isCurrentInteractiveTask,
     touchTask: deps.touchInteractiveTask,
@@ -477,9 +477,9 @@ export async function runInteractiveMessage(
         }
       },
       {
-        expandToolCalls: showSdkToolDetails,
+        expandToolCalls: showToolCallDetails,
         streamPreview: {
-          includeToolSnippets: showSdkToolDetails && !streamUi.hasStreamingCards,
+          includeToolSnippets: showToolCallDetails && !streamUi.hasStreamingCards,
         },
         onContextUsage: sdkStreamEvents.onContextUsage,
       },

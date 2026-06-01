@@ -13,7 +13,7 @@ import { initBridgeTestContext } from './test-bridge-utils.js';
 
 function makeHarness(options: {
   current?: boolean;
-  showSdkToolDetails?: boolean;
+  showToolCallDetails?: boolean;
   hasStreamingCards?: boolean;
 } = {}) {
   initBridgeTestContext();
@@ -80,7 +80,7 @@ function makeHarness(options: {
     taskState,
     streamUi,
     streamFeedback,
-    showSdkToolDetails: options.showSdkToolDetails ?? true,
+    showToolCallDetails: options.showToolCallDetails ?? true,
     nowMs: () => {
       now += 10;
       return now;
@@ -186,5 +186,31 @@ describe('interactive-turn sdk-stream-events-controller', () => {
     assert.equal(harness.touchCount, 1);
     assert.equal(harness.statusPushCount, 1);
     assert.equal(harness.snapshotSyncCount, 1);
+  });
+
+  it('uses the shared tool event reducer to hide or show tool details', () => {
+    const visible = makeHarness({ showToolCallDetails: true });
+    visible.controller.onToolEvent('tool-1', 'Bash', 'running', { input: { command: 'pwd' } });
+    visible.controller.onToolEvent('tool-1', '', 'complete', { output: '/tmp/project' });
+
+    assert.deepEqual(visible.toolEvents.at(-1), [{
+      id: 'tool-1',
+      name: 'Bash',
+      status: 'complete',
+      input: 'pwd',
+      output: '/tmp/project',
+    }]);
+
+    const hidden = makeHarness({ showToolCallDetails: false });
+    hidden.controller.onToolEvent('tool-1', 'Bash', 'running', { input: { command: 'pwd' } });
+    hidden.controller.onToolEvent('tool-1', '', 'complete', { output: '/tmp/project' });
+
+    assert.deepEqual(hidden.toolEvents.at(-1), [{
+      id: 'tool-1',
+      name: 'Bash',
+      status: 'complete',
+      input: null,
+      output: null,
+    }]);
   });
 });

@@ -513,7 +513,7 @@ describe('interactive-turn runner', () => {
   it('hides SDK tool input and output in streaming cards when UI details are off', async () => {
     fs.rmSync(DATA_DIR, { recursive: true, force: true });
     const store = new JsonFileStore(makeSettings({
-      bridge_sdk_tool_call_details_in_text: 'false',
+      bridge_show_tool_call_details: 'false',
     }));
     initBridgeContext({
       store,

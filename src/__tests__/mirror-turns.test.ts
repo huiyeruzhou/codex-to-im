@@ -226,6 +226,57 @@ describe('mirror-turns pending delivery queue', () => {
     assert.equal(subscription.pendingTurn?.lastResponseAt, '2026-04-21T10:00:01.000Z');
   });
 
+  it('uses shared Codex turn events to hide or show mirror tool details', () => {
+    const records = [
+      {
+        signature: 'tool-start',
+        type: 'tool_started' as const,
+        content: '',
+        timestamp: '2026-04-21T10:00:01.000Z',
+        turnId: 'turn-1',
+        toolId: 'tool-1',
+        toolName: 'Bash',
+        toolInput: { command: 'pwd' },
+      },
+      {
+        signature: 'tool-finish',
+        type: 'tool_finished' as const,
+        content: '/tmp/project',
+        timestamp: '2026-04-21T10:00:02.000Z',
+        turnId: 'turn-1',
+        toolId: 'tool-1',
+      },
+    ];
+
+    const visible = {
+      sessionId: 'session-1',
+      threadId: 'thread-1',
+      pendingTurn: null,
+    } as any;
+    consumeMirrorRecords(visible, records, { showToolCallDetails: true });
+    assert.deepEqual(Array.from(visible.pendingTurn.toolCalls.values()), [{
+      id: 'tool-1',
+      name: 'Bash',
+      status: 'complete',
+      input: 'pwd',
+      output: '/tmp/project',
+    }]);
+
+    const hidden = {
+      sessionId: 'session-1',
+      threadId: 'thread-1',
+      pendingTurn: null,
+    } as any;
+    consumeMirrorRecords(hidden, records, { showToolCallDetails: false });
+    assert.deepEqual(Array.from(hidden.pendingTurn.toolCalls.values()), [{
+      id: 'tool-1',
+      name: 'Bash',
+      status: 'complete',
+      input: null,
+      output: null,
+    }]);
+  });
+
   it('deduplicates matching agent_message and response_item mirror text', () => {
     const streamSnapshots: string[] = [];
     const subscription = {

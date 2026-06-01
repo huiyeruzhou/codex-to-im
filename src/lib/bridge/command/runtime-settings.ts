@@ -40,7 +40,7 @@ const CODEX_PROVIDER_OPTIONS_TEXT = '可选：`sdk`（默认 SDK 路径） `tmux
 const REASONING_OPTIONS_TEXT = '可选：`1=minimal` `2=low` `3=medium` `4=high` `5=xhigh`';
 const SANDBOX_OPTIONS_TEXT = '可选：`read-only` `workspace-write` `danger-full-access` `default`（回到全局默认）';
 const NETWORK_OPTIONS_TEXT = '可选：`on`/`true` 开启网络，`off`/`false` 关闭网络，`default` 回到全局默认。';
-const UI_DETAIL_OPTIONS_TEXT = '可选：`on` 显示 SDK 工具输入输出，`off` 只显示工具名和状态、正文更接近 mirror；兼容 `/ui detail on|off`。';
+const UI_DETAIL_OPTIONS_TEXT = '可选：`on` 显示工具输入输出，`off` 只显示工具名、状态和正文；兼容 `/ui detail on|off`。';
 
 export interface RuntimeSettingsCommandDeps {
   reconcileMirrorSubscriptions?(): Promise<void>;
@@ -591,19 +591,19 @@ export function handleUiCommand(options: {
   if (parsedUi.action === 'show') {
     return buildCommandFields(
       'UI 显示设置',
-      [['SDK 工具详情', formatUiDetailMode(currentConfig.sdkToolCallDetailsInText !== false)]],
+      [['工具详情', formatUiDetailMode(currentConfig.showToolCallDetails !== false)]],
       [
         UI_DETAIL_OPTIONS_TEXT,
-        '这是全局设置，会影响 SDK 对话文本预览/history，以及流式工具区是否展示工具输入输出；mirror 仍按 Codex JSONL 展示。',
+        '这是全局设置，会影响 SDK 与 mirror 的流式工具区是否展示工具输入输出；SDK 文本预览/history 也会同步使用该设置。',
       ],
       options.markdown,
     );
   }
 
-  saveConfig({ ...currentConfig, sdkToolCallDetailsInText: parsedUi.enabled });
+  saveConfig({ ...currentConfig, showToolCallDetails: parsedUi.enabled });
   return buildCommandFields(
     '已更新 UI 显示设置',
-    [['SDK 工具详情', formatUiDetailMode(parsedUi.enabled)]],
+    [['工具详情', formatUiDetailMode(parsedUi.enabled)]],
     ['修改从下一轮 Codex 请求开始生效；正在运行的任务请先 `/stop` 后重发。'],
     options.markdown,
   );

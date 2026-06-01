@@ -200,12 +200,12 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     },
   },
   {
-    key: 'sdkToolCallDetailsInText',
-    aliases: ['toolDetails', 'tools', 'sdkDetails'],
-    label: 'SDK 工具详情',
-    usage: '/set sdkToolCallDetailsInText on|off',
-    read: (payload) => formatBool(payload.sdkToolCallDetailsInText),
-    write: writeBoolean('sdkToolCallDetailsInText'),
+    key: 'showToolCallDetails',
+    aliases: ['toolDetails', 'tools', 'details'],
+    label: '工具详情',
+    usage: '/set showToolCallDetails on|off',
+    read: (payload) => formatBool(payload.showToolCallDetails),
+    write: writeBoolean('showToolCallDetails'),
   },
   {
     key: 'uiAllowLan',

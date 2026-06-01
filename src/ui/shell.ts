@@ -264,7 +264,7 @@ export function renderUiShellHtml(): string {
                 <label class="checkbox"><input id="codexSkipGitRepoCheck" type="checkbox" checked /> 允许在未信任 Git 目录运行 Codex <span class="help-tip" tabindex="0" data-tip="如果新建会话报 Not inside a trusted directory，可以打开这个选项；修改后需要重启 Bridge。">?</span></label>
               </div>
               <div class="checkbox-row" style="margin-top: 12px;">
-                <label class="checkbox"><input id="sdkToolCallDetailsInText" type="checkbox" checked /> 显示 SDK 工具输入输出 <span class="help-tip" tabindex="0" data-tip="开启时，SDK 对话会展示工具调用的输入输出并写入文本预览/history；关闭时更接近 mirror，只保留工具名、状态和 Codex 正文。也可用 /ui on|off 修改。">?</span></label>
+                <label class="checkbox"><input id="showToolCallDetails" type="checkbox" checked /> 显示工具输入输出 <span class="help-tip" tabindex="0" data-tip="开启时，SDK 和 mirror 对话都会展示工具调用的输入输出；关闭时只保留工具名、状态和 Codex 正文。也可用 /ui on|off 修改。">?</span></label>
               </div>
               <div class="checkbox-row" style="margin-top: 12px;">
                 <label class="checkbox"><input id="uiAllowLan" type="checkbox" /> 允许局域网访问 Web 控制台 <span class="help-tip" tabindex="0" data-tip="默认仅允许本机访问当前工作台。开启后，局域网设备需要先输入访问 token。">?</span></label>
@@ -362,7 +362,7 @@ export function renderUiShellHtml(): string {
                   <div class="command-item"><div class="command-col-command"><code>/r</code></div><div class="command-col-original"><code>/reasoning</code></div><div class="command-col-desc">查看当前思考级别；可选 <code>1=minimal</code>、<code>2=low</code>、<code>3=medium</code>、<code>4=high</code>、<code>5=xhigh</code>。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/sb</code></div><div class="command-col-original"><code>/sandbox</code></div><div class="command-col-desc">查看或切换当前 IM 会话的 Codex 沙箱；可选 <code>read-only</code>、<code>workspace-write</code>、<code>danger-full-access</code>、<code>default</code>。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/net</code></div><div class="command-col-original"><code>/network</code></div><div class="command-col-desc">查看或切换当前 IM 会话的网络访问；可选 <code>on</code>、<code>off</code>、<code>default</code>。</div></div>
-                  <div class="command-item"><div class="command-col-command"><code>/ui on|off</code></div><div class="command-col-original">—</div><div class="command-col-desc">查看或切换 SDK 工具输入输出显示；关闭后更接近 mirror，只保留工具名、状态和正文。</div></div>
+                  <div class="command-item"><div class="command-col-command"><code>/ui on|off</code></div><div class="command-col-original">—</div><div class="command-col-desc">查看或切换工具输入输出显示；关闭后只保留工具名、状态和正文。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/model [slug|default]</code></div><div class="command-col-original"><code>/model [slug|default]</code></div><div class="command-col-desc">查看或切换当前 IM 会话使用的模型；本机 Codex 不支持的模型会标注“仅 IM”，共享 Codex thread 只允许查看不允许切换。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/tmux-attach &lt;session&gt;</code></div><div class="command-col-original"><code>/tmux-attach &lt;session&gt;</code></div><div class="command-col-desc">把当前 IM 会话绑定到一个远程 tmux session。</div></div>
                   <div class="command-item"><div class="command-col-command"><code>/tmux-new [session]</code></div><div class="command-col-original"><code>/tmux-new [session]</code></div><div class="command-col-desc">新建并绑定 tmux session；如果已存在，会提示并直接绑定。</div></div>
@@ -898,7 +898,7 @@ export function renderUiShellHtml(): string {
           codexSandboxMode: document.getElementById('codexSandboxMode').value,
           codexNetworkAccess: document.getElementById('codexNetworkAccess').checked,
           codexReasoningEffort: document.getElementById('codexReasoningEffort').value,
-          sdkToolCallDetailsInText: document.getElementById('sdkToolCallDetailsInText').checked,
+          showToolCallDetails: document.getElementById('showToolCallDetails').checked,
           uiAllowLan: document.getElementById('uiAllowLan').checked,
           uiAccessToken: document.getElementById('uiAccessToken').value,
         };
@@ -1193,7 +1193,7 @@ export function renderUiShellHtml(): string {
         codexSandboxMode: 'Codex 文件系统权限',
         codexNetworkAccess: 'Codex 网络访问',
         codexReasoningEffort: 'Codex 思考级别',
-        sdkToolCallDetailsInText: '显示 SDK 工具输入输出',
+        showToolCallDetails: '显示工具输入输出',
         uiAllowLan: '允许局域网访问 Web 控制台',
         uiAccessToken: '局域网访问 token',
       };
@@ -1215,7 +1215,7 @@ export function renderUiShellHtml(): string {
         'codexSandboxMode',
         'codexNetworkAccess',
         'codexReasoningEffort',
-        'sdkToolCallDetailsInText',
+        'showToolCallDetails',
         'uiAllowLan',
         'uiAccessToken',
       ]);
@@ -1940,7 +1940,7 @@ export function renderUiShellHtml(): string {
         document.getElementById('codexSandboxMode').value = config.codexSandboxMode || 'workspace-write';
         document.getElementById('codexNetworkAccess').checked = config.codexNetworkAccess !== false;
         document.getElementById('codexReasoningEffort').value = config.codexReasoningEffort || 'medium';
-        document.getElementById('sdkToolCallDetailsInText').checked = config.sdkToolCallDetailsInText !== false;
+        document.getElementById('showToolCallDetails').checked = config.showToolCallDetails !== false;
         document.getElementById('uiAllowLan').checked = config.uiAllowLan === true;
         document.getElementById('uiAccessToken').value = config.uiAccessToken || '';
         renderUiAccess();

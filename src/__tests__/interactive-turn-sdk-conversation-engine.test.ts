@@ -133,7 +133,7 @@ describe('interactive-turn sdk-conversation-engine tool expansion', () => {
     const llm = toolOnlyLlm();
     const store = initBridgeTestContext({
       settings: makeBridgeSettings({
-        bridge_sdk_tool_call_details_in_text: 'false',
+        bridge_show_tool_call_details: 'false',
       }),
       llm,
     });

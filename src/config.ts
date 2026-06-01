@@ -33,7 +33,7 @@ export interface RuntimeConfigV2 {
   codexSandboxMode?: CodexSandboxMode;
   codexNetworkAccess?: boolean;
   codexReasoningEffort?: CodexReasoningEffort;
-  sdkToolCallDetailsInText?: boolean;
+  showToolCallDetails?: boolean;
   uiAllowLan?: boolean;
   uiAccessToken?: string;
 }
@@ -92,7 +92,7 @@ export interface Config {
   codexSandboxMode?: CodexSandboxMode;
   codexNetworkAccess?: boolean;
   codexReasoningEffort?: CodexReasoningEffort;
-  sdkToolCallDetailsInText?: boolean;
+  showToolCallDetails?: boolean;
   uiAllowLan?: boolean;
   uiAccessToken?: string;
   schemaVersion?: number;
@@ -350,6 +350,9 @@ function migrateLegacyEnvToV2(env: Map<string, string>): ConfigV2File {
         ? env.get("CTI_CODEX_NETWORK_ACCESS") === "true"
         : true,
       codexReasoningEffort: parseReasoningEffort(env.get("CTI_CODEX_REASONING_EFFORT")) ?? 'medium',
+      showToolCallDetails: env.has("CTI_SHOW_TOOL_CALL_DETAILS")
+        ? env.get("CTI_SHOW_TOOL_CALL_DETAILS") !== "false"
+        : true,
       uiAllowLan: env.get("CTI_UI_ALLOW_LAN") === "true",
       uiAccessToken: env.get("CTI_UI_ACCESS_TOKEN") || undefined,
     },
@@ -458,6 +461,9 @@ function applyRuntimeEnvOverlay(runtime: RuntimeConfigV2, env: Map<string, strin
   if (env.has("CTI_CODEX_REASONING_EFFORT")) {
     next.codexReasoningEffort = parseReasoningEffort(env.get("CTI_CODEX_REASONING_EFFORT"))
       ?? next.codexReasoningEffort;
+  }
+  if (env.has("CTI_SHOW_TOOL_CALL_DETAILS")) {
+    next.showToolCallDetails = env.get("CTI_SHOW_TOOL_CALL_DETAILS") !== "false";
   }
   if (env.has("CTI_UI_ALLOW_LAN")) {
     next.uiAllowLan = env.get("CTI_UI_ALLOW_LAN") === "true";
@@ -583,7 +589,7 @@ function expandConfig(v2: ConfigV2File): Config {
     codexSandboxMode: v2.runtime.codexSandboxMode ?? 'workspace-write',
     codexNetworkAccess: v2.runtime.codexNetworkAccess !== false,
     codexReasoningEffort: v2.runtime.codexReasoningEffort ?? 'medium',
-    sdkToolCallDetailsInText: v2.runtime.sdkToolCallDetailsInText !== false,
+    showToolCallDetails: v2.runtime.showToolCallDetails !== false,
     uiAllowLan: v2.runtime.uiAllowLan === true,
     uiAccessToken: v2.runtime.uiAccessToken || undefined,
   };
@@ -611,7 +617,7 @@ function buildV2FileFromExpandedConfig(config: Config, current?: ConfigV2File | 
       codexSandboxMode: config.codexSandboxMode,
       codexNetworkAccess: config.codexNetworkAccess === true,
       codexReasoningEffort: config.codexReasoningEffort,
-      sdkToolCallDetailsInText: config.sdkToolCallDetailsInText !== false,
+      showToolCallDetails: config.showToolCallDetails !== false,
       uiAllowLan: config.uiAllowLan,
       uiAccessToken: config.uiAccessToken,
     },
@@ -647,7 +653,7 @@ export function loadConfig(): Config {
       codexSandboxMode: 'workspace-write',
       codexNetworkAccess: true,
       codexReasoningEffort: 'medium',
-      sdkToolCallDetailsInText: true,
+      showToolCallDetails: true,
       uiAllowLan: false,
     },
     channels: [],
@@ -837,8 +843,8 @@ export function configToSettings(config: Config): Map<string, string> {
     config.codexReasoningEffort || 'medium',
   );
   m.set(
-    "bridge_sdk_tool_call_details_in_text",
-    config.sdkToolCallDetailsInText === false ? "false" : "true",
+    "bridge_show_tool_call_details",
+    config.showToolCallDetails === false ? "false" : "true",
   );
   m.set(
     "bridge_channel_instances_json",

@@ -467,6 +467,7 @@ const MIRROR_FEEDBACK = createMirrorFeedbackController({
   getAdapter: (channelType) => getState().adapters.get(channelType) || null,
   getThreadTitle: getMirrorThreadTitle,
   getStructuredStreamStatusConfig: getMirrorStructuredStreamStatusConfig,
+  getShowToolCallDetails: () => getBridgeContext().store.getSetting('bridge_show_tool_call_details') !== 'false',
   nowIso,
   eventBatchLimit: MIRROR_EVENT_BATCH_LIMIT,
   deliverResponse,
