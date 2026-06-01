@@ -759,6 +759,29 @@ describe('bridge command e2e', () => {
     const workDirB = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-bridge-archive-b-'));
     const otherWorkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-bridge-archive-other-'));
     const unboundWorkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-bridge-archive-unbound-'));
+    const localWorkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-bridge-archive-local-'));
+    const localThreadId = '019e81d3-e5b0-7540-ad14-4f3073b2702a';
+    writeCodexSessionJsonlFixture({
+      threadId: localThreadId,
+      workDir: localWorkDir,
+      lines: [
+        {
+          timestamp: '2026-05-28T00:00:00.000Z',
+          type: 'session_meta',
+          payload: {
+            id: localThreadId,
+            timestamp: '2026-05-28T00:00:00.000Z',
+            cwd: localWorkDir,
+            originator: 'Codex CLI',
+          },
+        },
+        {
+          timestamp: '2026-05-28T00:00:01.000Z',
+          type: 'event_msg',
+          payload: { type: 'user_message', message: 'Local Codex thread' },
+        },
+      ],
+    });
     const unboundSession = store.createSession('Unbound bridge session', 'test-model', undefined, unboundWorkDir);
 
     await _testOnly.handleMessage(adapter, inboundMessage(address, `/new ${workDirA}`, 'incoming-bridge-new-a'));
@@ -778,39 +801,145 @@ describe('bridge command e2e', () => {
 
     await _testOnly.handleMessage(adapter, inboundMessage(address, '/t', 'incoming-bridge-thread-list'));
     const listText = adapter.sent.at(-1)?.text || '';
-    assert.match(listText, /Codex会话（本地会话0 \+ 未绑定的Bridge4）/);
+    assert.match(listText, /Codex会话（本地会话1 \+ 未绑定的Bridge4）/);
     assert.match(listText, new RegExp(bindingA.id.slice(0, 8)));
     assert.match(listText, new RegExp(bindingB.id.slice(0, 8)));
     assert.match(listText, new RegExp(otherBinding.id.slice(0, 8)));
-    assert.match(listText, new RegExp(unboundSession.id.slice(0, 8)));
     assert.match(listText, /Unbound bridge session/);
-    assert.match(listText, /Bridge 会话用 bridge_session_id 操作/);
+    assert.match(listText, new RegExp(`1\\s+Unbound bridge session[\\s\\S]+5\\s+Local Codex thread`));
     const listCard = adapter.sent.at(-1)?.richCard;
     const listCardJson = JSON.stringify(listCard);
-    assert.equal(listCard?.title, 'Codex会话（本地会话0 + 未绑定的Bridge4）');
+    assert.equal(listCard?.title, 'Codex会话（本地会话1 + 未绑定的Bridge4）');
     assert.match(listCardJson, new RegExp(bindingA.id.slice(0, 8)));
     assert.match(listCardJson, new RegExp(bindingB.id.slice(0, 8)));
     assert.match(listCardJson, new RegExp(otherBinding.id.slice(0, 8)));
-    assert.match(listCardJson, new RegExp(unboundSession.id.slice(0, 8)));
     assert.match(listCardJson, /Unbound bridge session/);
+    assert.match(listCardJson, /1\./);
+    assert.match(listCardJson, /5\./);
 
-    await _testOnly.handleMessage(adapter, inboundMessage(address, `/t archive ${bindingA.bridgeSessionId.slice(0, 8)}`, 'incoming-bridge-archive'));
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t archive 1', 'incoming-bridge-archive'));
+    assert.match(adapter.sent.at(-1)?.text || '', /已归档 Bridge 会话/);
+    assert.equal(store.getSession(unboundSession.id), null);
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t archive 1', 'incoming-bridge-archive-current-chat'));
     assert.match(adapter.sent.at(-1)?.text || '', /已归档 Bridge 会话/);
     assert.equal(store.getSession(bindingA.bridgeSessionId), null);
     assert.equal(store.listChannelBindings().some((binding) => binding.id === bindingA.id), false);
     assert.ok(store.getSession(bindingB.bridgeSessionId));
     assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, bindingB.id);
 
-    await _testOnly.handleMessage(adapter, inboundMessage(address, `/t archive ${otherBinding.bridgeSessionId.slice(0, 8)}`, 'incoming-bridge-archive-other-chat'));
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t archive 2', 'incoming-bridge-archive-other-chat'));
     assert.match(adapter.sent.at(-1)?.text || '', /已归档 Bridge 会话/);
     assert.equal(store.getSession(otherBinding.bridgeSessionId), null);
     assert.equal(store.listChannelBindings().some((binding) => binding.id === otherBinding.id), false);
     assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, bindingB.id);
+    assert.ok(fs.existsSync(path.join(process.env.CODEX_HOME!, 'sessions', '2026', '05', '28', `rollout-${localThreadId}.jsonl`)));
+  });
 
-    await _testOnly.handleMessage(adapter, inboundMessage(address, `/t archive ${unboundSession.id.slice(0, 8)}`, 'incoming-bridge-archive-unbound'));
-    assert.match(adapter.sent.at(-1)?.text || '', /已归档 Bridge 会话/);
-    assert.equal(store.getSession(unboundSession.id), null);
-    assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, bindingB.id);
+  it('resolves /t targets by semantic fallback order across the bridge manager entrypoint', async () => {
+    const store = initBridgeTestContext({ dynamicSettings: true });
+    const adapter = new RecordingAdapter();
+    const address = { channelType: 'feishu', chatId: 'chat-thread-fallback-order-e2e' } as const;
+    const workDirA = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-thread-fallback-a-'));
+    const workDirB = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-thread-fallback-b-'));
+    const workDirC = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-thread-fallback-c-'));
+    const archiveWorkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-thread-fallback-archive-'));
+    const attachWorkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-thread-fallback-attach-'));
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/new first ${workDirA}`, 'incoming-fallback-new-a'));
+    const first = store.getChannelBinding(address.channelType, address.chatId);
+    assert.ok(first);
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/new second ${workDirB}`, 'incoming-fallback-new-b'));
+    const second = store.getChannelBinding(address.channelType, address.chatId);
+    assert.ok(second);
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/new third ${workDirC}`, 'incoming-fallback-new-c'));
+    const third = store.getChannelBinding(address.channelType, address.chatId);
+    assert.ok(third);
+
+    store.updateSessionCodexThreadId(second.bridgeSessionId, first.id);
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/t use ${first.id}`, 'incoming-fallback-use-thread-before-binding'));
+    assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, second.id);
+
+    store.updateSessionCodexThreadId(second.bridgeSessionId, '');
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/t use ${first.id}`, 'incoming-fallback-use-binding-after-thread-miss'));
+    assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, first.id);
+
+    store.updateSessionCodexThreadId(third.bridgeSessionId, first.bridgeSessionId);
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/t ${first.bridgeSessionId}`, 'incoming-fallback-direct-thread-before-bridge-session'));
+    assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, third.id);
+
+    store.updateSessionCodexThreadId(third.bridgeSessionId, '');
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/t ${first.bridgeSessionId}`, 'incoming-fallback-direct-bridge-after-thread-miss'));
+    assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.bridgeSessionId, first.bridgeSessionId);
+
+    store.updateSession(first.bridgeSessionId, { name: 'fallback display name' });
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t fallback display name', 'incoming-fallback-direct-name'));
+    assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.bridgeSessionId, first.bridgeSessionId);
+
+    const archiveBridge = store.createSession('archive fallback bridge', 'test-model', undefined, archiveWorkDir);
+    const archiveBinding = store.upsertChannelBinding({
+      channelType: address.channelType,
+      chatId: address.chatId,
+      bridgeSessionId: archiveBridge.id,
+      workingDirectory: archiveWorkDir,
+      model: 'test-model',
+      active: false,
+    });
+    const archiveFixture = writeCodexSessionJsonlFixture({
+      threadId: archiveBinding.id,
+      workDir: archiveWorkDir,
+      lines: [
+        {
+          timestamp: '2026-05-28T00:00:00.000Z',
+          type: 'session_meta',
+          payload: {
+            id: archiveBinding.id,
+            timestamp: '2026-05-28T00:00:00.000Z',
+            cwd: archiveWorkDir,
+            originator: 'Codex CLI',
+          },
+        },
+      ],
+    });
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/t archive ${archiveBinding.id}`, 'incoming-fallback-archive-thread-before-binding'));
+    assert.ok(store.getSession(archiveBinding.bridgeSessionId));
+    assert.equal(fs.existsSync(archiveFixture.sessionPath), false);
+
+    const attachBridge = store.createSession('attach fallback bridge', 'test-model', undefined, attachWorkDir);
+    const attachBinding = store.upsertChannelBinding({
+      channelType: address.channelType,
+      chatId: 'other-chat-thread-fallback-e2e',
+      bridgeSessionId: attachBridge.id,
+      workingDirectory: attachWorkDir,
+      model: 'test-model',
+      active: true,
+    });
+    writeCodexSessionJsonlFixture({
+      threadId: attachBinding.id,
+      workDir: attachWorkDir,
+      lines: [
+        {
+          timestamp: '2026-05-28T00:00:00.000Z',
+          type: 'session_meta',
+          payload: {
+            id: attachBinding.id,
+            timestamp: '2026-05-28T00:00:00.000Z',
+            cwd: attachWorkDir,
+            originator: 'Codex CLI',
+          },
+        },
+      ],
+    });
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/t attach ${attachBinding.id}`, 'incoming-fallback-attach-thread-before-binding'));
+    const attachedBinding = store.listChannelBindings()
+      .find((binding) => (
+        binding.channelType === address.channelType
+        && binding.chatId === address.chatId
+        && store.getSession(binding.bridgeSessionId)?.codex_thread_id === attachBinding.id
+      ));
+    assert.ok(attachedBinding);
+    assert.notEqual(attachedBinding.bridgeSessionId, attachBinding.bridgeSessionId);
+    assert.equal(store.getSession(attachedBinding.bridgeSessionId)?.codex_thread_id, attachBinding.id);
   });
 
   it('keeps renamed thread titles identical in /current and /t dropdown surfaces', async () => {
@@ -1169,7 +1298,7 @@ describe('bridge command e2e', () => {
       })), [{
         sessionId: tmuxBinding.bridgeSessionId,
         codexThreadId: '',
-        prompt: ' ',
+        prompt: 'Initialize this Codex session and wait for the next instruction.',
       }]);
 
       const startLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
@@ -1199,6 +1328,57 @@ describe('bridge command e2e', () => {
       else process.env.TMUX_FAKE_STATE = oldFakeState;
       fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
     }
+  });
+
+  it('surfaces the SDK bootstrap error when /p tmux cannot create a codex thread', async () => {
+    const store = initBridgeTestContext({
+      dynamicSettings: true,
+      settings: makeBridgeSettings(),
+      llm: {
+        streamChat(): ReadableStream<string> {
+          return new ReadableStream({
+            start(controller) {
+              controller.enqueue(`data: ${JSON.stringify({ type: 'error', data: 'Codex Exec exited with code 1: No prompt provided via stdin.' })}\n`);
+              controller.close();
+            },
+          });
+        },
+      },
+    });
+    const adapter = new RecordingAdapter();
+    const address = { channelType: 'feishu', chatId: 'chat-runtime-tmux-bootstrap-error-e2e' } as const;
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/p tmux', 'incoming-runtime-provider-error'));
+
+    const response = adapter.sent.at(-1)?.text || '';
+    assert.match(response, /\/provider 执行失败：无法通过 SDK 预创建 Codex thread/);
+    assert.match(response, /No prompt provided via stdin/);
+    assert.doesNotMatch(response, /请稍后重试/);
+    const binding = store.getChannelBinding(address.channelType, address.chatId);
+    assert.ok(binding);
+    assert.notEqual(store.getSession(binding.bridgeSessionId)?.codex_provider, 'tmux');
+  });
+
+  it('renders the effective default provider in command echoes through the bridge entrypoint', async () => {
+    initBridgeTestContext({
+      dynamicSettings: true,
+      settings: makeBridgeSettings({ bridge_default_provider: 'tmux' }),
+    });
+    const adapter = new RecordingAdapter();
+    const address = { channelType: 'feishu', chatId: 'chat-runtime-default-provider-e2e' } as const;
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-runtime-default-provider-'));
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/new ${workDir}`, 'incoming-default-provider-new'));
+    assert.match(adapter.sent.at(-1)?.text || '', /Provider.*tmux \(全局默认\)/s);
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/p', 'incoming-default-provider-p'));
+    assert.match(adapter.sent.at(-1)?.text || '', /Provider.*tmux \(全局默认\)/s);
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/m', 'incoming-default-provider-m'));
+    assert.match(adapter.sent.at(-1)?.text || '', /Provider.*tmux \(全局默认\)/s);
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/', 'incoming-default-provider-current'));
+    assert.match(adapter.sent.at(-1)?.text || '', /Provider.*tmux \(全局默认\)/s);
   });
 
   it('falls back to bridge cached messages for /his and supports temporary raw limits', async () => {

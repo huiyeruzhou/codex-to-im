@@ -156,21 +156,26 @@ export class ThreadDisplayService {
       if (binding) return { binding, index };
     }
 
-    const bindingMatches = bindings.filter((binding) => (
-      binding.id.toLowerCase() === lowerToken
-      || binding.id.toLowerCase().startsWith(lowerToken)
-      || binding.bridgeSessionId.toLowerCase() === lowerToken
-      || binding.bridgeSessionId.toLowerCase().startsWith(lowerToken)
-    ));
-    if (bindingMatches.length > 1) return { ambiguous: true };
-    if (bindingMatches.length === 1) return { binding: bindingMatches[0] };
-
     const threadMatches = bindings.filter((binding) => {
       const threadId = this.bindingThreadId(binding);
       return Boolean(threadId && (threadId.toLowerCase() === lowerToken || threadId.toLowerCase().startsWith(lowerToken)));
     });
     if (threadMatches.length > 1) return { ambiguous: true };
     if (threadMatches.length === 1) return { binding: threadMatches[0] };
+
+    const bindingMatches = bindings.filter((binding) => (
+      binding.id.toLowerCase() === lowerToken
+      || binding.id.toLowerCase().startsWith(lowerToken)
+    ));
+    if (bindingMatches.length > 1) return { ambiguous: true };
+    if (bindingMatches.length === 1) return { binding: bindingMatches[0] };
+
+    const bridgeSessionMatches = bindings.filter((binding) => (
+      binding.bridgeSessionId.toLowerCase() === lowerToken
+      || binding.bridgeSessionId.toLowerCase().startsWith(lowerToken)
+    ));
+    if (bridgeSessionMatches.length > 1) return { ambiguous: true };
+    if (bridgeSessionMatches.length === 1) return { binding: bridgeSessionMatches[0] };
 
     const nameMatches = bindings.filter((binding) => this.binding(binding).title.trim() === token);
     if (nameMatches.length > 1) return { ambiguous: true };

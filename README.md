@@ -186,11 +186,11 @@ Codex Native、CLI 或 TUI 继续操作这条共享线程时，结果也会同�
 - `/t n 100`：查看最近 100 条本地 Codex 线程，最多 200 条。
 - `/t 1`：切换到第 1 条本地 Codex 线程。
 - `/t ls`：查看当前聊天已绑定的线程，`*` 标记当前激活线程。
-- `/t attach <序号|bridge-session-id|thread-id|名称>`：把本地 Codex 或 Bridge 会话绑定到当前聊天，不一定切换当前线程。
-- `/t use <序号|bridge-session-id|thread-id|binding-id|名称>`：切换当前聊天的激活线程。
-- `/t detach <序号|bridge-session-id|thread-id|binding-id|名称>`：解绑当前聊天的指定绑定线程。
+- `/t attach <序号|thread-id|binding-id|名称>`：把本地 Codex 或 Bridge 会话绑定到当前聊天，不一定切换当前线程。
+- `/t use <序号|thread-id|binding-id|名称>`：切换当前聊天的激活线程。
+- `/t detach <序号|thread-id|binding-id|名称>`：解绑当前聊天的指定绑定线程。
 - `/t rename <名称>`：重命名当前线程；名称不能是纯数字或类似线程/绑定 ID。
-- 序号范围：`/t 1`、`/t attach 1` 和 `/t archive 1` 使用 `/t` 的全局本地 Codex/Bridge 会话列表；`/t use 1` 和 `/t detach 1` 使用 `/t ls` 的当前聊天局部绑定列表。
+- 序号范围：`/t 1`、`/t attach 1` 和 `/t archive 1` 使用 `/t` 的全局 Bridge / Codex 会话列表；`/t use 1` 和 `/t detach 1` 使用 `/t ls` 的当前聊天局部绑定列表。
 - `/t 0`：切换到当前聊天的临时线程。
 - `/new`：在当前正式会话目录下新建线程。
 - `/new <名称>`：在当前正式会话目录下新建指定名称的线程；名称不能与当前聊天已绑定线程重名。

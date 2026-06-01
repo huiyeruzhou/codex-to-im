@@ -261,7 +261,7 @@ export function handleCurrentCommand(options: {
       ['聊天绑定数', `${chatBindingCount}`],
       ['目录', formatCommandPath(binding.workingDirectory)],
       ['模式', formatSessionMode(binding, session)],
-      ['Provider', formatSessionCodexProvider(session)],
+      ['Provider', formatSessionCodexProvider(options.store, session)],
       ['当前模型', formatDisplayedModel(currentModel)],
       ['类型', sessionKind],
       ['运行状态', formatRuntimeStatus(session)],

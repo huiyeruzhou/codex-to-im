@@ -2065,12 +2065,12 @@ describe('command-dispatch', () => {
       {
         address,
         text: `/t use ${first.id}`,
-        messageId: 'incoming-t-use-binding-id-priority',
+        messageId: 'incoming-t-use-thread-id-before-binding-id',
       } as any,
       `/t use ${first.id}`,
       deps,
     );
-    assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, first.id);
+    assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, second.id);
     assert.match(sent.at(-1) || '', /当前线程已切换/);
 
     await handleBridgeCommand(
@@ -2125,7 +2125,7 @@ describe('command-dispatch', () => {
       `/t ${first.id}`,
       deps,
     );
-    assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, first.id);
+    assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, second.id);
     assert.match(sent.at(-1) || '', /当前线程已切换/);
 
     store.updateSessionCodexThreadId(second.bridgeSessionId, '546754');
