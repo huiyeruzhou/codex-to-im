@@ -1627,7 +1627,7 @@ describe('command-dispatch', () => {
         diagnoseAllActiveSessions: async () => [],
       },
     );
-    assert.equal(richCardUpdateMessageIds.at(-1), 'reply-t-1');
+    assert.equal(richCardUpdateMessageIds.at(-1), undefined);
     assert.deepEqual(pinned, ['reply-t-1', 'reply-t-2']);
     assert.deepEqual(unpinned, ['reply-t-1']);
     assert.equal(getThreadTableMessageRecord(address)?.messageId, 'reply-t-2');
@@ -2216,14 +2216,16 @@ describe('command-dispatch', () => {
     const store = initTestContext();
     const sent: string[] = [];
     const richCards: OutboundRichCard[] = [];
+    const richCardUpdateMessageIds: Array<string | undefined> = [];
     const started: string[] = [];
     const stopped: string[] = [];
     const adapter: any = {
       channelType: 'feishu',
       provider: 'feishu',
-      send: async (message: { text: string; richCard?: OutboundRichCard }) => {
+      send: async (message: { text: string; richCard?: OutboundRichCard; richCardUpdateMessageId?: string }) => {
         sent.push(message.text);
         if (message.richCard) richCards.push(message.richCard);
+        richCardUpdateMessageIds.push(message.richCardUpdateMessageId);
         return { ok: true, messageId: `reply-auto-${sent.length}` };
       },
     };
@@ -2279,6 +2281,7 @@ describe('command-dispatch', () => {
     assert.equal(richCards.at(-1)?.title, '当前聊天自动化任务（1）');
     assert.equal(richCards.at(-1)?.updateKey, `thread-card:auto:${address.channelType}:${address.chatId}`);
     assert.equal(richCards.at(-1)?.updateTtlMs, null);
+    assert.equal(richCardUpdateMessageIds.at(-1), undefined);
     assert.equal(getThreadTableMessageRecord(address, 'auto')?.messageId, 'reply-auto-2');
     assert.deepEqual(richCards.at(-1)?.table?.columns.map((column) => column.name), [
       'index',
@@ -2315,6 +2318,8 @@ describe('command-dispatch', () => {
       deps,
     );
     assert.match(sent.at(-1) || '', /当前聊天自动化任务/);
+    assert.equal(richCardUpdateMessageIds.at(-1), undefined);
+    assert.equal(getThreadTableMessageRecord(address, 'auto')?.messageId, 'reply-auto-4');
 
     await handleBridgeCommand(
       adapter,

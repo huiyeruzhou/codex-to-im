@@ -5,6 +5,7 @@ import { buildCommandCallbackData } from '../command-callbacks.js';
 import { buildCommandFields } from './presentation.js';
 import { buildFencedCodeBlock } from '../markdown/fence.js';
 import { sanitizeInput } from '../security/validators.js';
+import { getBridgeContext } from '../context.js';
 import {
   tmuxCore,
   codexTmuxSessionName,
@@ -15,6 +16,10 @@ import {
 } from '../tmux/runtime.js';
 import { resolveEffectiveCodexProvider, resolveSessionRuntimeConfig } from '../bridge-session-support.js';
 import { getCodexThreadId } from '../turns/turn-classifier.js';
+import {
+  bootstrapCodexThreadWithSdk,
+  type BootstrapCodexThreadParams,
+} from './runtime-settings.js';
 export {
   buildCodexResumeTmuxCommand,
   codexTmuxSessionName,
@@ -27,7 +32,7 @@ const DEFAULT_CAPTURE_LINES = 0;
 const MIN_CAPTURE_LINES = 0;
 const MAX_CAPTURE_LINES = 500;
 const MIN_SCREEN_INTERVAL_SECONDS = 3;
-const SEND_ACTION_DELAY_MS = 200;
+const SEND_ACTION_DELAY_MS = 500;
 const CAPTURE_AFTER_SEND_DELAY_MS = 250;
 
 function buildTmuxSwitchSelect(
@@ -66,6 +71,7 @@ export interface HandleTmuxBridgeCommandParams {
   };
   richCard?: (card: OutboundRichCard) => void;
   autoRecoverProviderSession?: boolean;
+  reconcileMirrorSubscriptions?: () => Promise<void>;
 }
 
 interface TmuxScreenArgs {
@@ -466,7 +472,7 @@ function buildTmuxScreenResponse(
 }
 
 async function ensureCodexTmuxSessionForProvider(
-  params: Pick<HandleTmuxBridgeCommandParams, 'store' | 'binding' | 'session' | 'autoRecoverProviderSession'>,
+  params: Pick<HandleTmuxBridgeCommandParams, 'store' | 'binding' | 'session' | 'autoRecoverProviderSession' | 'reconcileMirrorSubscriptions'>,
 ): Promise<{ target: string | undefined; commands: string[]; recovered: boolean; error?: string }> {
   const { store, binding, session } = params;
   const configuredTarget = session.tmux_session_name?.trim() || '';
@@ -474,7 +480,23 @@ async function ensureCodexTmuxSessionForProvider(
     return { target: configuredTarget || undefined, commands: [], recovered: false };
   }
 
-  const threadId = getCodexThreadId(session, binding);
+  let threadId = getCodexThreadId(session, binding);
+  if (!threadId && params.autoRecoverProviderSession === true) {
+    const runtimeConfig = resolveSessionRuntimeConfig(binding, session);
+    const bootstrapParams: BootstrapCodexThreadParams = {
+      session,
+      binding,
+      mode: runtimeConfig.mode,
+      sandboxMode: runtimeConfig.sandboxMode as BootstrapCodexThreadParams['sandboxMode'],
+      networkAccessEnabled: runtimeConfig.networkAccessEnabled,
+      modelReasoningEffort: runtimeConfig.reasoningEffort as BootstrapCodexThreadParams['modelReasoningEffort'],
+      skipGitRepoCheck: runtimeConfig.skipGitRepoCheck,
+    };
+    threadId = await bootstrapCodexThreadWithSdk(getBridgeContext().llm, bootstrapParams);
+    store.updateSessionCodexThreadId(session.id, threadId);
+    await params.reconcileMirrorSubscriptions?.();
+  }
+
   const target = configuredTarget || (threadId ? codexTmuxSessionName(threadId) : '');
   if (!target) {
     return {
@@ -487,7 +509,13 @@ async function ensureCodexTmuxSessionForProvider(
 
   const exists = await tmuxCore.hasSession(target);
   if (exists.exists) {
-    if (!configuredTarget) store.updateSession(session.id, { tmux_session_name: target });
+    if (!configuredTarget || !session.codex_thread_id) {
+      store.updateSession(session.id, {
+        tmux_session_name: target,
+        ...(threadId ? { codex_thread_id: threadId } : {}),
+      });
+      await params.reconcileMirrorSubscriptions?.();
+    }
     return { target, commands: [exists.command], recovered: false };
   }
 
@@ -529,6 +557,7 @@ async function ensureCodexTmuxSessionForProvider(
     tmux_auto_enter: session.tmux_auto_enter === true,
     codex_thread_id: threadId,
   });
+  await params.reconcileMirrorSubscriptions?.();
   return { target, commands: [exists.command, ...started.commands], recovered: true };
 }
 

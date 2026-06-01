@@ -45,7 +45,6 @@ import {
   type ThreadCardScope,
 } from './thread-display.js';
 import {
-  getThreadTableMessageRecord,
   persistAndPinLatestThreadTableMessage,
 } from './thread-table-message-pins.js';
 import {
@@ -266,6 +265,7 @@ export async function handleBridgeCommand(
         session,
         markdown: responseParseMode === 'Markdown',
         autoRecoverProviderSession: deps.tmuxProviderAutoForward === true,
+        reconcileMirrorSubscriptions: deps.reconcileMirrorSubscriptions,
         screenMonitor: command === '/tmux-screen'
           ? {
               key: `${msg.address.channelType}:${msg.address.chatId}:${binding.bridgeSessionId}`,
@@ -553,8 +553,7 @@ export async function handleBridgeCommand(
   }
 
   if (response) {
-    const richCardUpdateMessageId = msg.callbackMessageId
-      || (threadTableCardScope ? getThreadTableMessageRecord(msg.address, threadTableCardScope)?.messageId : undefined);
+    const richCardUpdateMessageId = msg.callbackMessageId;
     const result = await deliverBridgeNotice(adapter, msg.address, response, {
       replyToMessageId: msg.messageId,
       audit: auditResponse,

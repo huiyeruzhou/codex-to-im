@@ -236,25 +236,13 @@ function isTmuxProviderSession(session?: BridgeSession | null): boolean {
   return resolveEffectiveCodexProvider(session) === 'tmux';
 }
 
-function buildTmuxProviderModeBlockedResponse(markdown: boolean): string {
-  return buildCommandFields(
-    '当前是 tmux Provider',
-    [],
-    [
-      '`/mode` 无法影响已经启动的 Codex TUI 终端。',
-      '如需切换 yolo，请先发送 `/provider sdk` 退出 tmux Provider，再发送 `/m yolo`，然后重新发送 `/provider tmux`。',
-    ],
-    markdown,
-  );
-}
-
 function buildTmuxProviderRuntimeOptionBlockedResponse(commandLabel: string, markdown: boolean): string {
   return buildCommandFields(
     '当前是 tmux Provider',
     [['命令', commandLabel]],
     [
-      '这个设置无法影响已经启动的 Codex TUI 终端。',
-      '请在 Codex TUI 里使用内置 slash 命令调整，或发送 `/provider sdk` 退出后重新配置再进入 tmux Provider。',
+      'session-level Codex runtime 设置无法影响已经启动的 Codex TUI 终端。',
+      '请在 Codex TUI 里使用内置 slash 命令调整，或发送 `/provider sdk` 退出后重新配置，再发送 `/provider tmux` 重新进入 tmux Provider。',
     ],
     markdown,
   );
@@ -294,6 +282,9 @@ export function handleReasoningCommand(options: {
   const session = options.store.getSession(options.binding.bridgeSessionId);
   if (!session) {
     return '当前会话不存在。';
+  }
+  if (options.args && isTmuxProviderSession(session)) {
+    return buildTmuxProviderRuntimeOptionBlockedResponse('`/reasoning`', options.markdown);
   }
   if (!options.args) {
     return buildCommandFields(
@@ -348,7 +339,7 @@ export function handleModeCommand(options: {
     );
   }
   if (isTmuxProviderSession(session)) {
-    return buildTmuxProviderModeBlockedResponse(options.markdown);
+    return buildTmuxProviderRuntimeOptionBlockedResponse('`/mode`', options.markdown);
   }
   const requestedMode = parseMode(options.args);
   if (!requestedMode) {
@@ -643,6 +634,9 @@ export function handleModelCommand(options: {
   const session = options.store.getSession(binding.bridgeSessionId);
   if (!session) {
     return '当前会话不存在。';
+  }
+  if (options.args && isTmuxProviderSession(session)) {
+    return buildTmuxProviderRuntimeOptionBlockedResponse('`/model`', options.markdown);
   }
 
   if (!options.args) {

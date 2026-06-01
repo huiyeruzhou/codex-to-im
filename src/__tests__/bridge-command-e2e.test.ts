@@ -1198,7 +1198,8 @@ describe('bridge command e2e', () => {
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/mode yolo', 'incoming-runtime-block-mode'));
       assert.match(adapter.sent.at(-1)?.text || '', /当前是 tmux Provider/);
-      assert.match(adapter.sent.at(-1)?.text || '', /先发送 \/provider sdk/);
+      assert.match(adapter.sent.at(-1)?.text || '', /session-level Codex runtime 设置/);
+      assert.match(adapter.sent.at(-1)?.text || '', /发送 \/provider sdk/);
       assert.notEqual(store.getChannelBinding(address.channelType, address.chatId)?.mode, 'yolo');
       assert.notEqual(store.getSession(binding.bridgeSessionId)?.preferred_mode, 'yolo');
 
@@ -1206,6 +1207,16 @@ describe('bridge command e2e', () => {
       assert.match(adapter.sent.at(-1)?.text || '', /当前是 tmux Provider/);
       assert.match(adapter.sent.at(-1)?.text || '', /Codex TUI 里使用内置 slash 命令/);
       assert.equal(store.getSession(binding.bridgeSessionId)?.codex_network_access, true);
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/r minimal', 'incoming-runtime-block-reasoning'));
+      assert.match(adapter.sent.at(-1)?.text || '', /当前是 tmux Provider/);
+      assert.match(adapter.sent.at(-1)?.text || '', /session-level Codex runtime 设置/);
+      assert.equal(store.getSession(binding.bridgeSessionId)?.reasoning_effort, 'high');
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/model gpt-5.4', 'incoming-runtime-block-model'));
+      assert.match(adapter.sent.at(-1)?.text || '', /当前是 tmux Provider/);
+      assert.match(adapter.sent.at(-1)?.text || '', /session-level Codex runtime 设置/);
+      assert.notEqual(store.getSession(binding.bridgeSessionId)?.model, 'gpt-5.4');
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/p sdk', 'incoming-runtime-provider-sdk'));
       assert.equal(store.getSession(binding.bridgeSessionId)?.codex_provider, 'sdk');
@@ -1330,12 +1341,11 @@ describe('bridge command e2e', () => {
     }
   });
 
-  it('uses the default tmux provider for new sessions and recovers the provider tmux session after it is killed', async () => {
+  it('initializes a default tmux provider conversation on first text after /set defaultProvider tmux and /new', async () => {
     const bootstrapThreadId = '019e824e-10ef-7430-985d-4349ce6a15f9';
     const llmCalls: RecordedLlmCall[] = [];
     const store = initBridgeTestContext({
       dynamicSettings: true,
-      settings: makeBridgeSettings({ bridge_default_provider: 'tmux' }),
       llm: {
         streamChat(params: StreamChatParams): ReadableStream<string> {
           llmCalls.push({
@@ -1383,15 +1393,20 @@ describe('bridge command e2e', () => {
     });
 
     try {
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/set defaultProvider tmux', 'incoming-tmux-default-set-provider'));
+      assert.match(adapter.sent.at(-1)?.text || '', /默认 Codex Provider.*tmux/s);
+      assert.equal(loadConfig().defaultProvider, 'tmux');
+
       await _testOnly.handleMessage(adapter, inboundMessage(address, `/new ${workDir}`, 'incoming-tmux-default-new'));
       const binding = store.getChannelBinding(address.channelType, address.chatId);
       assert.ok(binding);
       assert.equal(store.getSession(binding.bridgeSessionId)?.codex_provider, undefined);
+      assert.equal(store.getSession(binding.bridgeSessionId)?.codex_thread_id, undefined);
       assert.match(adapter.sent.at(-1)?.text || '', /Provider.*tmux \(全局默认\)/s);
 
-      await _testOnly.handleMessage(adapter, inboundMessage(address, '/p tmux', 'incoming-tmux-default-provider'));
-      assert.equal(store.getSession(binding.bridgeSessionId)?.codex_provider, 'tmux');
-      assert.equal(store.getSession(binding.bridgeSessionId)?.tmux_session_name, tmuxSession);
+      const beforeFirstMessageLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '第一条', 'incoming-tmux-default-first'));
+      const firstMessageLog = fs.readFileSync(fakeTmux.logPath, 'utf-8').slice(beforeFirstMessageLog.length);
       assert.deepEqual(llmCalls.map((call) => ({
         sessionId: call.sessionId,
         codexThreadId: call.codexThreadId,
@@ -1401,11 +1416,11 @@ describe('bridge command e2e', () => {
         codexThreadId: '',
         prompt: 'Initialize this Codex session and wait for the next instruction.',
       }]);
-
-      const beforeFirstMessageLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
-      await _testOnly.handleMessage(adapter, inboundMessage(address, '第一条', 'incoming-tmux-default-first'));
-      const firstMessageLog = fs.readFileSync(fakeTmux.logPath, 'utf-8').slice(beforeFirstMessageLog.length);
+      assert.equal(store.getSession(binding.bridgeSessionId)?.codex_thread_id, bootstrapThreadId);
+      assert.equal(store.getSession(binding.bridgeSessionId)?.tmux_session_name, tmuxSession);
       assert.match(firstMessageLog, new RegExp(`has-session -t ${tmuxSession}`));
+      assert.match(firstMessageLog, new RegExp(`new-session -d -s ${tmuxSession}`));
+      assert.match(firstMessageLog, new RegExp(`resume ${bootstrapThreadId}`));
       assert.match(firstMessageLog, new RegExp(`send-keys -t ${tmuxSession} -l 第一条`));
       appendCodexMirrorTurn(fixture.sessionPath, {
         timestampPrefix: '2026-05-28T00:01',
