@@ -1168,6 +1168,45 @@ describe('command-dispatch', () => {
     assert.match(sent[0] || '', /已新建会话/);
     assert.match(sent[0] || '', /common-flow/);
     assert.doesNotMatch(sent[0] || '', /旧任务在运行/);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/new RenamedSession D:\\workspace\\named-flow',
+        messageId: 'incoming-new-2',
+      } as any,
+      '/new RenamedSession D:\\workspace\\named-flow',
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      },
+    );
+
+    const renamedBinding = store.getChannelBinding(address.channelType, address.chatId);
+    assert.ok(renamedBinding);
+    assert.equal(renamedBinding?.workingDirectory, path.resolve('D:\\workspace\\named-flow'));
+    assert.equal(store.getSession(renamedBinding!.bridgeSessionId)?.name, 'RenamedSession');
+    assert.match(sent.at(-1) || '', /标题.*RenamedSession/s);
+    assert.match(sent.at(-1) || '', /name 不能包含/);
+    assert.match(sent.at(-1) || '', /\.\/hi/);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/new bad/name D:\\workspace\\bad-name',
+        messageId: 'incoming-new-invalid-name',
+      } as any,
+      '/new bad/name D:\\workspace\\bad-name',
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      },
+    );
+    assert.match(sent.at(-1) || '', /会话名不能包含路径分隔符/);
   });
 
   it('views and updates global non-channel config with /set and applies it to /new', async () => {

@@ -248,6 +248,51 @@ describe('bridge-manager resolveNewWorkingDirectory', () => {
     });
   });
 
+  it('expands leading tilde paths to the user home directory', () => {
+    const oldHome = process.env.HOME;
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-home-'));
+    process.env.HOME = homeDir;
+    try {
+      const store = new JsonFileStore(makeSettings());
+      initBridgeContext({
+        store,
+        llm: noopLlm,
+        permissions: noopPermissions,
+        lifecycle: noopLifecycle,
+      });
+
+      const resolved = _testOnly.resolveNewWorkingDirectory('~/proj1');
+      assert.deepEqual(resolved, {
+        ok: true,
+        workDir: path.resolve(homeDir, 'proj1'),
+      });
+    } finally {
+      if (oldHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = oldHome;
+      }
+    }
+  });
+
+  it('treats dot-slash /new arguments as relative paths', () => {
+    const settings = makeSettings();
+    settings.set('bridge_default_workspace_root', 'D:\\workspace');
+    const store = new JsonFileStore(settings);
+    initBridgeContext({
+      store,
+      llm: noopLlm,
+      permissions: noopPermissions,
+      lifecycle: noopLifecycle,
+    });
+
+    const resolved = _testOnly.resolveNewWorkingDirectory('./hi');
+    assert.deepEqual(resolved, {
+      ok: true,
+      workDir: path.resolve('D:\\workspace', 'hi'),
+    });
+  });
+
   it('reuses the current formal session directory when /new has no args', () => {
     const resolved = _testOnly.resolveNewSessionWorkingDirectory(
       '',

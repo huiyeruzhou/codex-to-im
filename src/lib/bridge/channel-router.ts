@@ -94,13 +94,15 @@ export function resolve(address: ChannelAddress): ChannelBinding {
 export function createBinding(
   address: ChannelAddress,
   workingDirectory?: string,
+  sessionName?: string,
 ): ChannelBinding {
   const { store } = getBridgeContext();
   const defaultProviderId = store.getSetting('bridge_default_provider_id') || '';
   const defaultModel = store.getSetting('bridge_default_model') || '';
+  const visibleSessionName = sessionName?.trim() || `Bridge: ${address.displayName || address.chatId}`;
   const session = workingDirectory
     ? store.createSession(
-        `Bridge: ${address.displayName || address.chatId}`,
+        visibleSessionName,
         defaultModel,
         undefined,
         workingDirectory,

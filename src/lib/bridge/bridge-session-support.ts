@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 import {
@@ -106,8 +107,17 @@ export function getSelectableCodexModel(slug: string) {
   return AVAILABLE_CODEX_MODEL_MAP.get(slug) || findSelectableCodexModel(slug);
 }
 
+export function expandHomePath(rawPath: string): string {
+  const trimmed = rawPath.trim();
+  if (trimmed === '~') return os.homedir();
+  if (trimmed.startsWith('~/') || trimmed.startsWith('~\\')) {
+    return path.join(os.homedir(), trimmed.slice(2));
+  }
+  return trimmed;
+}
+
 export function resolveNewWorkingDirectory(rawArgs: string): { ok: true; workDir: string } | { ok: false; message: string } {
-  const trimmed = rawArgs.trim();
+  const trimmed = expandHomePath(rawArgs);
   if (!trimmed) {
     return { ok: false, message: '缺少路径参数。' };
   }

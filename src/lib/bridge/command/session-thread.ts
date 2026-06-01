@@ -70,6 +70,61 @@ function parseForceFlag(args: string): { args: string; force: boolean } {
   return { args: cleaned, force };
 }
 
+function readFirstArg(raw: string): { first: string; rest: string } | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const quote = trimmed[0];
+  if (quote === '"' || quote === "'") {
+    let escaped = false;
+    let value = '';
+    for (let i = 1; i < trimmed.length; i += 1) {
+      const ch = trimmed[i];
+      if (escaped) {
+        value += ch;
+        escaped = false;
+        continue;
+      }
+      if (ch === '\\') {
+        escaped = true;
+        continue;
+      }
+      if (ch === quote) {
+        return { first: value, rest: trimmed.slice(i + 1).trim() };
+      }
+      value += ch;
+    }
+    return null;
+  }
+  const match = trimmed.match(/^(\S+)(?:\s+([\s\S]+))?$/);
+  if (!match) return null;
+  return { first: match[1] || '', rest: (match[2] || '').trim() };
+}
+
+function looksLikeNewPath(value: string): boolean {
+  return value === '~'
+    || value.startsWith('~/')
+    || value.startsWith('~\\')
+    || value.includes('/')
+    || value.includes('\\')
+    || /^[A-Za-z]:/.test(value);
+}
+
+const NEW_SESSION_ARG_RULE_NOTE = '参数规则：`/new <name> <path>` 可指定会话名；name 不能包含 `/` 或 `\\`。如果第一个参数像路径（如 `./hi`、`~/hi`、`/abs/path`、`C:\\work`），会按旧用法 `/new <path>` 处理。';
+
+export function parseNewSessionArgs(args: string): { name?: string; pathArgs: string } | { error: string } {
+  const trimmed = args.trim();
+  if (!trimmed) return { pathArgs: '' };
+  const firstArg = readFirstArg(trimmed);
+  if (!firstArg) return { error: '参数格式无效。名称包含空格时请使用引号，例如 `/new \"项目名\" ~/work/proj`。' };
+  if (!firstArg.rest) {
+    return { pathArgs: trimmed };
+  }
+  if (looksLikeNewPath(firstArg.first)) {
+    return { error: `会话名不能包含路径分隔符或路径前缀。${NEW_SESSION_ARG_RULE_NOTE}` };
+  }
+  return { name: firstArg.first, pathArgs: firstArg.rest };
+}
+
 function buildActiveTaskSwitchBlockedResponse(
   store: BridgeStore,
   binding: ChannelBinding,
@@ -371,16 +426,18 @@ export function handleNewSessionCommand(options: {
     options.markdown,
   );
   if (blocked) return { response: blocked };
+  const newSessionArgs = parseNewSessionArgs(parsedArgs.args);
+  if ('error' in newSessionArgs) return { response: newSessionArgs.error };
 
   const currentSession = options.commandBinding
     ? options.store.getSession(options.commandBinding.bridgeSessionId)
     : null;
-  const resolved = resolveNewSessionWorkingDirectory(parsedArgs.args, options.commandBinding, currentSession);
+  const resolved = resolveNewSessionWorkingDirectory(newSessionArgs.pathArgs, options.commandBinding, currentSession);
   if (!resolved.ok) return { response: resolved.message };
 
   const workDir = resolved.workDir;
   ensureWorkingDirectoryExists(workDir);
-  const binding = router.createBinding(options.msg.address, workDir);
+  const binding = router.createBinding(options.msg.address, workDir, newSessionArgs.name);
   const session = options.store.getSession(binding.bridgeSessionId);
   auditCommandBindingChange(
     options.store,
@@ -392,6 +449,7 @@ export function handleNewSessionCommand(options: {
   );
   const notes = [
     parsedArgs.args.trim() ? '接下来直接发送文本即可继续。' : '已在当前工作目录下新建一个线程。接下来直接发送文本即可继续。',
+    NEW_SESSION_ARG_RULE_NOTE,
     ...(parsedArgs.force
       ? ['如果当前聊天里已有旧任务在运行，它不会被终止，仍会在后台继续执行并可能稍后回消息。']
       : []),
