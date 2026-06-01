@@ -25,13 +25,14 @@ import {
   resolveEffectiveReasoningEffort,
   resolveEffectiveSandboxMode,
 } from '../bridge-session-support.js';
-import type { BridgeSession, BridgeStore } from '../host.js';
+import type { BridgeSession, BridgeStore, LLMProvider, SSEEvent } from '../host.js';
 import { parseMode } from '../security/validators.js';
 import {
-  codexTmuxBindingSessionName,
+  codexTmuxSessionName,
   startCodexResumeTmuxSession,
 } from '../tmux/runtime.js';
 import { getCodexThreadId } from '../turns/turn-classifier.js';
+import { getBridgeContext } from '../context.js';
 import type { ChannelBinding, InboundMessage } from '../types.js';
 
 const MODE_OPTIONS_TEXT = '可选：`normal`（普通执行，默认） `yolo`（跳过审批和沙箱）。兼容：`code` 等同于 `normal`。';
@@ -43,6 +44,97 @@ const UI_DETAIL_OPTIONS_TEXT = '可选：`on` 显示 SDK 工具输入输出，`o
 
 export interface RuntimeSettingsCommandDeps {
   reconcileMirrorSubscriptions?(): Promise<void>;
+  bootstrapCodexThread?(params: BootstrapCodexThreadParams): Promise<string>;
+}
+
+export interface BootstrapCodexThreadParams {
+  session: BridgeSession;
+  binding: ChannelBinding;
+  mode: string;
+  sandboxMode: CodexSandboxMode;
+  networkAccessEnabled: boolean;
+  modelReasoningEffort: CodexReasoningEffort;
+  skipGitRepoCheck: boolean;
+}
+
+function readCodexThreadIdFromEvent(event: SSEEvent): string | null {
+  if (event.type !== 'status' && event.type !== 'result') return null;
+  try {
+    const payload = JSON.parse(event.data) as { session_id?: unknown };
+    return typeof payload.session_id === 'string' && payload.session_id.trim()
+      ? payload.session_id.trim()
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseSseDataLine(line: string): SSEEvent | null {
+  if (!line.startsWith('data: ')) return null;
+  try {
+    return JSON.parse(line.slice(6)) as SSEEvent;
+  } catch {
+    return null;
+  }
+}
+
+async function readFirstCodexThreadId(stream: ReadableStream<string>, onThreadId?: () => void): Promise<string> {
+  const reader = stream.getReader();
+  let pending = '';
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      pending += value;
+      const normalized = pending.replace(/\r\n/g, '\n');
+      const parts = normalized.split('\n');
+      pending = parts.pop() ?? '';
+      for (const line of parts) {
+        const event = parseSseDataLine(line);
+        const threadId = event ? readCodexThreadIdFromEvent(event) : null;
+        if (threadId) {
+          onThreadId?.();
+          return threadId;
+        }
+      }
+    }
+    const trailingEvent = parseSseDataLine(pending);
+    return trailingEvent ? readCodexThreadIdFromEvent(trailingEvent) || '' : '';
+  } finally {
+    try { await reader.cancel(); } catch { /* stream may already be closed */ }
+  }
+}
+
+export async function bootstrapCodexThreadWithSdk(
+  llm: LLMProvider,
+  params: BootstrapCodexThreadParams,
+): Promise<string> {
+  const abortController = new AbortController();
+  let threadId = '';
+  const stream = llm.streamChat({
+    prompt: ' ',
+    sessionId: params.session.id,
+    model: params.binding.model || params.session.model || undefined,
+    forceModel: Boolean(params.binding.model || params.session.model),
+    sandboxMode: params.sandboxMode,
+    networkAccessEnabled: params.networkAccessEnabled,
+    modelReasoningEffort: params.modelReasoningEffort,
+    skipGitRepoCheck: params.skipGitRepoCheck,
+    workingDirectory: params.binding.workingDirectory || params.session.working_directory || undefined,
+    abortController,
+    permissionMode: params.mode === 'yolo' ? 'never' : 'acceptEdits',
+    codexMode: params.mode === 'yolo' ? 'yolo' : 'normal',
+    codexProvider: 'sdk',
+    conversationHistory: [],
+  });
+  threadId = await readFirstCodexThreadId(stream, () => {
+    if (!abortController.signal.aborted) abortController.abort();
+  });
+  if (!abortController.signal.aborted) abortController.abort();
+  if (!threadId) {
+    throw new Error('无法通过 SDK 预创建 Codex thread：未收到 codex_thread_id。');
+  }
+  return threadId;
 }
 
 function parseUiDetailArg(raw: string): boolean | null {
@@ -311,18 +403,38 @@ export async function handleProviderCommand(options: {
     );
   }
 
-  const threadId = getCodexThreadId(session, binding) || undefined;
   const mode = formatSessionMode(binding, session);
-  const tmuxSessionName = codexTmuxBindingSessionName(binding.id);
+  const sandboxMode = resolveEffectiveSandboxMode(session) as CodexSandboxMode;
+  const networkAccessEnabled = resolveEffectiveNetworkAccess(session);
+  const modelReasoningEffort = resolveEffectiveReasoningEffort(session) as CodexReasoningEffort;
+  const skipGitRepoCheck = (options.store.getSetting('bridge_codex_skip_git_repo_check') || '').toLowerCase() === 'true';
+  let threadId = getCodexThreadId(session, binding) || undefined;
+  let didBootstrapThread = false;
+  if (!threadId) {
+    const bootstrap = options.deps.bootstrapCodexThread
+      || ((params: BootstrapCodexThreadParams) => bootstrapCodexThreadWithSdk(getBridgeContext().llm, params));
+    threadId = await bootstrap({
+      session,
+      binding,
+      mode,
+      sandboxMode,
+      networkAccessEnabled,
+      modelReasoningEffort,
+      skipGitRepoCheck,
+    });
+    didBootstrapThread = true;
+    options.store.updateSessionCodexThreadId(session.id, threadId);
+  }
+  const tmuxSessionName = codexTmuxSessionName(threadId);
   const startResult = await startCodexResumeTmuxSession({
     sessionName: tmuxSessionName,
     threadId,
     bridgeSessionId: session.id,
     workingDirectory: binding.workingDirectory || session.working_directory,
-    sandboxMode: resolveEffectiveSandboxMode(session) as CodexSandboxMode,
-    networkAccessEnabled: resolveEffectiveNetworkAccess(session),
-    modelReasoningEffort: resolveEffectiveReasoningEffort(session) as CodexReasoningEffort,
-    skipGitRepoCheck: (options.store.getSetting('bridge_codex_skip_git_repo_check') || '').toLowerCase() === 'true',
+    sandboxMode,
+    networkAccessEnabled,
+    modelReasoningEffort,
+    skipGitRepoCheck,
     codexMode: mode === 'yolo' ? 'yolo' : 'normal',
     permissionMode: mode === 'yolo' ? 'never' : 'acceptEdits',
   });
@@ -338,17 +450,16 @@ export async function handleProviderCommand(options: {
     [
       ['模式', mode],
       ['Provider', 'tmux'],
-      ['binding_id', binding.id],
-      ['codex_thread_id', threadId || '-'],
+      ['codex_thread_id', threadId],
       ['tmux session', tmuxSessionName],
       ['自动回车', 'on'],
     ],
     [
       startResult.existed
         ? '同名 tmux session 已存在，已先销毁并重新启动 Codex TUI。'
-        : threadId
-          ? '已启动 Codex TUI 并 resume 当前 thread。'
-          : '已启动 Codex TUI；当前会话尚无 codex_thread_id，将作为新 Codex TUI 会话运行。',
+        : didBootstrapThread
+          ? '已通过 SDK 预创建 Codex thread，并启动 Codex TUI resume 当前 thread。'
+          : '已启动 Codex TUI 并 resume 当前 thread。',
       '之后普通消息会发送到这个 tmux session；回复由 mirror 机制从 Codex session JSONL 自动同步。',
     ],
     options.markdown,

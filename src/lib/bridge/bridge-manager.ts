@@ -1478,6 +1478,13 @@ async function handleMessage(
   const tmuxProviderBinding = store.getChannelBinding(msg.address.channelType, msg.address.chatId);
   const tmuxProviderSession = tmuxProviderBinding ? store.getSession(tmuxProviderBinding.bridgeSessionId) : null;
   if (tmuxProviderSession?.codex_provider === 'tmux') {
+    if (rawText.trim().toLowerCase() === '//clear') {
+      await deliverBridgeNotice(adapter, msg.address, '当前处于 tmux Provider，不能通过 `//clear` 清空上下文。请通过 codex-to-im 手动创建新会话。', {
+        replyToMessageId: msg.messageId,
+      });
+      ack();
+      return;
+    }
     if (hasAttachments) {
       await deliverBridgeNotice(adapter, msg.address, '当前处于 tmux Provider，普通附件不会自动转发到 Codex TUI。请先发送 `/provider sdk`，或在 Codex TUI 内自行读取本地文件。', {
         replyToMessageId: msg.messageId,

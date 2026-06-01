@@ -997,7 +997,7 @@ describe('bridge command e2e', () => {
       const binding = store.getChannelBinding(address.channelType, address.chatId);
       assert.ok(binding);
       const normalThreadId = '019e46bc-f466-71d3-a186-a2ce89051958';
-      const normalTmuxSession = `codex-binding-${binding.id}`;
+      const normalTmuxSession = `codex_${normalThreadId}`;
       store.updateSessionCodexThreadId(binding.bridgeSessionId, normalThreadId);
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/sandbox read-only', 'incoming-runtime-sandbox'));
@@ -1071,7 +1071,7 @@ describe('bridge command e2e', () => {
       assert.equal(store.getSession(binding.bridgeSessionId)?.preferred_mode, 'yolo');
 
       const yoloThreadId = '019e46bc-f466-71d3-a186-a2ce89051959';
-      const yoloTmuxSession = normalTmuxSession;
+      const yoloTmuxSession = `codex_${yoloThreadId}`;
       store.updateSessionCodexThreadId(binding.bridgeSessionId, yoloThreadId);
       const beforeYoloLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/provider tmux', 'incoming-runtime-provider-tmux-yolo'));
@@ -1104,10 +1104,27 @@ describe('bridge command e2e', () => {
     }
   });
 
-  it('starts tmux provider by binding id before a codex thread exists and still allows /new sayhi', async () => {
+  it('bootstraps a codex thread before starting tmux provider and still allows /new sayhi', async () => {
+    const bootstrapThreadId = '019e81d3-e5b0-7540-ad14-4f3073b2701d';
+    const llmCalls: RecordedLlmCall[] = [];
     const store = initBridgeTestContext({
       dynamicSettings: true,
       settings: makeBridgeSettings(),
+      llm: {
+        streamChat(params: StreamChatParams): ReadableStream<string> {
+          llmCalls.push({
+            sessionId: params.sessionId,
+            codexThreadId: params.codexThreadId || '',
+            prompt: params.prompt,
+          });
+          return new ReadableStream({
+            start(controller) {
+              controller.enqueue(`data: ${JSON.stringify({ type: 'status', data: JSON.stringify({ session_id: bootstrapThreadId }) })}\n`);
+              controller.close();
+            },
+          });
+        },
+      },
     });
     const fakeTmux = installFakeTmux();
     const oldPath = process.env.PATH || '';
@@ -1124,17 +1141,33 @@ describe('bridge command e2e', () => {
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/p tmux', 'incoming-runtime-provider-first'));
       const tmuxBinding = store.getChannelBinding(address.channelType, address.chatId);
       assert.ok(tmuxBinding);
-      const tmuxSessionName = `codex-binding-${tmuxBinding.id}`;
+      const tmuxSessionName = `codex_${bootstrapThreadId}`;
       const tmuxSession = store.getSession(tmuxBinding.bridgeSessionId);
       assert.equal(tmuxSession?.codex_provider, 'tmux');
       assert.equal(tmuxSession?.tmux_session_name, tmuxSessionName);
       assert.equal(tmuxSession?.tmux_auto_enter, true);
-      assert.equal(tmuxSession?.codex_thread_id, undefined);
+      assert.equal(tmuxSession?.codex_thread_id, bootstrapThreadId);
+      assert.deepEqual(llmCalls.map((call) => ({
+        sessionId: call.sessionId,
+        codexThreadId: call.codexThreadId,
+        prompt: call.prompt,
+      })), [{
+        sessionId: tmuxBinding.bridgeSessionId,
+        codexThreadId: '',
+        prompt: ' ',
+      }]);
 
       const startLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
       assert.match(startLog, new RegExp(`new-session -d -s ${tmuxSessionName}`));
-      assert.doesNotMatch(startLog, / resume /);
-      assert.match(adapter.sent.at(-1)?.text || '', /binding_id/);
+      assert.match(startLog, new RegExp(`resume ${bootstrapThreadId}`));
+      assert.match(adapter.sent.at(-1)?.text || '', new RegExp(`codex_thread_id.*${bootstrapThreadId}`, 's'));
+
+      const beforeClearLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '//clear', 'incoming-runtime-clear-blocked'));
+      const clearLog = fs.readFileSync(fakeTmux.logPath, 'utf-8').slice(beforeClearLog.length);
+      assert.equal(clearLog, '');
+      assert.match(adapter.sent.at(-1)?.text || '', /不能通过 \/\/clear 清空上下文/);
+      assert.match(adapter.sent.at(-1)?.text || '', /手动创建新会话/);
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/new sayhi', 'incoming-runtime-new-sayhi'));
       const newBinding = store.getChannelBinding(address.channelType, address.chatId);
