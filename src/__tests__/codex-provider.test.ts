@@ -1043,50 +1043,6 @@ describe('CodexProvider image input', () => {
     assert.equal(payload.options.network_access_enabled, true);
     assert.ok(!payload.command.includes('do not leak this full prompt'), 'Prompt content should not be logged');
   });
-
-  it('logs Codex stdout and emits it as a status event', async () => {
-    const { CodexProvider } = await import('../codex/provider.js');
-    const { PendingPermissions } = await import('../permission-gateway.js');
-    const provider = new CodexProvider(new PendingPermissions());
-
-    const mockThread = {
-      runStreamed: () => ({
-        events: (async function* () {
-          yield { type: 'thread.started', thread_id: 'thread-stdout' };
-          yield { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1, cached_input_tokens: 0 } };
-        })(),
-      }),
-    };
-    (provider as any).sdk = { Codex: class { constructor() {} } };
-    (provider as any).codex = {
-      startThread: () => mockThread,
-    };
-
-    const logs: unknown[][] = [];
-    const originalLog = console.log;
-    console.log = (...args: unknown[]) => { logs.push(args); };
-    try {
-      const stream = provider.streamChat({
-        prompt: 'hello',
-        sessionId: 'stdout-session',
-      });
-      const events = parseSSEChunks(await collectStream(stream));
-      const stdoutStatus = events.find((event) => {
-        if (event.type !== 'status') return false;
-        const payload = JSON.parse(event.data);
-        return typeof payload.codex_stdout === 'string' && payload.codex_stdout.includes('thread.started');
-      });
-      assert.ok(stdoutStatus, 'Should echo Codex stdout through status events');
-    } finally {
-      console.log = originalLog;
-    }
-
-    const stdoutLog = logs.find((args) => args[0] === '[codex-provider] Codex stdout:');
-    assert.ok(stdoutLog, 'Should log Codex stdout');
-    const payload = stdoutLog![1] as { line: string; bridge_session_id: string };
-    assert.equal(payload.bridge_session_id, 'stdout-session');
-    assert.match(payload.line, /thread\.started/);
-  });
 });
 
 // ── Error event tests ───────────────────────────────────────

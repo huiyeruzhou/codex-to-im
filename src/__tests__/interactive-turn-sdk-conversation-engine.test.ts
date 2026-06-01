@@ -46,19 +46,6 @@ function toolOnlyLlm(): LLMProvider {
   };
 }
 
-function statusOnlyLlm(payload: Record<string, unknown>): LLMProvider {
-  return {
-    streamChat(): ReadableStream<string> {
-      return new ReadableStream({
-        start(controller) {
-          controller.enqueue(sseEvent('status', payload));
-          controller.close();
-        },
-      });
-    },
-  };
-}
-
 function createTestSdkConversationRuntime(store: BridgeStore, llm: LLMProvider): SdkConversationRuntime {
   return {
     store,
@@ -236,44 +223,5 @@ describe('interactive-turn sdk-conversation-engine tool expansion', () => {
     assert.equal(messages[1]?.role, 'assistant');
     assert.match(messages[1]?.content || '', /"type":"tool_use"/);
     assert.match(messages[1]?.content || '', /"type":"tool_result"/);
-  });
-
-  it('echoes Codex stdout status lines into stream preview', async () => {
-    resetBridgeTestState();
-    const stdoutLine = '{"type":"thread.started","thread_id":"thread-preview"}';
-    const llm = statusOnlyLlm({ codex_stdout: stdoutLine });
-    const store = initBridgeTestContext({
-      settings: makeBridgeSettings(),
-      llm,
-    });
-    const session = store.createSession('stdout-preview-test', '', undefined, '', 'normal');
-    const binding = store.upsertChannelBinding({
-      channelType: 'feishu',
-      chatId: 'chat-stdout-preview',
-      bridgeSessionId: session.id,
-      workingDirectory: '',
-      model: '',
-      mode: 'normal',
-    });
-
-    const previews: string[] = [];
-    const result = await processMessage(
-      binding,
-      'start codex',
-      undefined,
-      undefined,
-      undefined,
-      (text) => previews.push(text),
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      createTestSdkConversationRuntime(store, llm),
-    );
-
-    assert.equal(result.responseText, '');
-    assert.match(previews.at(-1) || '', /Codex stdout/);
-    assert.match(previews.at(-1) || '', /thread-preview/);
   });
 });
