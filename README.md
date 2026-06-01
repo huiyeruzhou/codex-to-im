@@ -165,12 +165,15 @@ Codex Native、CLI 或 TUI 继续操作这条共享线程时，结果也会同�
 会在当前正式会话的工作目录下新建线程。  
 如果当前没有正式会话，或当前是临时线程，会直接报错。
 
-也可以显式指定目录：
+也可以指定名称，或同时指定名称和目录：
 
 ```text
-/new my-project
-/new D:\work\my-project
+/new my-thread
+/new my-thread ./my-project
+/new my-thread D:\work\my-project
 ```
+
+如果只想按目录新建，目录参数需要明显像路径，例如 `/new ./my-project`、`/new ~/work/my-project` 或 `/new D:\work\my-project`。
 
 ## 常用命令
 
@@ -190,7 +193,8 @@ Codex Native、CLI 或 TUI 继续操作这条共享线程时，结果也会同�
 - 序号范围：`/t 1` 和 `/t add 1` 使用 `/t` 的全局本地 Codex 线程列表；`/t use 1` 和 `/t rm 1` 使用 `/t ls` 的当前聊天局部绑定列表。
 - `/t 0`：切换到当前聊天的临时线程。
 - `/new`：在当前正式会话目录下新建线程。
-- `/new <路径或项目名>`：按指定目录新建线程。
+- `/new <名称>`：在当前正式会话目录下新建指定名称的线程；名称不能与当前聊天已绑定线程重名。
+- `/new <名称> <路径>`：按指定名称和目录新建线程；单参数目录需写成 `./proj`、`~/proj` 或绝对路径。
 - `/mode <normal|yolo>`：切换运行模式（`code` 会映射为 `normal`，其它旧模式不再支持）。
 - `/provider <sdk|tmux>`：切换当前 IM 会话使用的 Codex Provider。
 - `/tmux-switch`：列出可绑定的 tmux sessions。

@@ -1174,6 +1174,50 @@ describe('command-dispatch', () => {
       adapter,
       {
         address,
+        text: '/new set',
+        messageId: 'incoming-new-name-only',
+      } as any,
+      '/new set',
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      },
+    );
+
+    const namedOnlyBinding = store.getChannelBinding(address.channelType, address.chatId);
+    assert.ok(namedOnlyBinding);
+    assert.equal(namedOnlyBinding?.workingDirectory, path.resolve('D:\\workspace\\common-flow'));
+    assert.equal(store.getSession(namedOnlyBinding!.bridgeSessionId)?.name, 'set');
+    assert.match(sent.at(-1) || '', /标题.*set/s);
+
+    const bindingCountBeforeDuplicate = store.listChannelBindings(address.channelType)
+      .filter((binding) => binding.chatId === address.chatId).length;
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/new set',
+        messageId: 'incoming-new-duplicate-name',
+      } as any,
+      '/new set',
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      },
+    );
+
+    assert.match(sent.at(-1) || '', /会话名已存在/);
+    assert.equal(
+      store.listChannelBindings(address.channelType).filter((binding) => binding.chatId === address.chatId).length,
+      bindingCountBeforeDuplicate,
+    );
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
         text: '/new RenamedSession D:\\workspace\\named-flow',
         messageId: 'incoming-new-2',
       } as any,
@@ -1190,7 +1234,7 @@ describe('command-dispatch', () => {
     assert.equal(renamedBinding?.workingDirectory, path.resolve('D:\\workspace\\named-flow'));
     assert.equal(store.getSession(renamedBinding!.bridgeSessionId)?.name, 'RenamedSession');
     assert.match(sent.at(-1) || '', /标题.*RenamedSession/s);
-    assert.match(sent.at(-1) || '', /name 不能包含/);
+    assert.match(sent.at(-1) || '', /\/new <name>/);
     assert.match(sent.at(-1) || '', /\.\/hi/);
 
     await handleBridgeCommand(
@@ -1354,10 +1398,10 @@ describe('command-dispatch', () => {
       adapter,
       {
         address,
-        text: '/new set-proj',
+        text: '/new ./set-proj',
         messageId: 'incoming-new-after-set',
       } as any,
-      '/new set-proj',
+      '/new ./set-proj',
       deps,
     );
     const binding = store.getChannelBinding(address.channelType, address.chatId);
