@@ -1610,10 +1610,10 @@ describe('command-dispatch', () => {
       adapter,
       {
         address,
-        text: '/t rm 2',
+        text: '/t detach 2',
         messageId: 'incoming-t-rm',
       } as any,
-      '/t rm 2',
+      '/t detach 2',
       {
         getActiveTask: () => undefined,
         diagnoseSessionHealth: async () => null,
@@ -1624,17 +1624,17 @@ describe('command-dispatch', () => {
     assert.deepEqual(remaining.map((binding) => binding.id), [first.id]);
     assert.ok(store.getSession(second.bridgeSessionId));
     assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, first.id);
-    assert.match(sent.at(-1) || '', /已移除绑定线程/);
+    assert.match(sent.at(-1) || '', /已脱离绑定线程/);
     assert.equal(richCards.length, 2);
 
     await handleBridgeCommand(
       adapter,
       {
         address,
-        text: '/t remove 1',
+        text: '/t detach 1',
         messageId: 'incoming-t-remove',
       } as any,
-      '/t remove 1',
+      '/t detach 1',
       {
         getActiveTask: () => undefined,
         diagnoseSessionHealth: async () => null,
@@ -1642,7 +1642,7 @@ describe('command-dispatch', () => {
       },
     );
     assert.equal(store.listChannelBindings().filter((binding) => binding.chatId === address.chatId).length, 0);
-    assert.match(sent.at(-1) || '', /已移除绑定线程/);
+    assert.match(sent.at(-1) || '', /已脱离绑定线程/);
     assert.equal(richCards.length, 2);
   });
 
@@ -1699,9 +1699,9 @@ describe('command-dispatch', () => {
     );
 
     const message = sent.at(-1);
-    assert.match(message?.text || '', /最近 10 条本地 Codex 会话/);
+    assert.match(message?.text || '', /Codex会话（本地会话10 \+ 未绑定的Bridge0）/);
     assert.match(message?.text || '', /已达到 200 条显示上限/);
-    assert.equal(message?.richCard?.title, '本地 Codex 会话（200/200）');
+    assert.equal(message?.richCard?.title, 'Codex会话（本地会话200 + 未绑定的Bridge0）');
     assert.equal(message?.richCard?.table?.rows.length, 200);
     assert.equal(message?.richCard?.selects?.[0]?.options.length, 200);
     assert.deepEqual(
@@ -2062,14 +2062,14 @@ describe('command-dispatch', () => {
       adapter,
       {
         address,
-        text: '/t rm 标题回退',
+        text: '/t detach 标题回退',
         messageId: 'incoming-t-rm-codex-title-fallback',
       } as any,
-      '/t rm 标题回退',
+      '/t detach 标题回退',
       deps,
     );
     assert.equal(store.listChannelBindings().some((binding) => binding.id === codexTitleOnly.id), false);
-    assert.match(sent.at(-1) || '', /已移除绑定线程/);
+    assert.match(sent.at(-1) || '', /已脱离绑定线程/);
 
     await handleBridgeCommand(
       adapter,
@@ -2127,15 +2127,15 @@ describe('command-dispatch', () => {
       adapter,
       {
         address,
-        text: '/t rm 后端修复',
+        text: '/t detach 后端修复',
         messageId: 'incoming-t-rm-name',
       } as any,
-      '/t rm 后端修复',
+      '/t detach 后端修复',
       deps,
     );
 
     assert.equal(store.listChannelBindings().filter((binding) => binding.chatId === address.chatId).length, 1);
-    assert.match(sent.at(-1) || '', /已移除绑定线程/);
+    assert.match(sent.at(-1) || '', /已脱离绑定线程/);
 
     const duplicate = router.createBinding(address, 'D:\\workspace\\duplicate-name');
     store.updateSession(duplicate.bridgeSessionId, { name: '前端修复' });

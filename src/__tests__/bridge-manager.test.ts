@@ -429,7 +429,7 @@ describe('bridge-manager resolveCommandAlias', () => {
       false,
       10,
     );
-    assert.match(response, /^最近 2 条本地 Codex 会话/);
+    assert.match(response, /^Codex会话（本地会话2 \+ 未绑定的Bridge0）/);
     assert.match(response, /标题\s+目录\s+上一次活动\s+binding_id\s+thread_id\s+Creator\s+命令/);
     assert.match(response, /Project A\s+D:\\workspace\\project-a\s+03\/31 \d\d:00\s+-\s+thread-1\s+Desktop\s+\/t 1/);
   });
@@ -452,7 +452,7 @@ describe('bridge-manager resolveCommandAlias', () => {
       true,
       200,
     );
-    assert.match(response, /^Bridge \/ Codex 会话（当前显示 1 条，Codex 最多 200 条）/);
+    assert.match(response, /^Codex会话（本地会话1 \+ 未绑定的Bridge0）/);
   });
 
   it('adds a visible notice when the Codex thread text list reaches its limit', () => {
@@ -515,18 +515,19 @@ describe('bridge-manager resolveCommandAlias', () => {
       cwd: '/tmp/bridge-draft',
       lastActiveAt: '2026-03-31T00:00:00.000Z',
       threadId: '',
+      bridgeSessionId: 'bridge-session-1',
       bindingId: 'bridge-binding-1',
       active: true,
       originator: 'Bridge',
     }]);
-    assert.match(bridgeCard?.title || '', /Bridge \/ Codex 会话/);
+    assert.equal(bridgeCard?.title, 'Codex会话（本地会话1 + 未绑定的Bridge1）');
     assert.equal(bridgeCard?.table?.rows.length, 2);
     assert.match(String(bridgeCard?.table?.rows?.[0]?.title || ''), /Bridge Draft/);
     assert.match(String(bridgeCard?.table?.rows?.[0]?.binding_id || ''), /bridge-b/);
     assert.match(String(bridgeCard?.table?.rows?.[0]?.thread_id || ''), /-/);
     assert.equal(
       bridgeCard?.selects?.[0]?.options?.[0]?.callbackData,
-      'cti-thread-select:bridge-binding-1',
+      'cti-thread-select:bridge-session-1',
     );
   });
 

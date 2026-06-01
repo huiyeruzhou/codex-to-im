@@ -34,6 +34,7 @@ export interface BoundThreadCardItem {
   cwd: string;
   lastActiveAt?: string;
   threadId: string;
+  bridgeSessionId?: string;
   bindingId: string;
   active: boolean;
   originator?: string;
@@ -323,18 +324,21 @@ export function buildCodexThreadCommandTableRows(
 }
 
 export function buildBoundThreadCommandTableRows(bindings: BoundThreadCardItem[]): ThreadCommandTableRow[] {
-  return bindings.map((binding, index) => ({
-    index: formatBoundThreadIndex(index + 1, binding.active),
-    title: binding.title || '未命名线程',
-    cwd: formatCommandPath(binding.cwd),
-    lastActiveAt: formatThreadActivityTime(binding.lastActiveAt),
-    bindingId: binding.bindingId.slice(0, 8),
-    threadId: binding.threadId || '-',
-    creator: binding.originator || '当前聊天',
-    command: `/t use ${index + 1}`,
-    active: binding.active,
-    selected: true,
-  }));
+  return bindings.map((binding, index) => {
+    const commandTarget = binding.bridgeSessionId || binding.bindingId;
+    return {
+      index: formatBoundThreadIndex(index + 1, binding.active),
+      title: binding.title || '未命名线程',
+      cwd: formatCommandPath(binding.cwd),
+      lastActiveAt: formatThreadActivityTime(binding.lastActiveAt),
+      bindingId: binding.bindingId.slice(0, 8),
+      threadId: binding.threadId || '-',
+      creator: binding.originator || '当前聊天',
+      command: `/t use ${commandTarget.slice(0, 8)}`,
+      active: binding.active,
+      selected: true,
+    };
+  });
 }
 
 function buildThreadCommandCardTable(rows: ThreadCommandTableRow[]) {
@@ -369,8 +373,8 @@ export function buildBoundThreadsCommandResponse(
     '当前聊天绑定',
     buildBoundThreadCommandTableRows(bindings),
     [
-      '`/t use <序号|binding-id|thread-id|名称>` 切换当前线程；`/t rm <序号|binding-id|thread-id|名称>` 移除绑定；`/t rename <名称>` 重命名当前线程。',
-      '`/t use` 和 `/t rm` 的序号来自 `/t ls` 的局部绑定表；`/t` 和 `/t add` 的序号来自全局本地 Codex 会话表。',
+      '`/t use <序号|bridge-session-id|binding-id|thread-id|名称>` 切换当前线程；`/t detach <序号|bridge-session-id|binding-id|thread-id|名称>` 移除绑定；`/t rename <名称>` 重命名当前线程。',
+      '`/t use` 和 `/t detach` 的序号来自 `/t ls` 的局部绑定表；`/t` 和 `/t attach` 的序号来自全局本地 Codex 会话表。',
     ],
     markdown,
   );
@@ -395,12 +399,7 @@ export function buildCodexThreadsCommandResponse(
   extraFooter: string[] = [],
 ): string {
   const actualCount = codexSessions.length;
-  const totalCount = actualCount + bridgeBindings.length;
-  const title = showAll
-    ? `Bridge / Codex 会话（当前显示 ${totalCount} 条，Codex 最多 ${MAX_CODEX_THREAD_LIST_LIMIT} 条）`
-    : bridgeBindings.length
-      ? `Bridge / Codex 会话（当前显示 ${totalCount} 条，其中 Bridge ${bridgeBindings.length} 条）`
-      : `最近 ${actualCount} 条本地 Codex 会话`;
+  const title = `Codex会话（本地会话${actualCount} + 未绑定的Bridge${bridgeBindings.length}）`;
   const limitNotice = buildCodexThreadLimitNotice(actualCount, limit);
   return buildThreadCommandTableResponse(
     title,
@@ -414,14 +413,14 @@ export function buildCodexThreadsCommandResponse(
       ...(showAll
       ? [
           bridgeBindings.length
-            ? 'Bridge 会话可用 `binding_id` 操作，例如 `/t use <binding_id>` 或 `/t archive <binding_id>`；本地 Codex 会话可用序号接管。'
+            ? 'Bridge 会话用 `bridge_session_id` 操作；本地 Codex 会话可用序号接管。'
             : '发送 `/t 1` 可接管第 1 条本地 Codex 会话。',
           `卡片默认显示最多 ${MAX_CODEX_THREAD_LIST_LIMIT} 条本地 Codex 会话；文本 fallback 默认显示 10 条。`,
           `发送 \`/t n 100\` 可只看最近 100 条本地 Codex 会话（最多 ${MAX_CODEX_THREAD_LIST_LIMIT} 条）。`,
         ]
       : [
           bridgeBindings.length
-            ? 'Bridge 会话可用 `binding_id` 操作，例如 `/t use <binding_id>` 或 `/t archive <binding_id>`；本地 Codex 会话可用序号接管。'
+            ? 'Bridge 会话用 `bridge_session_id` 操作；本地 Codex 会话可用序号接管。'
             : '发送 `/t 1` 可接管第 1 条本地 Codex 会话。',
           `发送 \`/t\` 或 \`/t all\` 可查看最多 ${MAX_CODEX_THREAD_LIST_LIMIT} 条本地 Codex 会话。`,
         ]),
@@ -443,14 +442,7 @@ export function buildCodexThreadsCommandCard(
   } = {},
 ): OutboundRichCard | null {
   const actualCount = codexSessions.length;
-  const totalCount = actualCount + bridgeBindings.length;
-  const title = showAll
-    ? bridgeBindings.length
-      ? `Bridge / Codex 会话（${totalCount}，Codex ${actualCount}/${MAX_CODEX_THREAD_LIST_LIMIT}）`
-      : `本地 Codex 会话（${actualCount}/${MAX_CODEX_THREAD_LIST_LIMIT}）`
-    : bridgeBindings.length
-      ? `Bridge / Codex 会话（${totalCount}，Bridge ${bridgeBindings.length}）`
-      : `最近 ${actualCount} 条本地 Codex 会话`;
+  const title = `Codex会话（本地会话${actualCount} + 未绑定的Bridge${bridgeBindings.length}）`;
   const limitNotice = buildCodexThreadLimitNotice(actualCount, limit);
   const selectedCallbackData = options.selectedThreadId
     ? `${THREAD_SELECT_CALLBACK_PREFIX}${encodeURIComponent(options.selectedThreadId)}`
@@ -462,7 +454,7 @@ export function buildCodexThreadsCommandCard(
   const card: OutboundRichCard = {
     title,
     subtitle: bridgeBindings.length
-      ? 'Bridge 会话可用 `binding_id` 操作；本地 Codex 会话可用序号接管。点击按钮会执行对应命令，也可以继续发送纯文本命令。'
+      ? 'Bridge 会话用 bridge_session_id；本地 Codex 会话可用序号接管。'
       : '`binding_id` 非 `-` 表示已绑定。点击按钮会执行对应命令，也可以继续发送纯文本命令。',
     template: 'blue',
     table: buildThreadCommandCardTable(tableRows),
@@ -474,7 +466,7 @@ export function buildCodexThreadsCommandCard(
       options: [
         ...bridgeBindings.map((binding, index) => ({
           text: `${index + 1}. ${binding.title || binding.cwd || '未命名线程'}`,
-          callbackData: `${THREAD_SELECT_CALLBACK_PREFIX}${encodeURIComponent(binding.bindingId)}`,
+          callbackData: `${THREAD_SELECT_CALLBACK_PREFIX}${encodeURIComponent(binding.bridgeSessionId || binding.bindingId)}`,
         })),
         ...codexSessions.map((session, index) => ({
           text: `${bridgeBindings.length + index + 1}. ${session.title || session.cwd || '未命名线程'}`,
@@ -485,12 +477,12 @@ export function buildCodexThreadsCommandCard(
     actions: buildThreadCardActionRows([
       {
         text: '绑定',
-        callbackData: buildThreadActionCallbackData('global', 'bind'),
+        callbackData: buildThreadActionCallbackData('global', 'attach'),
         type: 'primary',
       },
       {
         text: '解绑',
-        callbackData: buildThreadActionCallbackData('global', 'rm'),
+        callbackData: buildThreadActionCallbackData('global', 'detach'),
         type: 'danger',
       },
       {
@@ -518,16 +510,16 @@ export function buildCodexThreadsCommandCard(
       ? [
           ...(limitNotice ? [limitNotice] : []),
           bridgeBindings.length
-            ? '纯文本命令：Bridge 会话可用 `binding_id` 操作，例如 `/t use <binding_id>` 或 `/t archive <binding_id>`；本地 Codex 会话可用序号接管。'
-            : '纯文本命令：`/t 1` 接管第 1 条，`/t add 1` 添加但不激活，`/t archive 1` 归档第 1 条。',
-          '`/t`、`/t add` 和 `/t archive` 的序号来自这张全局本地 Codex 会话表；`/t use` 和 `/t rm` 的序号来自 `/t ls` 的局部绑定表。',
+            ? '纯文本命令：Bridge 会话用 `/t use <bridge_session_id>` 或 `/t archive <bridge_session_id>`。'
+            : '纯文本命令：`/t 1` 接管第 1 条，`/t attach 1` 绑定但不激活，`/t archive 1` 归档第 1 条。',
+          '`/t`、`/t attach` 和 `/t archive` 的序号来自这张全局本地 Codex 会话表；`/t use` 和 `/t detach` 的序号来自 `/t ls` 的局部绑定表。',
         ]
       : [
           ...(limitNotice ? [limitNotice] : []),
           bridgeBindings.length
-            ? '纯文本命令：Bridge 会话可用 `binding_id` 操作，例如 `/t use <binding_id>` 或 `/t archive <binding_id>`；本地 Codex 会话可用序号接管。'
-            : '纯文本命令：`/t 1` 接管第 1 条，`/t add 1` 添加但不激活。',
-          '`/t`、`/t add` 和 `/t archive` 的序号来自这张全局本地 Codex 会话表；`/t use` 和 `/t rm` 的序号来自 `/t ls` 的局部绑定表。',
+            ? '纯文本命令：Bridge 会话用 `/t use <bridge_session_id>` 或 `/t archive <bridge_session_id>`。'
+            : '纯文本命令：`/t 1` 接管第 1 条，`/t attach 1` 绑定但不激活。',
+          '`/t`、`/t attach` 和 `/t archive` 的序号来自这张全局本地 Codex 会话表；`/t use` 和 `/t detach` 的序号来自 `/t ls` 的局部绑定表。',
           `更多：\`/t\` 或 \`/t all\` 最多 ${MAX_CODEX_THREAD_LIST_LIMIT} 条。`,
         ],
   };
@@ -552,7 +544,7 @@ export function buildBoundThreadsCommandCard(
     : undefined;
   const card: OutboundRichCard = {
     title: `当前聊天绑定（${bindings.length}）`,
-    subtitle: '这张表只显示当前聊天已绑定线程；命令列里的序号只用于 `/t use` 和 `/t rm`。',
+    subtitle: '这张表只显示当前聊天已绑定线程；命令列里的序号只用于 `/t use` 和 `/t detach`。',
     template: 'blue',
     table: buildThreadCommandCardTable(buildBoundThreadCommandTableRows(bindings)),
     sections: [],
@@ -564,7 +556,7 @@ export function buildBoundThreadsCommandCard(
             selectedCallbackData,
             options: bindings.map((binding, index) => ({
               text: `${index + 1}. ${binding.title || binding.cwd || '未命名线程'}`,
-              callbackData: `${THREAD_SELECT_CALLBACK_PREFIX}${encodeURIComponent(binding.bindingId)}`,
+              callbackData: `${THREAD_SELECT_CALLBACK_PREFIX}${encodeURIComponent(binding.bridgeSessionId || binding.bindingId)}`,
             })),
           }],
         }
@@ -573,7 +565,7 @@ export function buildBoundThreadsCommandCard(
       ? [
           {
             text: '解绑',
-            callbackData: buildThreadActionCallbackData('bound', 'rm'),
+            callbackData: buildThreadActionCallbackData('bound', 'detach'),
             type: 'danger',
           },
           {
@@ -605,8 +597,8 @@ export function buildBoundThreadsCommandCard(
           },
         ]),
     footer: [
-      '纯文本命令：`/t use 1` 激活第 1 个绑定线程，`/t rm 1` 移除第 1 个绑定线程。',
-      '`/t use` 和 `/t rm` 的序号来自这张局部绑定表；`/t` 和 `/t add` 的序号来自全局本地 Codex 会话表。',
+      '纯文本命令：`/t use 1` 激活第 1 个绑定线程，`/t detach 1` 移除第 1 个绑定线程。',
+      '`/t use` 和 `/t detach` 的序号来自这张局部绑定表；`/t` 和 `/t attach` 的序号来自全局本地 Codex 会话表。',
     ],
   };
   if (options.channelType && options.chatId) {
