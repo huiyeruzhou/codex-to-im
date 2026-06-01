@@ -47,7 +47,6 @@ export class CommandThreadDisplay {
     selectedThreadId?: string | null,
     bridgeBindings: BoundThreadCardItem[] = this.bridgeOnlyBoundThreadCardItems(channelType, chatId),
   ): OutboundRichCard | undefined {
-    if ((!codexSessions || codexSessions.length === 0) && bridgeBindings.length === 0) return undefined;
     return buildCodexThreadsCommandCard(
       this.decorateCodexSessions(codexSessions || [], channelType, chatId),
       showAll,
@@ -131,19 +130,27 @@ export class CommandThreadDisplay {
   }
 
   boundThreadCardItems(channelType: string, chatId: string): BoundThreadCardItem[] {
-    return listBindingsForChat(this.store, channelType, chatId).map((binding) => {
-      const display = this.binding(binding);
-        return {
-          title: display.title,
-          cwd: display.cwd,
-          lastActiveAt: display.lastActiveAt,
-          threadId: display.threadId,
-          bridgeSessionId: binding.bridgeSessionId,
-          bindingId: binding.id,
-          active: binding.active !== false,
-          originator: display.originator,
-      };
-    });
+    return this.sortedBoundBindings(channelType, chatId).map(({ item }) => item);
+  }
+
+  sortedBoundBindings(channelType: string, chatId: string): Array<{ binding: ChannelBinding; item: BoundThreadCardItem }> {
+    return listBindingsForChat(this.store, channelType, chatId)
+      .map((binding) => ({ binding, item: this.boundThreadCardItem(binding) }))
+      .sort((a, b) => compareBoundThreadActivityDesc(a.item, b.item));
+  }
+
+  private boundThreadCardItem(binding: ChannelBinding): BoundThreadCardItem {
+    const display = this.binding(binding);
+    return {
+      title: display.title,
+      cwd: display.cwd,
+      lastActiveAt: display.lastActiveAt,
+      threadId: display.threadId,
+      bridgeSessionId: binding.bridgeSessionId,
+      bindingId: binding.id,
+      active: binding.active !== false,
+      originator: display.originator,
+    };
   }
 
   bridgeOnlyBoundThreadCardItems(channelType: string, chatId: string): BoundThreadCardItem[] {
@@ -182,3 +189,14 @@ export class CommandThreadDisplay {
 }
 
 export type { ThreadCardScope };
+
+function activityTimeMs(value: string | undefined): number {
+  const time = Date.parse(value || '');
+  return Number.isNaN(time) ? 0 : time;
+}
+
+function compareBoundThreadActivityDesc(a: BoundThreadCardItem, b: BoundThreadCardItem): number {
+  const timeDiff = activityTimeMs(b.lastActiveAt) - activityTimeMs(a.lastActiveAt);
+  if (timeDiff !== 0) return timeDiff;
+  return (a.title || '').localeCompare(b.title || '');
+}

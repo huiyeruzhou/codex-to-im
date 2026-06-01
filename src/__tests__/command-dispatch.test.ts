@@ -13,7 +13,10 @@ import { handleBridgeCommand } from '../lib/bridge/command.js';
 import { _testOnlyTmuxScreenMonitors } from '../lib/bridge/command/tmux.js';
 import { buildCommandCallbackData, parseCommandCallbackData } from '../lib/bridge/command-callbacks.js';
 import * as router from '../lib/bridge/channel-router.js';
-import { getThreadTableMessageRecord } from '../lib/bridge/command/thread-table-message-pins.js';
+import {
+  getThreadTableMessageRecord,
+  persistAndPinLatestThreadTableMessage,
+} from '../lib/bridge/command/thread-table-message-pins.js';
 import { listAutoTasks } from '../lib/bridge/auto-tasks.js';
 import {
   buildCodexSandboxArgs,
@@ -1555,6 +1558,8 @@ describe('command-dispatch', () => {
     const address = { channelType: 'feishu', chatId: 'chat-t-multi' } as const;
     const first = router.createBinding(address, 'D:\\workspace\\first');
     const second = router.createBinding(address, 'D:\\workspace\\second');
+    store.updateSession(first.bridgeSessionId, { last_progress_at: '2026-06-01T08:00:00.000Z' }, { touch: false });
+    store.updateSession(second.bridgeSessionId, { last_progress_at: '2026-06-01T09:00:00.000Z' }, { touch: false });
 
     assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, second.id);
     assert.equal(store.listChannelBindings().filter((binding) => binding.chatId === address.chatId).length, 2);
@@ -1598,10 +1603,10 @@ describe('command-dispatch', () => {
       [['解绑', '归档', '激活'], ['刷新']],
     );
     assert.equal(richCards.at(-1)?.table?.columns[0]?.horizontalAlign, 'center');
-    assert.equal(richCards.at(-1)?.table?.rows[0]?.index, "<number_tag background_color='grey-500' font_color='white'>1</number_tag>");
-    assert.doesNotMatch(String(richCards.at(-1)?.table?.rows[0]?.title || ''), /^<font color=/);
-    assert.equal(richCards.at(-1)?.table?.rows[1]?.index, "**<number_tag background_color='green-350' font_color='white'>2</number_tag>**");
-    assert.match(String(richCards.at(-1)?.table?.rows[1]?.title || ''), /^\*\*.+\*\*$/);
+    assert.equal(richCards.at(-1)?.table?.rows[0]?.index, "**<number_tag background_color='green-350' font_color='white'>1</number_tag>**");
+    assert.match(String(richCards.at(-1)?.table?.rows[0]?.title || ''), /^\*\*.+\*\*$/);
+    assert.equal(richCards.at(-1)?.table?.rows[1]?.index, "<number_tag background_color='grey-500' font_color='white'>2</number_tag>");
+    assert.doesNotMatch(String(richCards.at(-1)?.table?.rows[1]?.title || ''), /^<font color=/);
     assert.deepEqual(pinned, ['reply-t-1']);
     assert.deepEqual(unpinned, []);
     assert.deepEqual(getThreadTableMessageRecord(address), {
@@ -1637,10 +1642,10 @@ describe('command-dispatch', () => {
       adapter,
       {
         address,
-        text: '/t use 1',
+        text: '/t use 2',
         messageId: 'incoming-t-use',
       } as any,
-      '/t use 1',
+      '/t use 2',
       {
         getActiveTask: () => undefined,
         diagnoseSessionHealth: async () => null,
@@ -1666,9 +1671,9 @@ describe('command-dispatch', () => {
       },
     );
     const remaining = store.listChannelBindings().filter((binding) => binding.chatId === address.chatId);
-    assert.deepEqual(remaining.map((binding) => binding.id), [first.id]);
+    assert.deepEqual(remaining.map((binding) => binding.id), [second.id]);
     assert.ok(store.getSession(second.bridgeSessionId));
-    assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, first.id);
+    assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, second.id);
     assert.match(sent.at(-1) || '', /已脱离绑定线程/);
     assert.equal(richCards.length, 2);
 
@@ -1689,6 +1694,31 @@ describe('command-dispatch', () => {
     assert.equal(store.listChannelBindings().filter((binding) => binding.chatId === address.chatId).length, 0);
     assert.match(sent.at(-1) || '', /已脱离绑定线程/);
     assert.equal(richCards.length, 2);
+  });
+
+  it('does not repin an already pinned thread table message after in-place refresh', async () => {
+    initTestContext();
+    const pinned: string[] = [];
+    const unpinned: string[] = [];
+    const adapter: any = {
+      pinMessage: async (_chatId: string, messageId: string) => {
+        pinned.push(messageId);
+        return { ok: true, messageId };
+      },
+      unpinMessage: async (_chatId: string, messageId: string) => {
+        unpinned.push(messageId);
+        return { ok: true, messageId };
+      },
+    };
+    const address = { channelType: 'feishu', chatId: 'chat-t-pin' } as const;
+
+    await persistAndPinLatestThreadTableMessage(adapter, address, 'bound', 'message-1');
+    await persistAndPinLatestThreadTableMessage(adapter, address, 'bound', 'message-1');
+
+    assert.deepEqual(pinned, ['message-1']);
+    assert.deepEqual(unpinned, []);
+    assert.equal(getThreadTableMessageRecord(address, 'bound')?.messageId, 'message-1');
+    assert.equal(getThreadTableMessageRecord(address, 'bound')?.pinnedMessageId, 'message-1');
   });
 
   it('keeps /t text fallback at 10 rows while the rich card shows up to 200 rows', async () => {
@@ -1957,11 +1987,15 @@ describe('command-dispatch', () => {
 
   it('renders actionable rich cards for empty /t ls and /auto ls tables', async () => {
     initTestContext();
+    fs.rmSync(path.join(process.env.CODEX_HOME!, 'sessions'), { recursive: true, force: true });
+    fs.rmSync(path.join(process.env.CODEX_HOME!, 'session_index.jsonl'), { force: true });
     const richCards: OutboundRichCard[] = [];
+    const texts: string[] = [];
     const adapter: any = {
       channelType: 'feishu',
       provider: 'feishu',
       send: async (message: { text: string; richCard?: OutboundRichCard }) => {
+        texts.push(message.text);
         if (message.richCard) richCards.push(message.richCard);
         return { ok: true, messageId: `reply-empty-${richCards.length}` };
       },
@@ -1987,6 +2021,30 @@ describe('command-dispatch', () => {
     assert.equal(richCards.at(-1)?.table?.rows.length, 0);
     assert.equal(richCards.at(-1)?.selects, undefined);
     assert.deepEqual(richCards.at(-1)?.actions?.flat().map((action) => action.text), ['新建', '刷新']);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address: emptyAddress,
+        text: '/t',
+        messageId: 'incoming-empty-t',
+      } as any,
+      '/t',
+      {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      },
+    );
+
+    assert.doesNotMatch(texts.at(-1) || '', /没有找到本地 Codex 会话/);
+    assert.equal(richCards.at(-1)?.title, 'Codex会话（本地会话0 + 未绑定的Bridge0）');
+    assert.equal(richCards.at(-1)?.table?.rows.length, 0);
+    assert.equal(richCards.at(-1)?.selects, undefined);
+    assert.deepEqual(
+      richCards.at(-1)?.actions?.map((row) => row.map((action) => action.text)),
+      [['绑定', '解绑', '归档'], ['激活', '新建', '刷新']],
+    );
 
     const autoAddress = { channelType: 'feishu', chatId: 'chat-empty-auto' } as const;
     router.createBinding(autoAddress, 'D:\\workspace\\empty-auto');
@@ -2232,6 +2290,8 @@ describe('command-dispatch', () => {
     const address = { channelType: 'feishu', chatId: 'chat-auto' } as const;
     const first = router.createBinding(address, 'D:\\workspace\\auto-first');
     const second = router.createBinding(address, 'D:\\workspace\\auto-second');
+    store.updateSession(first.bridgeSessionId, { last_progress_at: '2026-06-01T08:00:00.000Z' }, { touch: false });
+    store.updateSession(second.bridgeSessionId, { last_progress_at: '2026-06-01T09:00:00.000Z' }, { touch: false });
     const scriptDir = path.join(process.env.CODEX_HOME!, 'auto-scripts');
     fs.mkdirSync(scriptDir, { recursive: true });
     const scriptPath = path.join(scriptDir, `cti-auto-${Date.now()}.sh`);
@@ -2299,10 +2359,10 @@ describe('command-dispatch', () => {
       adapter,
       {
         address,
-        text: '/t use 1',
+        text: '/t use 2',
         messageId: 'incoming-auto-switch',
       } as any,
-      '/t use 1',
+      '/t use 2',
       deps,
     );
     assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, first.id);

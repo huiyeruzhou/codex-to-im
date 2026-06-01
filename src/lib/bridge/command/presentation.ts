@@ -467,21 +467,25 @@ export function buildCodexThreadsCommandCard(
     template: 'blue',
     table: buildThreadCommandCardTable(tableRows),
     sections: [],
-    selects: [{
-      id: 'codex_select',
-      placeholder: bridgeBindings.length ? '选择 Bridge / Codex 会话' : '选择本地 Codex 会话',
-      selectedCallbackData,
-      options: [
-        ...bridgeBindings.map((binding, index) => ({
-          text: `${index + 1}. ${binding.title || binding.cwd || '未命名线程'}`,
-          callbackData: `${THREAD_SELECT_CALLBACK_PREFIX}${encodeURIComponent(binding.bridgeSessionId || binding.bindingId)}`,
-        })),
-        ...codexSessions.map((session, index) => ({
-          text: `${bridgeBindings.length + index + 1}. ${session.title || session.cwd || '未命名线程'}`,
-          callbackData: `${THREAD_SELECT_CALLBACK_PREFIX}${encodeURIComponent(session.threadId)}`,
-        })),
-      ],
-    }],
+    ...(tableRows.length > 0
+      ? {
+          selects: [{
+            id: 'codex_select',
+            placeholder: bridgeBindings.length ? '选择 Bridge / Codex 会话' : '选择本地 Codex 会话',
+            selectedCallbackData,
+            options: [
+              ...bridgeBindings.map((binding, index) => ({
+                text: `${index + 1}. ${binding.title || binding.cwd || '未命名线程'}`,
+                callbackData: `${THREAD_SELECT_CALLBACK_PREFIX}${encodeURIComponent(binding.bridgeSessionId || binding.bindingId)}`,
+              })),
+              ...codexSessions.map((session, index) => ({
+                text: `${bridgeBindings.length + index + 1}. ${session.title || session.cwd || '未命名线程'}`,
+                callbackData: `${THREAD_SELECT_CALLBACK_PREFIX}${encodeURIComponent(session.threadId)}`,
+              })),
+            ],
+          }],
+        }
+      : {}),
     actions: buildThreadCardActionRows([
       {
         text: '绑定',

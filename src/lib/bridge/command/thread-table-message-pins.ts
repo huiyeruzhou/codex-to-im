@@ -99,6 +99,11 @@ export async function persistAndPinLatestThreadTableMessage(
   const previous = getThreadTableMessageRecord(address, scope);
   let pinnedMessageId = previous?.pinnedMessageId;
 
+  if (previous?.messageId === trimmedMessageId && previous.pinnedMessageId === trimmedMessageId) {
+    saveThreadTableMessageRecord(address, scope, trimmedMessageId, pinnedMessageId);
+    return;
+  }
+
   if (adapter.pinMessage) {
     const pinResult = await adapter.pinMessage(address.chatId, trimmedMessageId);
     if (pinResult.ok) {

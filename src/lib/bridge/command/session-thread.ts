@@ -1015,7 +1015,9 @@ export async function handleThreadBindingCommand(options: {
     if (!targetToken) {
       return { response: '用法：/t use <序号|binding-id|thread-id|名称>。发送 `/t ls` 查看已绑定线程。' };
     }
-    const bindings = listBindingsForChat(options.store, options.msg.address.channelType, options.msg.address.chatId);
+    const bindings = options.threadDisplay
+      .sortedBoundBindings(options.msg.address.channelType, options.msg.address.chatId)
+      .map(({ binding }) => binding);
     const selected = options.threadDisplay.resolveBoundBindingSelection(bindings, targetToken);
     if (selected.ambiguous) {
       return { response: '匹配到多个绑定线程，请先发送 `/t ls` 查看列表，再用序号切换。' };
@@ -1062,7 +1064,9 @@ export async function handleThreadBindingCommand(options: {
     if (!targetToken) {
       return { response: '用法：/t detach <序号|binding-id|thread-id|名称>。发送 `/t ls` 查看已绑定线程。' };
     }
-    const bindings = listBindingsForChat(options.store, options.msg.address.channelType, options.msg.address.chatId);
+    const bindings = options.threadDisplay
+      .sortedBoundBindings(options.msg.address.channelType, options.msg.address.chatId)
+      .map(({ binding }) => binding);
     const selected = options.threadDisplay.resolveBoundBindingSelection(bindings, targetToken);
     if (selected.ambiguous) {
       return { response: '匹配到多个绑定线程，请先发送 `/t ls` 查看列表，再用序号脱离。' };
@@ -1215,9 +1219,6 @@ export async function handleThreadSwitchCommand(options: {
       return { response: '读取本地 Codex 会话列表失败，请稍后重试。' };
     }
     const bridgeBindings = options.threadDisplay.bridgeOnlyBoundThreadCardItems(options.msg.address.channelType, options.msg.address.chatId);
-    if (codexSessions.length === 0 && bridgeBindings.length === 0) {
-      return { response: '没有找到本地 Codex 会话。先在 本机 Codex 中打开一个会话，再回来试一次。' };
-    }
     const decoratedSessions = options.threadDisplay.decorateCodexSessions(codexSessions, options.msg.address.channelType, options.msg.address.chatId);
     return {
       response: buildCodexThreadsCommandResponse(
@@ -1459,13 +1460,6 @@ export function handleCodexThreadsCommand(options: {
     return { response: '读取本地 Codex 会话列表失败，请稍后重试。' };
   }
   const bridgeBindings = options.threadDisplay.bridgeOnlyBoundThreadCardItems(options.msg.address.channelType, options.msg.address.chatId);
-  if (textCodexSessions.length === 0 && bridgeBindings.length === 0) {
-    return {
-      response: showAll
-        ? '没有找到本地 Codex 会话。先在 本机 Codex 中打开一个会话，再回来试一次。'
-        : '没有找到本地 Codex 会话。先在 本机 Codex 中打开一个会话，再回来试一次。',
-    };
-  }
   const isDefaultListRequest = options.args.trim() === '';
   const cardShowAll = isDefaultListRequest || showAll;
   const cardLimit = isDefaultListRequest ? MAX_CODEX_THREAD_LIST_LIMIT : limit;
