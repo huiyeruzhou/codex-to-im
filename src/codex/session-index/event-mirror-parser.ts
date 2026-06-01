@@ -280,6 +280,9 @@ function pushCodexMirrorEventRecord(
     const toolId = extractNormalizedFreeText(parsed.payload.call_id) || signature;
     const exitCode = typeof parsed.payload.exit_code === 'number' ? parsed.payload.exit_code : null;
     const status = extractNormalizedFreeText(parsed.payload.status).toLowerCase();
+    const commandInput = Array.isArray(parsed.payload.command)
+      ? parsed.payload.command.join(' ')
+      : parsed.payload.command;
     records.push({
       signature,
       type: 'tool_finished',
@@ -294,6 +297,7 @@ function pushCodexMirrorEventRecord(
       ...(parsed.payload.turn_id || activeTurnId ? { turnId: parsed.payload.turn_id || activeTurnId || undefined } : {}),
       toolId,
       toolName: 'Bash',
+      toolInput: commandInput,
       isError: status === 'failed' || (exitCode != null && exitCode !== 0),
     });
     return true;
@@ -327,6 +331,7 @@ function pushCodexMirrorEventRecord(
       ...(parsed.payload.turnId || activeTurnId ? { turnId: parsed.payload.turnId || activeTurnId || undefined } : {}),
       toolId,
       toolName,
+      toolInput: parsed.payload.arguments,
     });
     return true;
   }
@@ -427,6 +432,7 @@ function pushCodexMirrorResponseRecord(
       ...(activeTurnId ? { turnId: activeTurnId } : {}),
       toolId,
       toolName: 'tool_search',
+      toolInput: parsed.payload.arguments,
     });
     return true;
   }
@@ -472,6 +478,7 @@ function pushCodexMirrorResponseRecord(
       ...(activeTurnId ? { turnId: activeTurnId } : {}),
       toolId,
       toolName,
+      toolInput: parsed.payload.arguments,
     });
     return true;
   }
@@ -501,6 +508,7 @@ function pushCodexMirrorResponseRecord(
       ...(activeTurnId ? { turnId: activeTurnId } : {}),
       toolId,
       toolName,
+      toolInput: parsed.payload.input,
     });
     return true;
   }

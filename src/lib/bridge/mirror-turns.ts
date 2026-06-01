@@ -2,6 +2,7 @@ import type { CodexMirrorRecord } from '../../codex/session-index.js';
 import type { ContextUsageInfo } from './context-usage.js';
 import type { TaskProgressInfo, ToolCallInfo } from './types.js';
 import { buildMirrorStreamKey, formatMirrorUserText } from './mirror-formatters.js';
+import { applyCodexTurnEventToTools, codexTurnEventFromMirrorRecord } from './codex-turn-events.js';
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -63,6 +64,7 @@ export interface MirrorTurnHooks<TSubscription extends MirrorTurnStateHolder = M
   onStatusProgress?: (subscription: TSubscription, turnState: CodexMirrorTurnState) => void;
   onTaskProgress?: (subscription: TSubscription, turnState: CodexMirrorTurnState) => void;
   onToolProgress?: (subscription: TSubscription, turnState: CodexMirrorTurnState) => void;
+  showToolCallDetails?: boolean;
 }
 
 export function createMirrorTurnState(
@@ -331,13 +333,12 @@ export function consumeMirrorRecords<TSubscription extends MirrorTurnStateHolder
 
     if (record.type === 'tool_started') {
       const pendingTurn = ensureMirrorTurnState(subscription, record);
-      const toolId = record.toolId || record.signature;
-      const toolName = record.toolName || pendingTurn.toolCalls.get(toolId)?.name || 'tool';
-      pendingTurn.toolCalls.set(toolId, {
-        id: toolId,
-        name: toolName,
-        status: 'running',
-      });
+      const event = codexTurnEventFromMirrorRecord(record);
+      if (event) {
+        applyCodexTurnEventToTools(pendingTurn.toolCalls, event, {
+          showToolCallDetails: hooks.showToolCallDetails === true,
+        });
+      }
       markMirrorActivity(pendingTurn, record.timestamp);
       hooks.onToolProgress?.(subscription, pendingTurn);
       continue;
@@ -345,13 +346,12 @@ export function consumeMirrorRecords<TSubscription extends MirrorTurnStateHolder
 
     if (record.type === 'tool_finished') {
       const pendingTurn = ensureMirrorTurnState(subscription, record);
-      const toolId = record.toolId || record.signature;
-      const existing = pendingTurn.toolCalls.get(toolId);
-      pendingTurn.toolCalls.set(toolId, {
-        id: toolId,
-        name: existing?.name || record.toolName || 'tool',
-        status: record.isError ? 'error' : 'complete',
-      });
+      const event = codexTurnEventFromMirrorRecord(record);
+      if (event) {
+        applyCodexTurnEventToTools(pendingTurn.toolCalls, event, {
+          showToolCallDetails: hooks.showToolCallDetails === true,
+        });
+      }
       markMirrorActivity(pendingTurn, record.timestamp);
       hooks.onToolProgress?.(subscription, pendingTurn);
       continue;

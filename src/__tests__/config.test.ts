@@ -101,7 +101,7 @@ describe('configToSettings', () => {
     assert.equal(m.get('bridge_history_message_limit'), '8');
     assert.equal(m.get('bridge_stream_status_idle_start_seconds'), '180');
     assert.equal(m.get('bridge_stream_status_check_interval_seconds'), '10');
-    assert.equal(m.get('bridge_sdk_tool_call_details_in_text'), 'true');
+    assert.equal(m.get('bridge_show_tool_call_details'), 'true');
 
     const configured = configToSettings({
       ...base,
@@ -115,7 +115,7 @@ describe('configToSettings', () => {
       codexSandboxMode: 'danger-full-access',
       codexNetworkAccess: true,
       codexReasoningEffort: 'xhigh',
-      sdkToolCallDetailsInText: false,
+      showToolCallDetails: false,
       defaultMode: 'yolo',
     });
     assert.equal(configured.get('bridge_default_model'), 'gpt-4o');
@@ -129,7 +129,7 @@ describe('configToSettings', () => {
     assert.equal(configured.get('bridge_codex_sandbox_mode'), 'danger-full-access');
     assert.equal(configured.get('bridge_codex_network_access'), 'true');
     assert.equal(configured.get('bridge_codex_reasoning_effort'), 'xhigh');
-    assert.equal(configured.get('bridge_sdk_tool_call_details_in_text'), 'false');
+    assert.equal(configured.get('bridge_show_tool_call_details'), 'false');
     assert.equal(configured.get('bridge_default_mode'), 'yolo');
   });
 
@@ -268,7 +268,7 @@ describe('loadConfig/saveConfig round-trip', () => {
           defaultMode: 'normal',
           historyMessageLimit: 8,
           codexSandboxMode: 'workspace-write',
-          sdkToolCallDetailsInText: true,
+          showToolCallDetails: true,
         },
         channels: [
           {
@@ -304,7 +304,7 @@ describe('loadConfig/saveConfig round-trip', () => {
         'CTI_DEFAULT_PROVIDER=tmux',
         'CTI_HISTORY_MESSAGE_LIMIT=15',
         'CTI_CODEX_SANDBOX_MODE=danger-full-access',
-        'CTI_SDK_TOOL_CALL_DETAILS_IN_TEXT=false',
+        'CTI_SHOW_TOOL_CALL_DETAILS=false',
         'CTI_FEISHU_APP_ID=env-app',
       ].join('\n'),
     );
@@ -328,7 +328,7 @@ describe('loadConfig/saveConfig round-trip', () => {
     assert.equal(loaded.defaultProvider, 'tmux');
     assert.equal(loaded.historyMessageLimit, 15);
     assert.equal(loaded.codexSandboxMode, 'danger-full-access');
-    assert.equal(loaded.sdkToolCallDetailsInText, true);
+    assert.equal(loaded.showToolCallDetails, false);
     assert.deepEqual(
       loaded.channels?.map((channel) => ({
         id: channel.id,
@@ -350,7 +350,7 @@ describe('loadConfig/saveConfig round-trip', () => {
     const persisted = JSON.parse(fs.readFileSync(CONFIG_V2_PATH, 'utf-8')) as any;
     assert.equal(persisted.runtime.defaultModel, 'new-model');
     assert.equal(persisted.runtime.defaultProvider, 'tmux');
-    assert.equal(persisted.runtime.sdkToolCallDetailsInText, true);
+    assert.equal(persisted.runtime.showToolCallDetails, false);
     assert.equal(persisted.channels[0].config.appId, 'old-app');
     assert.equal(persisted.channels[2].config.appId, 'env-app');
   });
@@ -556,7 +556,7 @@ describe('loadConfig/saveConfig round-trip', () => {
       historyMessageLimit: 12,
       streamStatusIdleStartSeconds: 240,
       streamStatusCheckIntervalSeconds: 15,
-      sdkToolCallDetailsInText: false,
+      showToolCallDetails: false,
     });
 
     const reloaded = loadConfig();
@@ -587,8 +587,8 @@ describe('loadConfig/saveConfig round-trip', () => {
     assert.equal(reloaded.historyMessageLimit, 12);
     assert.equal(reloaded.streamStatusIdleStartSeconds, 240);
     assert.equal(reloaded.streamStatusCheckIntervalSeconds, 15);
-    assert.equal(reloaded.sdkToolCallDetailsInText, false);
-    assert.doesNotMatch(fs.readFileSync(CONFIG_PATH, 'utf-8'), /CTI_SDK_TOOL_CALL_DETAILS_IN_TEXT/);
+    assert.equal(reloaded.showToolCallDetails, false);
+    assert.doesNotMatch(fs.readFileSync(CONFIG_PATH, 'utf-8'), /CTI_SHOW_TOOL_CALL_DETAILS/);
     assert.match(fs.readFileSync(CONFIG_PATH, 'utf-8'), /CTI_DEFAULT_PROVIDER=sdk/);
   });
 });

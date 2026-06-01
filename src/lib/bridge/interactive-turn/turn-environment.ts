@@ -22,7 +22,7 @@ export interface InteractiveStreamStatusTimingConfig {
 export interface InteractiveTurnRuntimeSettings {
   stream: InteractiveStreamConfig;
   statusTiming: InteractiveStreamStatusTimingConfig;
-  writeSdkToolDetailsInText: boolean;
+  showToolCallDetails: boolean;
 }
 
 export type ReadInteractiveTurnSetting = (key: string) => string | null | undefined;
@@ -106,7 +106,7 @@ export function resolveInteractiveTurnRuntimeSettings(
         (Number.isFinite(heartbeatSeconds) && heartbeatSeconds > 0 ? heartbeatSeconds : STREAM_STATUS_HEARTBEAT_MS / 1000) * 1000,
       ),
     },
-    writeSdkToolDetailsInText: readSetting('bridge_sdk_tool_call_details_in_text') !== 'false',
+    showToolCallDetails: readSetting('bridge_show_tool_call_details') !== 'false',
   };
 }
 

@@ -52,7 +52,7 @@ export function buildHelpCommandResponse(): string {
     '- `/r` 查看思考级别；可用 `1 | 2 | 3 | 4 | 5`',
     '- `/sb` 查看或切换 Codex 沙箱；可用 `read-only | workspace-write | danger-full-access | default`',
     '- `/net` 查看或切换 Codex 网络；可用 `on | off | default`',
-    '- `/ui` 查看 UI 显示设置；`/ui on|off` 切换 SDK 工具输入输出显示',
+    '- `/ui` 查看 UI 显示设置；`/ui on|off` 切换工具输入输出显示',
     '- `/model` 查看当前模型；`/model gpt-5.4` 可切换，`/model default` 回退到默认模型',
     '- `/set` 查看全局配置；`/set <key> <value>` 修改 UI 设置页里的非 channel 配置',
     '- `/t 0` 临时草稿线程',

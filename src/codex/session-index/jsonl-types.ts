@@ -25,6 +25,7 @@ export interface CodexMirrorRecord {
   turnId?: string;
   toolId?: string;
   toolName?: string;
+  toolInput?: unknown;
   isError?: boolean;
   tasks?: TaskProgressInfo[];
   contextUsage?: ContextUsageInfo;

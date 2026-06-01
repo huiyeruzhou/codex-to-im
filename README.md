@@ -204,7 +204,7 @@ Codex Native、CLI 或 TUI 继续操作这条共享线程时，结果也会同�
 - `/tmux-set enter on|off`：设置 `/tmux ...` 每次发送内容后是否自动补 Enter。
 - `/tmux ...`：向当前绑定 tmux session 发送按键并自动返回屏幕。
 - `/reasoning <1-5>`：切换思考级别。
-- `/ui`：查看 UI 显示设置；`/ui on|off` 可切换 SDK 工具输入输出显示。
+- `/ui`：查看 UI 显示设置；`/ui on|off` 可切换工具输入输出显示。
 - `/model`：查看当前模型和可选模型。
 - `/model <模型名>`：切换当前 IM 会话模型。
 - `/history` 或 `/his [N]`：把当前线程最近消息渲染成卡片发送。

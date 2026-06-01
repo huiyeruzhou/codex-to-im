@@ -14,8 +14,10 @@ import type {
   InteractiveStreamFeedback,
   InteractiveStreamUiController,
 } from './stream-ui-controller.js';
-import { maskSecrets } from '../../../logger.js';
-import { sanitizeInput } from '../security/validators.js';
+import {
+  applyCodexTurnEventToTools,
+  codexTurnEventFromSdkToolEvent,
+} from '../codex-turn-events.js';
 
 export interface InteractiveSdkStreamEventTaskState {
   lastActivityAt: number;
@@ -30,7 +32,7 @@ export interface CreateInteractiveSdkStreamEventsControllerParams {
   taskState: InteractiveSdkStreamEventTaskState;
   streamUi: InteractiveStreamUiController;
   streamFeedback: InteractiveStreamFeedback;
-  showSdkToolDetails: boolean;
+  showToolCallDetails: boolean;
   nowMs(): number;
   isCurrentTask(sessionId: string, taskId: string): boolean;
   touchTask(sessionId: string, taskId: string): void;
@@ -52,36 +54,6 @@ export interface InteractiveSdkStreamEventsController {
   onContextUsage(contextUsage: ContextUsageInfo): void;
   onPermissionWait(toolName: string): void;
   pushFinalCardText(text: string): void;
-}
-
-function summarizeToolValue(value: unknown, maxChars: number): string {
-  if (value == null) return '';
-  if (typeof value === 'object' && value) {
-    const record = value as Record<string, unknown>;
-    const commandValue = record.command;
-    if (typeof commandValue === 'string' && commandValue.trim()) {
-      const trimmedCommand = commandValue.trim();
-      const bashPrefix = '/bin/bash -lc "';
-      const extracted = trimmedCommand.startsWith(bashPrefix) && trimmedCommand.endsWith('"')
-        ? trimmedCommand.slice(bashPrefix.length, -1)
-        : trimmedCommand;
-      const masked = maskSecrets(extracted);
-      const { text, truncated } = sanitizeInput(masked, maxChars);
-      return truncated ? `${text}\n…(truncated)` : text;
-    }
-  }
-  const raw = typeof value === 'string'
-    ? value
-    : (() => {
-      try {
-        return JSON.stringify(value, null, 2);
-      } catch {
-        return String(value);
-      }
-    })();
-  const masked = maskSecrets(raw);
-  const { text, truncated } = sanitizeInput(masked, maxChars);
-  return truncated ? `${text}\n…(truncated)` : text;
 }
 
 export function createInteractiveSdkStreamEventsController(
@@ -135,34 +107,14 @@ export function createInteractiveSdkStreamEventsController(
       if (!isCurrentTask()) return;
       markActivity();
       params.recordHealthTool(params.sessionId, toolId, toolName, status);
-      if (toolName) {
-        const existing = toolCallTracker.get(toolId);
-        toolCallTracker.set(toolId, {
-          id: toolId,
-          name: toolName,
-          status,
-          input: existing?.input ?? null,
-          output: existing?.output ?? null,
-        });
-      } else {
-        const existing = toolCallTracker.get(toolId);
-        if (existing) {
-          existing.status = status;
-        } else {
-          toolCallTracker.set(toolId, { id: toolId, name: 'tool', status, input: null, output: null });
-        }
-      }
-      if (detail && params.showSdkToolDetails) {
-        const existing = toolCallTracker.get(toolId);
-        if (existing) {
-          if (typeof detail.input !== 'undefined') {
-            existing.input = summarizeToolValue(detail.input, 900);
-          }
-          if (typeof detail.output === 'string') {
-            existing.output = summarizeToolValue(detail.output, 1400);
-          }
-        }
-      }
+      applyCodexTurnEventToTools(toolCallTracker, codexTurnEventFromSdkToolEvent(
+        toolId,
+        toolName,
+        status,
+        detail,
+      ), {
+        showToolCallDetails: params.showToolCallDetails,
+      });
       if (params.streamUi.hasStreamingCards) {
         params.streamFeedback.pushTools(Array.from(toolCallTracker.values()));
       }

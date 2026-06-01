@@ -232,12 +232,12 @@ describe('bridge command e2e', () => {
     assert.equal(loadConfig().historyMessageLimit, 12);
 
     await _testOnly.handleMessage(adapter, inboundMessage(address, '/ui off', 'incoming-ui-detail-off'));
-    assert.equal(loadConfig().sdkToolCallDetailsInText, false);
+    assert.equal(loadConfig().showToolCallDetails, false);
     assert.match(adapter.sent.at(-1)?.text || '', /已更新 UI 显示设置/);
     assert.match(adapter.sent.at(-1)?.text || '', /只显示工具名、状态和正文/);
 
     await _testOnly.handleMessage(adapter, inboundMessage(address, '/ui on', 'incoming-ui-detail-on'));
-    assert.equal(loadConfig().sdkToolCallDetailsInText, true);
+    assert.equal(loadConfig().showToolCallDetails, true);
     assert.match(adapter.sent.at(-1)?.text || '', /显示工具输入输出/);
 
     await _testOnly.handleMessage(adapter, inboundMessage(address, '/his msg', 'incoming-history-msg'));

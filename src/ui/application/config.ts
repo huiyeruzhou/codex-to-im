@@ -67,7 +67,7 @@ export function configToPayload(config: Config) {
     codexSandboxMode: config.codexSandboxMode || 'workspace-write',
     codexNetworkAccess: config.codexNetworkAccess !== false,
     codexReasoningEffort: config.codexReasoningEffort || 'medium',
-    sdkToolCallDetailsInText: config.sdkToolCallDetailsInText !== false,
+    showToolCallDetails: config.showToolCallDetails !== false,
     uiAllowLan: config.uiAllowLan === true,
     uiAccessToken: config.uiAccessToken || '',
     channels: (config.channels || [])
@@ -127,7 +127,7 @@ export function mergeConfig(current: Config, payload: Record<string, unknown>): 
       || payload.codexReasoningEffort === 'xhigh'
       ? payload.codexReasoningEffort
       : 'medium',
-    sdkToolCallDetailsInText: payload.sdkToolCallDetailsInText !== false,
+    showToolCallDetails: payload.showToolCallDetails !== false,
     uiAllowLan,
     uiAccessToken,
     channels: current.channels,
