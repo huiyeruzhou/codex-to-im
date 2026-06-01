@@ -16,6 +16,7 @@ import type {
   MirrorTurnHooks,
 } from './mirror-turns.js';
 import type { CodexMirrorSubscription } from './mirror-subscription-state.js';
+import { appendContextUsageCompactText } from './context-usage.js';
 import {
   stripOutboundArtifactBlocksForStreaming,
 } from './outbound-artifacts.js';
@@ -213,6 +214,7 @@ export function createMirrorFeedbackController(
       Math.max(0, nowMs - startedAtMs),
       effectiveLastResponseAgeMs,
       turnState.statusNote,
+      turnState.contextUsage,
     );
     if (turnState.lastStatusText === statusText) return;
 
@@ -330,8 +332,11 @@ export function createMirrorFeedbackController(
     const rawFinalResponse = assembleCodexFinalResponse({ text: turn.text });
     const attachments = rawFinalResponse.attachments;
     const cleanTurnText = rawFinalResponse.text;
-    const renderedTextBase = formatMirrorMessage(plainTextTitle, turn.userText, cleanTurnText, markdown);
-    const renderedStreamTextBase = formatMirrorMessage(baseTitle, turn.userText, cleanTurnText, markdown, true, false);
+    const finalTurnText = turn.status === 'completed'
+      ? appendContextUsageCompactText(cleanTurnText, turn.contextUsage)
+      : cleanTurnText;
+    const renderedTextBase = formatMirrorMessage(plainTextTitle, turn.userText, finalTurnText, markdown);
+    const renderedStreamTextBase = formatMirrorMessage(baseTitle, turn.userText, finalTurnText, markdown, true, false);
     const renderedText = turn.timedOut
       ? appendMirrorTimeoutNotice(renderedTextBase || buildMirrorTitle(plainTextTitle, markdown), markdown)
       : renderedTextBase;

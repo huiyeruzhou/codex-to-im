@@ -15,6 +15,7 @@ import {
   type StreamFeedbackTarget,
 } from '../stream-feedback-controller.js';
 import type { TaskProgressInfo, ToolCallInfo } from '../types.js';
+import { appendContextUsageCompactText } from '../context-usage.js';
 import {
   buildStreamRuntimeStatus,
   formatStreamRuntimeStatus,
@@ -192,6 +193,7 @@ export function createInteractiveStreamUiController(
             Math.max(0, nowMs - params.streamState.startedAtMs),
             effectiveLastResponseAgeMs,
             params.streamState.statusNote,
+            params.streamState.contextUsage,
           ),
     );
     syncSnapshot();
@@ -257,9 +259,12 @@ export function createInteractiveStreamUiController(
       }
       if (hasStreamingCards && !streamUiFinalizeAttempted) {
         streamUiFinalizeAttempted = true;
+        const finalText = status === 'completed' || status === 'error'
+          ? appendContextUsageCompactText(responseText, params.streamState.contextUsage)
+          : responseText;
         params.taskState.streamFinalized = await feedback.finalize(
           status,
-          params.normalizeFinalText(responseText),
+          params.normalizeFinalText(finalText),
         );
       }
       return params.taskState.streamFinalized;

@@ -1190,8 +1190,27 @@ describe('interactive-turn runner', () => {
         persistCodexThreadUpdate() {},
         resolveInteractiveTurnEnvironment: resolveTestInteractiveTurnEnvironment,
         resolveInteractiveTurnRuntimeSettings: resolveTestInteractiveTurnRuntimeSettings,
-        processMessageImpl: async (_binding, _text, _onPermission, _abortSignal, _files, onPartialText) => {
+        processMessageImpl: async (
+          _binding,
+          _text,
+          _onPermission,
+          _abortSignal,
+          _files,
+          onPartialText,
+          _onToolEvent,
+          _onTaskEvent,
+          _onStatusNote,
+          _onPromptPrepared,
+          options,
+        ) => {
           onPartialText?.('第一段输出');
+          options?.onContextUsage?.({
+            modelContextWindow: 200_000,
+            lastTokenUsage: {
+              inputTokens: 125_300,
+              outputTokens: 4_600,
+            },
+          });
           return {
             responseText: '最终回复',
             outboundAttachments: [],
@@ -1210,6 +1229,7 @@ describe('interactive-turn runner', () => {
     assert.equal(adapter.streamEnds[0]?.status, 'completed');
     assertStreamMetadataHasBinding(adapter);
     assert.match(adapter.streamEnds[0]?.text || '', /最终回复/);
+    assert.match(adapter.streamEnds[0]?.text || '', /Context: 125k\(63%\) · ↑125k ↓4\.6k/);
   });
 
   it('finalizes a stopped structured stream as interrupted without sending an error reply', async () => {

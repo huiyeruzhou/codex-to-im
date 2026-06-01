@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 
 import type { TaskProgressInfo } from '../../lib/bridge/types.js';
+import type { ContextUsageInfo } from '../../lib/bridge/context-usage.js';
 
 export interface CodexSessionEvent {
   signature: string;
@@ -17,7 +18,7 @@ export interface CodexSessionEventDelta {
 
 export interface CodexMirrorRecord {
   signature: string;
-  type: 'message' | 'reasoning' | 'plan_update' | 'task_started' | 'task_complete' | 'task_aborted' | 'tool_started' | 'tool_finished';
+  type: 'message' | 'reasoning' | 'plan_update' | 'task_started' | 'task_complete' | 'task_aborted' | 'tool_started' | 'tool_finished' | 'context_usage';
   role?: 'user' | 'assistant' | 'commentary';
   content: string;
   timestamp: string;
@@ -26,6 +27,7 @@ export interface CodexMirrorRecord {
   toolName?: string;
   isError?: boolean;
   tasks?: TaskProgressInfo[];
+  contextUsage?: ContextUsageInfo;
 }
 
 export interface CodexMirrorRecordDelta {

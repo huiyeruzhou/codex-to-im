@@ -1702,6 +1702,58 @@ describe('readCodexSessionMirrorRecordStreamByFilePath', () => {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   });
 
+  it('parses token_count events as mirror context usage records', () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-codex-mirror-'));
+    const filePath = path.join(tempRoot, 'rollout.jsonl');
+    fs.writeFileSync(
+      filePath,
+      [
+        JSON.stringify({
+          timestamp: '2026-05-14T00:00:00.000Z',
+          type: 'event_msg',
+          payload: {
+            type: 'task_started',
+            turn_id: 'turn-1',
+          },
+        }),
+        JSON.stringify({
+          timestamp: '2026-05-14T00:00:02.000Z',
+          type: 'event_msg',
+          payload: {
+            type: 'token_count',
+            info: {
+              model_context_window: 200_000,
+              last_token_usage: {
+                input_tokens: 125_300,
+                cached_input_tokens: 10_000,
+                output_tokens: 4_600,
+                reasoning_output_tokens: 600,
+                total_tokens: 129_900,
+              },
+              total_token_usage: {
+                input_tokens: 300_000,
+                output_tokens: 20_000,
+                total_tokens: 320_000,
+              },
+            },
+          },
+        }),
+      ].join('\n') + '\n',
+      'utf-8',
+    );
+
+    const delta = readCodexSessionMirrorRecordDeltaByFilePath(filePath, 0, fs.statSync(filePath).size);
+    assert.equal(delta.unknownKinds.length, 0);
+    assert.equal(delta.records[1]?.type, 'context_usage');
+    assert.equal(delta.records[1]?.turnId, 'turn-1');
+    assert.equal(delta.records[1]?.contextUsage?.modelContextWindow, 200_000);
+    assert.equal(delta.records[1]?.contextUsage?.lastTokenUsage?.inputTokens, 125_300);
+    assert.equal(delta.records[1]?.contextUsage?.lastTokenUsage?.outputTokens, 4_600);
+    assert.equal(delta.records[1]?.contextUsage?.totalTokenUsage?.totalTokens, 320_000);
+
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  });
+
   it('reads appended mirror records and preserves trailing partial text', () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-codex-mirror-'));
     const filePath = path.join(tempRoot, 'rollout.jsonl');

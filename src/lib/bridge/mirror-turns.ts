@@ -1,4 +1,5 @@
 import type { CodexMirrorRecord } from '../../codex/session-index.js';
+import type { ContextUsageInfo } from './context-usage.js';
 import type { TaskProgressInfo, ToolCallInfo } from './types.js';
 import { buildMirrorStreamKey, formatMirrorUserText } from './mirror-formatters.js';
 
@@ -29,12 +30,14 @@ export interface CodexMirrorTurnState {
   streamStarted: boolean;
   taskItems: TaskProgressInfo[];
   toolCalls: Map<string, ToolCallInfo>;
+  contextUsage: ContextUsageInfo | null;
 }
 
 export interface FinalizedCodexMirrorTurn {
   streamKey: string;
   userText: string | null;
   text: string;
+  contextUsage?: ContextUsageInfo | null;
   signature: string;
   timestamp: string;
   status: 'completed' | 'interrupted';
@@ -85,6 +88,7 @@ export function createMirrorTurnState(
     streamStarted: false,
     taskItems: [],
     toolCalls: new Map(),
+    contextUsage: null,
   };
 }
 
@@ -199,6 +203,7 @@ export function finalizeMirrorTurn<TSubscription extends MirrorTurnStateHolder>(
     streamKey: pendingTurn.streamKey,
     userText,
     text,
+    ...(pendingTurn.contextUsage ? { contextUsage: pendingTurn.contextUsage } : {}),
     signature,
     timestamp: timestamp || pendingTurn.lastActivityAt || nowIso(),
     status,
@@ -259,6 +264,14 @@ export function consumeMirrorRecords<TSubscription extends MirrorTurnStateHolder
         appendMirrorUserText(pendingTurn, text);
         hooks.onStreamText?.(subscription, pendingTurn);
       }
+      continue;
+    }
+
+    if (record.type === 'context_usage') {
+      const pendingTurn = ensureMirrorTurnState(subscription, record);
+      pendingTurn.contextUsage = record.contextUsage || null;
+      markMirrorActivity(pendingTurn, record.timestamp);
+      hooks.onStatusProgress?.(subscription, pendingTurn);
       continue;
     }
 

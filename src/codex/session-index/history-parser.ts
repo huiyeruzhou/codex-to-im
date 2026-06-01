@@ -1,5 +1,9 @@
 import type { BridgeMessage } from '../../lib/bridge/host.js';
 import {
+  formatContextUsageSummary,
+  parseContextUsageInfo,
+} from '../../lib/bridge/context-usage.js';
+import {
   createCodexEventSignature,
   extractCodexMessageText,
   extractNormalizedFreeText,
@@ -103,55 +107,7 @@ function parseFixedToolOutput(text: string): { exitCode?: number; wallTime?: str
 }
 
 function formatTokenCountSummary(info: unknown): string {
-  if (!info || typeof info !== 'object') return '';
-  const obj = info as {
-    total_token_usage?: Record<string, unknown>;
-    last_token_usage?: Record<string, unknown>;
-    model_context_window?: unknown;
-  };
-
-  const windowSize = typeof obj.model_context_window === 'number' ? obj.model_context_window : null;
-
-  const readUsage = (usage: Record<string, unknown> | undefined) => {
-    if (!usage) return null;
-    const n = (k: string) => (typeof usage[k] === 'number' ? (usage[k] as number) : null);
-    return {
-      input: n('input_tokens'),
-      cached: n('cached_input_tokens'),
-      output: n('output_tokens'),
-      reasoning: n('reasoning_output_tokens'),
-      total: n('total_tokens'),
-    };
-  };
-
-  const last = readUsage(obj.last_token_usage);
-  const total = readUsage(obj.total_token_usage);
-
-  const lines: string[] = [];
-  if (windowSize != null) {
-    let windowLine = `Context window: ${windowSize.toLocaleString()}`;
-    if (last && last.input != null) {
-      const pct = Math.round((last.input / windowSize) * 100);
-      windowLine += ` (last input: ${pct}%)`;
-    }
-    lines.push(windowLine);
-  }
-  if (last) {
-    const parts: string[] = [];
-    if (last.input != null) parts.push(`input ${last.input.toLocaleString()}` + (last.cached != null ? ` (cached ${last.cached.toLocaleString()})` : ''));
-    if (last.output != null) parts.push(`output ${last.output.toLocaleString()}` + (last.reasoning != null ? ` (reasoning ${last.reasoning.toLocaleString()})` : ''));
-    if (last.total != null) parts.push(`total ${last.total.toLocaleString()}`);
-    if (parts.length) lines.push(`Last: ${parts.join(', ')}`);
-  }
-  if (total) {
-    const parts: string[] = [];
-    if (total.input != null) parts.push(`input ${total.input.toLocaleString()}` + (total.cached != null ? ` (cached ${total.cached.toLocaleString()})` : ''));
-    if (total.output != null) parts.push(`output ${total.output.toLocaleString()}` + (total.reasoning != null ? ` (reasoning ${total.reasoning.toLocaleString()})` : ''));
-    if (total.total != null) parts.push(`total ${total.total.toLocaleString()}`);
-    if (parts.length) lines.push(`Total: ${parts.join(', ')}`);
-  }
-
-  return lines.join('\n');
+  return formatContextUsageSummary(parseContextUsageInfo(info));
 }
 
 function extractSessionJsonlPrimaryText(

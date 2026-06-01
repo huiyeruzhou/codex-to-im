@@ -21,11 +21,13 @@ import {
   type SessionMessageLine,
   type TurnContextLine,
 } from './jsonl-types.js';
+import {
+  parseContextUsageInfo,
+} from '../../lib/bridge/context-usage.js';
 
 const IGNORED_EVENT_MSG_TYPES = new Set([
   'thread_name_updated',
   'thread_rolled_back',
-  'token_count',
 ]);
 
 const CONTEXT_COMPACTED_NOTICE = '上下文已压缩，后续回复会基于压缩后的上下文继续。';
@@ -193,6 +195,21 @@ function pushCodexMirrorEventRecord(
       timestamp,
       ...(activeTurnId ? { turnId: activeTurnId } : {}),
     });
+    return true;
+  }
+
+  if (parsed.payload?.type === 'token_count') {
+    const contextUsage = parseContextUsageInfo((parsed.payload as Record<string, unknown>).info);
+    if (contextUsage) {
+      records.push({
+        signature,
+        type: 'context_usage',
+        content: '',
+        timestamp,
+        ...(activeTurnId ? { turnId: activeTurnId } : {}),
+        contextUsage,
+      });
+    }
     return true;
   }
 

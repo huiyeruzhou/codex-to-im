@@ -1,8 +1,14 @@
+import {
+  formatContextUsageCompact,
+  type ContextUsageInfo,
+} from '../context-usage.js';
+
 export interface StreamState {
   startedAtMs: number;
   lastActivityAtMs: number;
   lastContentResponseAtMs: number | null;
   statusNote: string | null;
+  contextUsage: ContextUsageInfo | null;
   lastStatusText: string | null;
   lastStatusAtMs: number;
 }
@@ -19,6 +25,7 @@ export function createStreamState(startedAtMs: number): StreamState {
     lastActivityAtMs: safeStartedAtMs,
     lastContentResponseAtMs: null,
     statusNote: null,
+    contextUsage: null,
     lastStatusText: null,
     lastStatusAtMs: 0,
   };
@@ -63,11 +70,14 @@ export function formatStreamRuntimeStatus(
   elapsedMs: number,
   lastContentResponseAgeMs?: number | null,
   statusNote?: string | null,
+  contextUsage?: ContextUsageInfo | null,
 ): string {
   const parts = [elapsedMs < 1000 ? '处理中' : `已运行 ${formatRuntimeDuration(elapsedMs)}`];
   if (typeof lastContentResponseAgeMs === 'number' && lastContentResponseAgeMs >= 0) {
     parts.push(`上次响应距今 ${formatRuntimeDuration(lastContentResponseAgeMs)}`);
   }
+  const contextText = formatContextUsageCompact(contextUsage);
+  if (contextText) parts.push(contextText);
   const runtimeText = parts.join('，');
   const note = (statusNote || '').trim();
   return note ? `当前步骤：${note}\n${runtimeText}` : runtimeText;
@@ -118,5 +128,6 @@ export function buildStreamRuntimeStatus(
       ? getStreamLastContentResponseAgeMs(state, nowMs)
       : null,
     state.statusNote,
+    'contextUsage' in state ? (state.contextUsage as ContextUsageInfo | null) : null,
   );
 }

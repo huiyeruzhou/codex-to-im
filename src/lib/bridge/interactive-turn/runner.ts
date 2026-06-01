@@ -481,6 +481,7 @@ export async function runInteractiveMessage(
         streamPreview: {
           includeToolSnippets: showSdkToolDetails && !streamUi.hasStreamingCards,
         },
+        onContextUsage: sdkStreamEvents.onContextUsage,
       },
       deps.resolveSdkConversationRuntime?.(),
     );

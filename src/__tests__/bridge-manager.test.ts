@@ -918,6 +918,7 @@ describe('bridge-manager status formatting', () => {
       streamStarted: false,
       taskItems: [],
       toolCalls: new Map(),
+      contextUsage: null,
     });
   });
 
@@ -1537,6 +1538,7 @@ describe('bridge-manager status formatting', () => {
       streamStarted: false,
       taskItems: [],
       toolCalls: new Map(),
+      contextUsage: null,
     });
   });
 

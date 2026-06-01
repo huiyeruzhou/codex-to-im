@@ -156,6 +156,10 @@ describe('interactive-turn sdk-stream-events-controller', () => {
     harness.controller.onToolEvent('tool-1', 'shell', 'running');
     harness.controller.onTaskEvent([{ text: 'step', status: 'in_progress' }]);
     harness.controller.onStatusNote('waiting');
+    harness.controller.onContextUsage({
+      modelContextWindow: 200_000,
+      lastTokenUsage: { inputTokens: 125_000, outputTokens: 4_000 },
+    });
 
     assert.deepEqual(harness.previewTexts, []);
     assert.deepEqual(harness.streamTexts, []);
@@ -165,5 +169,22 @@ describe('interactive-turn sdk-stream-events-controller', () => {
     assert.equal(harness.touchCount, 0);
     assert.equal(harness.statusPushCount, 0);
     assert.equal(harness.snapshotSyncCount, 0);
+  });
+
+  it('updates context usage as stream activity and pushes runtime status', () => {
+    const harness = makeHarness();
+
+    harness.controller.onContextUsage({
+      modelContextWindow: 200_000,
+      lastTokenUsage: {
+        inputTokens: 125_300,
+        outputTokens: 4_600,
+      },
+    });
+
+    assert.equal(harness.taskState.lastActivityAt, 1010);
+    assert.equal(harness.touchCount, 1);
+    assert.equal(harness.statusPushCount, 1);
+    assert.equal(harness.snapshotSyncCount, 1);
   });
 });

@@ -15,6 +15,7 @@ class FakeMirrorFeishuAdapter extends BaseChannelAdapter {
   readonly provider = 'feishu';
   readonly texts: string[] = [];
   readonly statuses: string[] = [];
+  readonly streamEnds: Array<{ status: 'completed' | 'interrupted' | 'error'; text: string }> = [];
   readonly tools: ToolCallInfo[][] = [];
   readonly tasks: TaskProgressInfo[][] = [];
   readonly metadata: Array<{ chatId: string; streamKey?: string; metadata: StructuredStreamingUiMetadata }> = [];
@@ -62,7 +63,9 @@ class FakeMirrorFeishuAdapter extends BaseChannelAdapter {
     this.tasks.push(tasks.map((task) => ({ ...task })));
   }
 
-  onStreamEnd(): Promise<boolean> {
+  onStreamEnd(_chatId: string, status: 'completed' | 'interrupted' | 'error', text: string): Promise<boolean> {
+    this.streamEnds.push({ status, text });
+    this.active = false;
     return Promise.resolve(true);
   }
 }
@@ -215,5 +218,85 @@ describe('mirror-feedback-controller', () => {
     } finally {
       Date.now = originalDateNow;
     }
+  });
+
+  it('shows mirror context and turn token usage in the stream status area and final card', async () => {
+    initBridgeContext({
+      store: new JsonFileStore(new Map([
+        ['bridge_channel_instances_json', JSON.stringify([
+          { id: 'feishu-default', provider: 'feishu', alias: 'Feishu', enabled: true, config: {} },
+        ])],
+      ])),
+      llm: {
+        streamChat() {
+          return new ReadableStream({
+            start(controller) {
+              controller.close();
+            },
+          });
+        },
+      },
+      permissions: {
+        resolvePendingPermission: () => false,
+      },
+      lifecycle: {},
+    });
+
+    const adapter = new FakeMirrorFeishuAdapter();
+    const baseMs = Date.parse('2026-05-14T00:00:00.000Z');
+    const controller = createMirrorFeedbackController({
+      getAdapter: () => adapter,
+      getThreadTitle: () => '测试线程',
+      nowIso: () => new Date(baseMs).toISOString(),
+      eventBatchLimit: 10,
+      deliverResponse: async () => ({ ok: true }),
+    });
+    const subscription = createMirrorSubscription({
+      bindingId: 'binding-1',
+      sessionId: 'session-1',
+      channelType: 'feishu-default',
+      chatId: 'chat-1',
+      threadId: 'thread-1',
+      filePath: 'rollout.jsonl',
+      lastDeliveredAt: null,
+    });
+
+    const finalized = consumeMirrorRecords(subscription, [
+      {
+        signature: 'start-1',
+        type: 'task_started',
+        content: '',
+        timestamp: new Date(baseMs).toISOString(),
+        turnId: 'turn-1',
+      },
+      {
+        signature: 'usage-1',
+        type: 'context_usage',
+        content: '',
+        timestamp: new Date(baseMs + 1000).toISOString(),
+        turnId: 'turn-1',
+        contextUsage: {
+          modelContextWindow: 200_000,
+          lastTokenUsage: {
+            inputTokens: 125_300,
+            outputTokens: 4_600,
+          },
+        },
+      },
+      {
+        signature: 'complete-1',
+        type: 'task_complete',
+        content: '最终回答',
+        timestamp: new Date(baseMs + 2000).toISOString(),
+        turnId: 'turn-1',
+      },
+    ], controller.hooks);
+
+    assert.match(adapter.statuses.at(-1) || '', /125k\(63%\)/);
+    assert.match(adapter.statuses.at(-1) || '', /↑125k ↓4\.6k/);
+    await controller.deliverMirrorTurns(subscription, finalized);
+    assert.equal(adapter.streamEnds[0]?.status, 'completed');
+    assert.match(adapter.streamEnds[0]?.text || '', /最终回答/);
+    assert.match(adapter.streamEnds[0]?.text || '', /Context: 125k\(63%\) · ↑125k ↓4\.6k/);
   });
 });

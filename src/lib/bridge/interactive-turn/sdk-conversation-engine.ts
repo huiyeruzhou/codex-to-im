@@ -31,6 +31,10 @@ import {
   buildInlineToolBlock,
   buildReasoningPreviewNote,
 } from './sdk-stream-preview.js';
+import {
+  parseContextUsageInfo,
+  type ContextUsageInfo,
+} from '../context-usage.js';
 
 export interface PermissionRequestInfo {
   permissionRequestId: string;
@@ -69,6 +73,7 @@ export type OnToolEvent = (
 ) => void;
 export type OnTaskEvent = (tasks: TaskProgressInfo[]) => void;
 export type OnStatusNote = (note: string | null) => void;
+export type OnContextUsage = (contextUsage: ContextUsageInfo) => void;
 
 export interface ConversationResult {
   responseText: string;
@@ -133,6 +138,7 @@ export async function processMessage(
     streamPreview?: {
       includeToolSnippets?: boolean;
     };
+    onContextUsage?: OnContextUsage;
   },
   runtime?: SdkConversationRuntime,
 ): Promise<ConversationResult> {
@@ -279,6 +285,7 @@ async function consumeStream(
     streamPreview?: {
       includeToolSnippets?: boolean;
     };
+    onContextUsage?: OnContextUsage;
   },
 ): Promise<ConversationResult> {
   const { store } = runtime;
@@ -298,6 +305,7 @@ async function consumeStream(
   let lastReasoningNote: string | null = null;
   const expandToolCalls = options?.expandToolCalls !== false;
   const includeToolSnippets = expandToolCalls && options?.streamPreview?.includeToolSnippets !== false;
+  const onContextUsage = options?.onContextUsage;
 
   const formatSseErrorPayload = (raw: string): string => {
     const trimmed = (raw || '').trim();
@@ -465,6 +473,16 @@ async function consumeStream(
           break;
         }
 
+        case 'context_usage': {
+          try {
+            const contextUsage = parseContextUsageInfo(JSON.parse(event.data));
+            if (contextUsage && onContextUsage) {
+              try { onContextUsage(contextUsage); } catch { /* non-critical */ }
+            }
+          } catch { /* skip */ }
+          break;
+        }
+
         case 'task_update': {
           try {
             const taskData = JSON.parse(event.data);
@@ -490,6 +508,12 @@ async function consumeStream(
           try {
             const resultData = JSON.parse(event.data);
             if (resultData.usage) tokenUsage = resultData.usage;
+            if (resultData.usage && onContextUsage) {
+              const contextUsage = parseContextUsageInfo({ last_token_usage: resultData.usage });
+              if (contextUsage) {
+                try { onContextUsage(contextUsage); } catch { /* non-critical */ }
+              }
+            }
             if (resultData.is_error) hasError = true;
             if (resultData.session_id) {
               capturedCodexThreadId = resultData.session_id;

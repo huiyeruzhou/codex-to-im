@@ -58,4 +58,20 @@ describe('stream-state', () => {
       '已运行 3分，上次响应距今 3分',
     );
   });
+
+  it('formats context usage and turn input output tokens in runtime status', () => {
+    const state = createStreamState(0);
+    state.contextUsage = {
+      modelContextWindow: 200_000,
+      lastTokenUsage: {
+        inputTokens: 125_300,
+        outputTokens: 4_600,
+      },
+    };
+
+    assert.equal(
+      buildStreamRuntimeStatus(state, 10_000),
+      '已运行 10秒，125k(63%) · ↑125k ↓4.6k',
+    );
+  });
 });

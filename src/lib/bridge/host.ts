@@ -34,6 +34,7 @@ export type SSEEventType =
   | 'tool_output'
   | 'tool_timeout'
   | 'status'
+  | 'context_usage'
   | 'result'
   | 'error'
   | 'permission_request'

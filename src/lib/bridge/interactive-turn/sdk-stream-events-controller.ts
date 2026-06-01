@@ -9,6 +9,7 @@ import {
   updateStreamStatusNote,
   type StreamState,
 } from '../turns/stream-state.js';
+import type { ContextUsageInfo } from '../context-usage.js';
 import type {
   InteractiveStreamFeedback,
   InteractiveStreamUiController,
@@ -48,6 +49,7 @@ export interface InteractiveSdkStreamEventsController {
   ): void;
   onTaskEvent(tasks: TaskProgressInfo[]): void;
   onStatusNote(note: string | null): void;
+  onContextUsage(contextUsage: ContextUsageInfo): void;
   onPermissionWait(toolName: string): void;
   pushFinalCardText(text: string): void;
 }
@@ -179,6 +181,12 @@ export function createInteractiveSdkStreamEventsController(
       if (!isCurrentTask()) return;
       updateStreamStatusNote(params.streamState, note, params.nowMs());
       if (params.streamState.statusNote) markActivity();
+      pushRunningStatus();
+    },
+    onContextUsage(contextUsage) {
+      if (!isCurrentTask()) return;
+      params.streamState.contextUsage = contextUsage;
+      markActivity();
       pushRunningStatus();
     },
     onPermissionWait(toolName) {

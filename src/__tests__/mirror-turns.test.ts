@@ -153,6 +153,47 @@ describe('mirror-turns pending delivery queue', () => {
     assert.equal(subscription.pendingTurn?.lastResponseAt, null);
   });
 
+  it('updates context usage through mirror progress hooks', () => {
+    const statuses: string[] = [];
+    const subscription = {
+      sessionId: 'session-1',
+      threadId: 'thread-1',
+      pendingTurn: null,
+    } as any;
+
+    consumeMirrorRecords(subscription, [
+      {
+        signature: 'start-1',
+        type: 'task_started',
+        content: '',
+        timestamp: '2026-04-21T10:00:00.000Z',
+        turnId: 'turn-1',
+      },
+      {
+        signature: 'usage-1',
+        type: 'context_usage',
+        content: '',
+        timestamp: '2026-04-21T10:00:03.000Z',
+        turnId: 'turn-1',
+        contextUsage: {
+          modelContextWindow: 200_000,
+          lastTokenUsage: {
+            inputTokens: 80_500,
+            outputTokens: 2_400,
+          },
+        },
+      },
+    ], {
+      onStatusProgress: (_subscription, turnState) => {
+        statuses.push(`${turnState.contextUsage?.lastTokenUsage?.inputTokens || 0}`);
+      },
+    });
+
+    assert.deepEqual(statuses, ['80500']);
+    assert.equal(subscription.pendingTurn?.contextUsage?.modelContextWindow, 200_000);
+    assert.equal(subscription.pendingTurn?.lastActivityAt, '2026-04-21T10:00:03.000Z');
+  });
+
   it('does not reset content response time for tool progress', () => {
     const subscription = {
       sessionId: 'session-1',

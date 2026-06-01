@@ -389,6 +389,12 @@ function enqueueRecordAsSse(
       }));
       break;
 
+    case 'context_usage':
+      if (record.contextUsage) {
+        controller.enqueue(sseEvent('context_usage', record.contextUsage));
+      }
+      break;
+
     case 'tool_started': {
       const toolId = record.toolId || record.signature;
       if (!context.emittedToolStarts.has(toolId)) {

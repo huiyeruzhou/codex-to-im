@@ -84,6 +84,7 @@ describe('mirror-subscription-state', () => {
       streamStarted: true,
       taskItems: [],
       toolCalls: new Map(),
+      contextUsage: null,
     };
     subscription.fileOffset = 99;
     subscription.fileSize = 100;
@@ -182,6 +183,7 @@ describe('mirror-subscription-state', () => {
       streamStarted: false,
       taskItems: [],
       toolCalls: new Map(),
+      contextUsage: null,
     };
     subscription.fileOffset = 99;
     subscription.fileSize = 100;
@@ -280,6 +282,7 @@ describe('mirror-subscription-state', () => {
       streamStarted: false,
       taskItems: [],
       toolCalls: new Map(),
+      contextUsage: null,
     };
     subscription.bufferedRecords.push({
       signature: 'sig-1',
