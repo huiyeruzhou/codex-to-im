@@ -184,7 +184,8 @@ export class CommandThreadDisplay {
           active: binding?.active !== false && Boolean(binding),
           originator: binding ? display.originator : 'Bridge',
         };
-      });
+      })
+      .sort(compareBoundThreadActivityDesc);
   }
 }
 

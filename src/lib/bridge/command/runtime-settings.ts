@@ -44,6 +44,8 @@ const REASONING_OPTIONS_TEXT = '可选：`1=minimal` `2=low` `3=medium` `4=high`
 const SANDBOX_OPTIONS_TEXT = '可选：`read-only` `workspace-write` `danger-full-access` `default`（回到全局默认）';
 const NETWORK_OPTIONS_TEXT = '可选：`on`/`true` 开启网络，`off`/`false` 关闭网络，`default` 回到全局默认。';
 const UI_DETAIL_OPTIONS_TEXT = '可选：`on` 显示工具输入输出，`off` 只显示工具名、状态和正文；兼容 `/ui detail on|off`。';
+const BOOTSTRAP_THREAD_VISIBILITY_TIMEOUT_MS = 2_000;
+const BOOTSTRAP_THREAD_VISIBILITY_POLL_MS = 50;
 
 export interface RuntimeSettingsCommandDeps {
   reconcileMirrorSubscriptions?(): Promise<void>;
@@ -87,7 +89,22 @@ function parseSseDataLine(line: string): SSEEvent | null {
   }
 }
 
-async function readFirstCodexThreadId(stream: ReadableStream<string>, onThreadId?: () => void): Promise<string> {
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForCodexThreadVisible(threadId: string): Promise<void> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < BOOTSTRAP_THREAD_VISIBILITY_TIMEOUT_MS) {
+    if (getCodexSessionByThreadIdSafe(threadId, 'SDK bootstrap visibility wait')) return;
+    await delay(BOOTSTRAP_THREAD_VISIBILITY_POLL_MS);
+  }
+}
+
+async function readFirstCodexThreadId(
+  stream: ReadableStream<string>,
+  onThreadId?: (threadId: string) => void | Promise<void>,
+): Promise<string> {
   const reader = stream.getReader();
   let pending = '';
   const errors: string[] = [];
@@ -103,7 +120,7 @@ async function readFirstCodexThreadId(stream: ReadableStream<string>, onThreadId
         const event = parseSseDataLine(line);
         const threadId = event ? readCodexThreadIdFromEvent(event) : null;
         if (threadId) {
-          onThreadId?.();
+          await onThreadId?.(threadId);
           return threadId;
         }
         const error = event ? readErrorFromEvent(event) : null;
@@ -112,7 +129,10 @@ async function readFirstCodexThreadId(stream: ReadableStream<string>, onThreadId
     }
     const trailingEvent = parseSseDataLine(pending);
     const trailingThreadId = trailingEvent ? readCodexThreadIdFromEvent(trailingEvent) : null;
-    if (trailingThreadId) return trailingThreadId;
+    if (trailingThreadId) {
+      await onThreadId?.(trailingThreadId);
+      return trailingThreadId;
+    }
     const trailingError = trailingEvent ? readErrorFromEvent(trailingEvent) : null;
     if (trailingError) errors.push(trailingError);
     if (errors.length > 0) {
@@ -146,7 +166,8 @@ export async function bootstrapCodexThreadWithSdk(
     codexProvider: 'sdk',
     conversationHistory: [],
   });
-  threadId = await readFirstCodexThreadId(stream, () => {
+  threadId = await readFirstCodexThreadId(stream, async (foundThreadId) => {
+    await waitForCodexThreadVisible(foundThreadId);
     if (!abortController.signal.aborted) abortController.abort();
   });
   if (!abortController.signal.aborted) abortController.abort();

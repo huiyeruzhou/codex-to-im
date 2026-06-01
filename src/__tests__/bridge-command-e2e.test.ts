@@ -627,8 +627,10 @@ describe('bridge command e2e', () => {
     assert.match(listText, /当前聊天绑定/);
     assert.match(listText, new RegExp(bindingA.id.slice(0, 8)));
     assert.match(listText, new RegExp(bindingB.id.slice(0, 8)));
+    assert.ok(listText.indexOf('• 1 当前') < listText.indexOf('• 2'));
+    assert.ok(listText.indexOf(workDirB) < listText.indexOf(workDirA));
 
-    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t use 1', 'incoming-use-a'));
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t use 2', 'incoming-use-a'));
     const activeBindingA = store.getChannelBinding(address.channelType, address.chatId);
     assert.equal(activeBindingA?.id, bindingA.id);
     assert.match(adapter.sent.at(-1)?.text || '', /当前线程已切换/);
@@ -646,7 +648,7 @@ describe('bridge command e2e', () => {
     assert.equal(llmCalls[3].sessionId, bindingB.bridgeSessionId);
     assert.equal(llmCalls[3].prompt, '再切回 B 后的普通消息');
 
-    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t detach 2', 'incoming-rm-b'));
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t detach 1', 'incoming-rm-b'));
     assert.equal(store.listChannelBindings().filter((binding) => binding.chatId === address.chatId).length, 1);
     assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, bindingA.id);
     assert.match(adapter.sent.at(-1)?.text || '', /已脱离绑定线程/);
@@ -806,7 +808,6 @@ describe('bridge command e2e', () => {
     assert.match(listText, new RegExp(bindingB.id.slice(0, 8)));
     assert.match(listText, new RegExp(otherBinding.id.slice(0, 8)));
     assert.match(listText, /Unbound bridge session/);
-    assert.match(listText, new RegExp(`1\\s+Unbound bridge session[\\s\\S]+5\\s+Local Codex thread`));
     const listCard = adapter.sent.at(-1)?.richCard;
     const listCardJson = JSON.stringify(listCard);
     assert.equal(listCard?.title, 'Codex会话（本地会话1 + 未绑定的Bridge4）');
@@ -816,24 +817,78 @@ describe('bridge command e2e', () => {
     assert.match(listCardJson, /Unbound bridge session/);
     assert.match(listCardJson, /1\./);
     assert.match(listCardJson, /5\./);
+    assert.ok(listText.indexOf('Other chat bridge session') < listText.indexOf(bindingB.id.slice(0, 8)));
+    assert.ok(listText.indexOf(bindingB.id.slice(0, 8)) < listText.indexOf(bindingA.id.slice(0, 8)));
 
-    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t archive 1', 'incoming-bridge-archive'));
-    assert.match(adapter.sent.at(-1)?.text || '', /已归档 Bridge 会话/);
-    assert.equal(store.getSession(unboundSession.id), null);
-
-    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t archive 1', 'incoming-bridge-archive-current-chat'));
-    assert.match(adapter.sent.at(-1)?.text || '', /已归档 Bridge 会话/);
-    assert.equal(store.getSession(bindingA.bridgeSessionId), null);
-    assert.equal(store.listChannelBindings().some((binding) => binding.id === bindingA.id), false);
-    assert.ok(store.getSession(bindingB.bridgeSessionId));
-    assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, bindingB.id);
-
-    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t archive 2', 'incoming-bridge-archive-other-chat'));
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t archive 1', 'incoming-bridge-archive-other-chat'));
     assert.match(adapter.sent.at(-1)?.text || '', /已归档 Bridge 会话/);
     assert.equal(store.getSession(otherBinding.bridgeSessionId), null);
     assert.equal(store.listChannelBindings().some((binding) => binding.id === otherBinding.id), false);
     assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, bindingB.id);
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t archive 1', 'incoming-bridge-archive-current-chat'));
+    assert.match(adapter.sent.at(-1)?.text || '', /已归档 Bridge 会话/);
+    assert.equal(store.getSession(bindingB.bridgeSessionId), null);
+    assert.equal(store.listChannelBindings().some((binding) => binding.id === bindingB.id), false);
+    assert.ok(store.getSession(bindingA.bridgeSessionId));
+    assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, bindingA.id);
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t archive 1', 'incoming-bridge-archive-current-chat-a'));
+    assert.match(adapter.sent.at(-1)?.text || '', /已归档 Bridge 会话/);
+    assert.equal(store.getSession(bindingA.bridgeSessionId), null);
+    assert.equal(store.listChannelBindings().some((binding) => binding.id === bindingA.id), false);
+    assert.equal(store.getChannelBinding(address.channelType, address.chatId), null);
+    assert.ok(store.getSession(unboundSession.id));
     assert.ok(fs.existsSync(path.join(process.env.CODEX_HOME!, 'sessions', '2026', '05', '28', `rollout-${localThreadId}.jsonl`)));
+  });
+
+  it('orders /t global Bridge and Codex entries together by active time', async () => {
+    const store = initBridgeTestContext({ dynamicSettings: true });
+    const adapter = new RecordingAdapter();
+    const address = { channelType: 'feishu', chatId: 'chat-global-thread-active-order-e2e' } as const;
+    const bridgeWorkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-global-order-bridge-'));
+    const localWorkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-global-order-local-'));
+    const localThreadId = '019e81d3-e5b0-7540-ad14-4f3073b2703b';
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/new bridge-old ${bridgeWorkDir}`, 'incoming-global-order-new-bridge'));
+    const bridgeBinding = store.getChannelBinding(address.channelType, address.chatId);
+    assert.ok(bridgeBinding);
+
+    const { sessionPath } = writeCodexSessionJsonlFixture({
+      threadId: localThreadId,
+      workDir: localWorkDir,
+      lines: [
+        {
+          timestamp: '2026-05-28T00:00:00.000Z',
+          type: 'session_meta',
+          payload: {
+            id: localThreadId,
+            timestamp: '2026-05-28T00:00:00.000Z',
+            cwd: localWorkDir,
+            originator: 'Codex CLI',
+          },
+        },
+        {
+          timestamp: '2026-05-28T00:00:01.000Z',
+          type: 'event_msg',
+          payload: { type: 'user_message', message: 'Newer local Codex thread' },
+        },
+      ],
+    });
+    const futureTime = new Date('2030-01-01T00:00:00.000Z');
+    fs.utimesSync(sessionPath, futureTime, futureTime);
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t', 'incoming-global-order-list'));
+    const listText = adapter.sent.at(-1)?.text || '';
+    assert.match(listText, /Codex会话（本地会话1 \+ 未绑定的Bridge1）/);
+    assert.ok(listText.indexOf(localThreadId) < listText.indexOf(bridgeBinding.id.slice(0, 8)));
+    const cardJson = JSON.stringify(adapter.sent.at(-1)?.richCard);
+    assert.ok(cardJson.indexOf(localThreadId) < cardJson.indexOf(bridgeBinding.id.slice(0, 8)));
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t 1', 'incoming-global-order-use-local'));
+    const active = store.getChannelBinding(address.channelType, address.chatId);
+    assert.ok(active);
+    assert.equal(store.getSession(active.bridgeSessionId)?.codex_thread_id, localThreadId);
   });
 
   it('resolves /t targets by semantic fallback order across the bridge manager entrypoint', async () => {
@@ -1012,7 +1067,7 @@ describe('bridge command e2e', () => {
     const bindingB = store.getChannelBinding(address.channelType, address.chatId);
     assert.ok(bindingB);
 
-    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t use 1', 'incoming-concurrent-use-a'));
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t use 2', 'incoming-concurrent-use-a'));
     assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, bindingA.id);
 
     const firstTurn = _testOnly.handleMessage(adapter, inboundMessage(address, 'A 长任务', 'incoming-concurrent-a'));
@@ -1463,6 +1518,102 @@ describe('bridge command e2e', () => {
       if (oldFakeState === undefined) delete process.env.TMUX_FAKE_STATE;
       else process.env.TMUX_FAKE_STATE = oldFakeState;
       fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a bootstrapped tmux provider thread after the Codex session file appears asynchronously', async () => {
+    const bootstrapThreadId = '019e82c2-d31c-7810-ab30-a9c2629018cf';
+    const llmCalls: RecordedLlmCall[] = [];
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-runtime-tmux-bootstrap-visible-'));
+    let fixturePath = '';
+    const store = initBridgeTestContext({
+      dynamicSettings: true,
+      llm: {
+        streamChat(params: StreamChatParams): ReadableStream<string> {
+          llmCalls.push({
+            sessionId: params.sessionId,
+            codexThreadId: params.codexThreadId || '',
+            prompt: params.prompt,
+          });
+          let canceled = false;
+          return new ReadableStream({
+            start(controller) {
+              controller.enqueue(`data: ${JSON.stringify({ type: 'status', data: JSON.stringify({ session_id: bootstrapThreadId }) })}\n`);
+              setTimeout(() => {
+                if (canceled) return;
+                const fixture = writeCodexSessionJsonlFixture({
+                  threadId: bootstrapThreadId,
+                  workDir,
+                  lines: [{
+                    timestamp: '2026-05-28T00:00:00.000Z',
+                    type: 'session_meta',
+                    payload: {
+                      id: bootstrapThreadId,
+                      timestamp: '2026-05-28T00:00:00.000Z',
+                      cwd: workDir,
+                      originator: 'Codex CLI',
+                    },
+                  }],
+                });
+                fixturePath = fixture.sessionPath;
+                controller.enqueue(`data: ${JSON.stringify({ type: 'result', data: JSON.stringify({ session_id: bootstrapThreadId }) })}\n`);
+                controller.close();
+              }, 25);
+            },
+            cancel() {
+              canceled = true;
+            },
+          });
+        },
+      },
+    });
+    const fakeTmux = installFakeTmux();
+    const oldPath = process.env.PATH || '';
+    const oldFakeLog = process.env.TMUX_FAKE_LOG;
+    const oldFakeState = process.env.TMUX_FAKE_STATE;
+    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${oldPath}`;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+    process.env.TMUX_FAKE_STATE = fakeTmux.statePath;
+
+    const adapter = new RecordingAdapter();
+    registerAdapter(adapter);
+    const bridgeState = (globalThis as unknown as Record<string, any>).__bridge_manager__;
+    bridgeState.running = true;
+    const address = { channelType: 'feishu', chatId: 'chat-runtime-tmux-bootstrap-visible-e2e' } as const;
+
+    try {
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/set defaultProvider tmux', 'incoming-tmux-bootstrap-visible-provider'));
+      await _testOnly.handleMessage(adapter, inboundMessage(address, `/new ${workDir}`, 'incoming-tmux-bootstrap-visible-new'));
+      await _testOnly.handleMessage(adapter, inboundMessage(address, 'hi', 'incoming-tmux-bootstrap-visible-first'));
+
+      const binding = store.getChannelBinding(address.channelType, address.chatId);
+      assert.ok(binding);
+      assert.equal(store.getSession(binding.bridgeSessionId)?.codex_thread_id, bootstrapThreadId);
+      assert.equal(fixturePath ? fs.existsSync(fixturePath) : false, true);
+      assert.deepEqual(llmCalls.map((call) => ({
+        sessionId: call.sessionId,
+        codexThreadId: call.codexThreadId,
+        prompt: call.prompt,
+      })), [{
+        sessionId: binding.bridgeSessionId,
+        codexThreadId: '',
+        prompt: 'Initialize this Codex session and wait for the next instruction.',
+      }]);
+
+      await _testOnly.reconcileMirrorSubscriptions();
+      await _testOnly.reconcileMirrorSubscriptions();
+      await _testOnly.reconcileMirrorSubscriptions();
+
+      assert.equal(store.getSession(binding.bridgeSessionId)?.codex_thread_id, bootstrapThreadId);
+      assert.equal(bridgeState.mirrorSubscriptions.get(binding.id)?.filePath, fixturePath);
+    } finally {
+      process.env.PATH = oldPath;
+      if (oldFakeLog === undefined) delete process.env.TMUX_FAKE_LOG;
+      else process.env.TMUX_FAKE_LOG = oldFakeLog;
+      if (oldFakeState === undefined) delete process.env.TMUX_FAKE_STATE;
+      else process.env.TMUX_FAKE_STATE = oldFakeState;
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+      fs.rmSync(workDir, { recursive: true, force: true });
     }
   });
 

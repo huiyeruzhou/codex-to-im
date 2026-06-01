@@ -494,7 +494,6 @@ async function ensureCodexTmuxSessionForProvider(
     };
     threadId = await bootstrapCodexThreadWithSdk(getBridgeContext().llm, bootstrapParams);
     store.updateSessionCodexThreadId(session.id, threadId);
-    await params.reconcileMirrorSubscriptions?.();
   }
 
   const target = configuredTarget || (threadId ? codexTmuxSessionName(threadId) : '');

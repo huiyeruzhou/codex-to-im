@@ -53,6 +53,10 @@ export interface ThreadCommandTableRow {
   selected?: boolean;
 }
 
+export type GlobalThreadListItem =
+  | { kind: 'bridge'; bridge: BoundThreadCardItem }
+  | { kind: 'codex'; codex: CodexSessionSummary };
+
 type ThreadCommandTableColumnKey = Exclude<keyof ThreadCommandTableRow, 'active' | 'selected'>;
 
 interface ThreadCommandTableColumn {
@@ -349,6 +353,82 @@ export function buildBoundThreadCommandTableRows(
   });
 }
 
+function threadActivityTimeMs(value: string | null | undefined): number {
+  const time = Date.parse(value || '');
+  return Number.isNaN(time) ? 0 : time;
+}
+
+function globalThreadListItemActivityMs(item: GlobalThreadListItem): number {
+  return item.kind === 'bridge'
+    ? threadActivityTimeMs(item.bridge.lastActiveAt)
+    : threadActivityTimeMs(item.codex.lastEventAt);
+}
+
+function compareGlobalThreadListItemsByActivityDesc(a: GlobalThreadListItem, b: GlobalThreadListItem): number {
+  const timeDiff = globalThreadListItemActivityMs(b) - globalThreadListItemActivityMs(a);
+  if (timeDiff !== 0) return timeDiff;
+  const titleA = a.kind === 'bridge' ? a.bridge.title : a.codex.title;
+  const titleB = b.kind === 'bridge' ? b.bridge.title : b.codex.title;
+  return (titleA || '').localeCompare(titleB || '');
+}
+
+export function buildGlobalThreadList(
+  codexSessions: CodexSessionSummary[],
+  bridgeBindings: BoundThreadCardItem[] = [],
+): GlobalThreadListItem[] {
+  return [
+    ...bridgeBindings.map((bridge): GlobalThreadListItem => ({ kind: 'bridge', bridge })),
+    ...codexSessions.map((codex): GlobalThreadListItem => ({ kind: 'codex', codex })),
+  ].sort(compareGlobalThreadListItemsByActivityDesc);
+}
+
+export function buildGlobalThreadCommandTableRows(
+  items: GlobalThreadListItem[],
+  bindingStates: CodexThreadCardBindingState[] = [],
+): ThreadCommandTableRow[] {
+  const bindingByThreadId = new Map(bindingStates.map((state) => [state.threadId, state]));
+  return items.map((item, index) => {
+    const displayIndex = index + 1;
+    if (item.kind === 'bridge') {
+      const binding = item.bridge;
+      return {
+        index: formatBoundThreadIndex(displayIndex, binding.active),
+        title: binding.title || '未命名线程',
+        cwd: formatCommandPath(binding.cwd),
+        lastActiveAt: formatThreadActivityTime(binding.lastActiveAt),
+        bindingId: binding.bindingId ? binding.bindingId.slice(0, 8) : '-',
+        threadId: binding.threadId || '-',
+        creator: binding.originator || '当前聊天',
+        command: `/t ${displayIndex}`,
+        active: binding.active,
+        selected: true,
+      };
+    }
+
+    const session = item.codex;
+    const binding = bindingByThreadId.get(session.threadId);
+    return {
+      index: binding?.active
+        ? formatBoundThreadIndex(displayIndex, true)
+        : binding
+          ? formatBoundThreadIndex(displayIndex, false)
+          : `${displayIndex}`,
+      title: binding?.title || session.title || '未命名线程',
+      cwd: formatCommandPath(session.cwd),
+      lastActiveAt: formatThreadActivityTime(session.lastEventAt),
+      bindingId: binding ? binding.bindingId.slice(0, 8) : '-',
+      threadId: session.threadId || '-',
+      creator: formatCreatorBadge(resolveCreatorKind({
+        source: session.source,
+        originator: session.originator,
+      })).label,
+      command: `/t ${displayIndex}`,
+      active: binding?.active || false,
+      selected: Boolean(binding),
+    };
+  });
+}
+
 function buildThreadCommandCardTable(rows: ThreadCommandTableRow[]) {
   return {
     pageSize: 10,
@@ -409,12 +489,10 @@ export function buildCodexThreadsCommandResponse(
   const actualCount = codexSessions.length;
   const title = `Codex会话（本地会话${actualCount} + 未绑定的Bridge${bridgeBindings.length}）`;
   const limitNotice = buildCodexThreadLimitNotice(actualCount, limit);
+  const globalItems = buildGlobalThreadList(codexSessions, bridgeBindings);
   return buildThreadCommandTableResponse(
     title,
-    [
-      ...buildBoundThreadCommandTableRows(bridgeBindings, { startIndex: 1, globalCommandIndex: true }),
-      ...buildCodexThreadCommandTableRows(codexSessions, bindingStates, { startIndex: bridgeBindings.length + 1, globalCommandIndex: true }),
-    ],
+    buildGlobalThreadCommandTableRows(globalItems, bindingStates),
     [
       ...(limitNotice ? [limitNotice] : []),
       ...extraFooter,
@@ -455,10 +533,8 @@ export function buildCodexThreadsCommandCard(
   const selectedCallbackData = options.selectedThreadId
     ? `${THREAD_SELECT_CALLBACK_PREFIX}${encodeURIComponent(options.selectedThreadId)}`
     : undefined;
-  const tableRows = [
-    ...buildBoundThreadCommandTableRows(bridgeBindings, { startIndex: 1, globalCommandIndex: true }),
-    ...buildCodexThreadCommandTableRows(codexSessions, bindingStates, { startIndex: bridgeBindings.length + 1, globalCommandIndex: true }),
-  ];
+  const globalItems = buildGlobalThreadList(codexSessions, bridgeBindings);
+  const tableRows = buildGlobalThreadCommandTableRows(globalItems, bindingStates);
   const card: OutboundRichCard = {
     title,
     subtitle: bridgeBindings.length
@@ -473,16 +549,15 @@ export function buildCodexThreadsCommandCard(
             id: 'codex_select',
             placeholder: bridgeBindings.length ? '选择 Bridge / Codex 会话' : '选择本地 Codex 会话',
             selectedCallbackData,
-            options: [
-              ...bridgeBindings.map((binding, index) => ({
-                text: `${index + 1}. ${binding.title || binding.cwd || '未命名线程'}`,
-                callbackData: `${THREAD_SELECT_CALLBACK_PREFIX}${encodeURIComponent(binding.bridgeSessionId || binding.bindingId)}`,
-              })),
-              ...codexSessions.map((session, index) => ({
-                text: `${bridgeBindings.length + index + 1}. ${session.title || session.cwd || '未命名线程'}`,
-                callbackData: `${THREAD_SELECT_CALLBACK_PREFIX}${encodeURIComponent(session.threadId)}`,
-              })),
-            ],
+            options: globalItems.map((item, index) => item.kind === 'bridge'
+              ? {
+                  text: `${index + 1}. ${item.bridge.title || item.bridge.cwd || '未命名线程'}`,
+                  callbackData: `${THREAD_SELECT_CALLBACK_PREFIX}${encodeURIComponent(item.bridge.bridgeSessionId || item.bridge.bindingId)}`,
+                }
+              : {
+                  text: `${index + 1}. ${item.codex.title || item.codex.cwd || '未命名线程'}`,
+                  callbackData: `${THREAD_SELECT_CALLBACK_PREFIX}${encodeURIComponent(item.codex.threadId)}`,
+                }),
           }],
         }
       : {}),

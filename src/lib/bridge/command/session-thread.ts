@@ -16,8 +16,10 @@ import {
   buildCodexThreadsCommandResponse,
   buildCodexThreadLimitNotice,
   buildCommandFields,
+  buildGlobalThreadList,
   formatCommandDateTime,
   formatCommandPath,
+  type GlobalThreadListItem,
   toUserVisibleBindingError,
 } from './presentation.js';
 import * as router from '../channel-router.js';
@@ -201,33 +203,6 @@ function findDuplicateNewSessionName(
     .find((binding) => threadDisplay.binding(binding).title.trim() === normalized) || null;
 }
 
-function selectCodexThreadForCommand(
-  threadDisplay: CommandThreadDisplay,
-  raw: string,
-  displayedThreads: CodexSessionSummary[],
-  indexOffset = 0,
-): {
-  thread?: CodexSessionSummary;
-  threadId?: string;
-  ambiguous?: boolean;
-  index?: number;
-} {
-  const token = raw.trim();
-  const index = parseListIndex(token);
-  const selected = index !== null
-    ? threadDisplay.selectCodexThread(String(index - indexOffset), displayedThreads)
-    : threadDisplay.selectCodexThread(raw, displayedThreads);
-  if (selected.threadId || selected.ambiguous || selected.index !== undefined) {
-    return index !== null ? { ...selected, index } : selected;
-  }
-
-  const fallback = getCommandCodexThreadByIdSafe(raw, 'thread bind');
-  return {
-    thread: fallback.thread ? { ...fallback.thread, title: threadDisplay.codex(fallback.thread).title } : undefined,
-    threadId: fallback.thread ? fallback.threadId : undefined,
-  };
-}
-
 function selectCodexThreadByThreadId(
   raw: string,
   displayedThreads: CodexSessionSummary[],
@@ -259,6 +234,7 @@ function selectDirectThreadTarget(
   displayedThreads: CodexSessionSummary[],
   bridgeItems: ReturnType<CommandThreadDisplay['bridgeOnlyBoundThreadCardItems']> = [],
   store?: BridgeStore,
+  globalItems: GlobalThreadListItem[] = buildGlobalThreadList(displayedThreads, bridgeItems),
 ): {
   binding?: ChannelBinding;
   bridgeSession?: BridgeSession;
@@ -271,22 +247,20 @@ function selectDirectThreadTarget(
   const lowerToken = token.toLowerCase();
   const index = parseListIndex(token);
   if (index !== null) {
-    if (index <= bridgeItems.length) {
-      const bridgeItem = bridgeItems[index - 1];
+    const globalItem = globalItems[index - 1];
+    if (!globalItem) return { index };
+    if (globalItem.kind === 'bridge') {
+      const bridgeItem = globalItem.bridge;
       const bridgeSession = bridgeItem?.bridgeSessionId && store
         ? store.getSession(bridgeItem.bridgeSessionId)
         : null;
       return bridgeSession ? { bridgeSession, index } : { index };
     }
-    const selected = selectCodexThreadForCommand(threadDisplay, raw, displayedThreads, bridgeItems.length);
-    if (selected.threadId || selected.ambiguous) {
-      return {
-        thread: selected.thread,
-        threadId: selected.threadId,
-        ambiguous: selected.ambiguous,
-        index: selected.index,
-      };
-    }
+    return {
+      thread: globalItem.codex,
+      threadId: globalItem.codex.threadId,
+      index,
+    };
   }
 
   const bindingThreadMatches = bindings.filter((binding) => {

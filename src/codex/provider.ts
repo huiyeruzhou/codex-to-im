@@ -331,6 +331,7 @@ export class CodexProvider implements LLMProvider {
 
   streamChat(params: StreamChatParams): ReadableStream<string> {
     const self = this;
+    let consumerCanceled = false;
 
     return new ReadableStream<string>({
       start(controller) {
@@ -609,8 +610,11 @@ export class CodexProvider implements LLMProvider {
               }
             }
 
-            controller.close();
+            if (!consumerCanceled) {
+              controller.close();
+            }
           } catch (err) {
+            if (consumerCanceled) return;
             const message = err instanceof Error ? err.message : String(err);
             console.error('[codex-provider] Error:', err instanceof Error ? err.stack || err.message : err);
             self.clearCachedThreadId(params.sessionId);
@@ -633,6 +637,9 @@ export class CodexProvider implements LLMProvider {
             }
           }
         })();
+      },
+      cancel() {
+        consumerCanceled = true;
       },
     });
   }
