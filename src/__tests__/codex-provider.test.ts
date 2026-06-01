@@ -963,6 +963,38 @@ describe('CodexProvider image input', () => {
     assert.equal(capturedStartOptions?.approvalPolicy, 'on-request');
   });
 
+  it('disables web search for minimal reasoning SDK threads', async () => {
+    const { CodexProvider } = await import('../codex/provider.js');
+    const { PendingPermissions } = await import('../permission-gateway.js');
+    const provider = new CodexProvider(new PendingPermissions());
+
+    let capturedStartOptions: Record<string, unknown> | undefined;
+    const mockThread = {
+      runStreamed: () => ({
+        events: (async function* () {
+          yield { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1, cached_input_tokens: 0 } };
+        })(),
+      }),
+    };
+    (provider as any).sdk = { Codex: class { constructor() {} } };
+    (provider as any).codex = {
+      startThread: (opts: Record<string, unknown>) => {
+        capturedStartOptions = opts;
+        return mockThread;
+      },
+    };
+
+    const stream = provider.streamChat({
+      prompt: 'hello',
+      sessionId: 'minimal-reasoning-session',
+      modelReasoningEffort: 'minimal',
+    });
+    await collectStream(stream);
+
+    assert.equal(capturedStartOptions?.modelReasoningEffort, 'minimal');
+    assert.equal(capturedStartOptions?.webSearchMode, 'disabled');
+  });
+
   it('maps yolo mode to danger-full-access and never approval policy for SDK threads', async () => {
     const { CodexProvider } = await import('../codex/provider.js');
     const { PendingPermissions } = await import('../permission-gateway.js');
@@ -1355,6 +1387,55 @@ describe('CodexProvider error events', () => {
     assert.match(errorEvent!.data, /Connection lost/);
     assert.match(errorEvent!.data, /phase: thread\.error/);
     assert.match(errorEvent!.data, /bridge_session_id: err-session-2/);
+  });
+
+  it('logs stdout error with SDK exit stderr when Codex exits non-zero after an error event', async () => {
+    const { CodexProvider } = await import('../codex/provider.js');
+    const { PendingPermissions } = await import('../permission-gateway.js');
+    const provider = new CodexProvider(new PendingPermissions());
+
+    const mockThread = {
+      runStreamed: () => ({
+        events: (async function* () {
+          yield {
+            type: 'error',
+            message: "The following tools cannot be used with reasoning.effort 'minimal': web_search",
+          };
+          throw new Error('Codex Exec exited with code 1: Reading prompt from stdin...');
+        })(),
+      }),
+    };
+    (provider as any).sdk = {
+      Codex: class { constructor() {} },
+    };
+    (provider as any).codex = {
+      startThread: () => mockThread,
+    };
+
+    const errors: unknown[][] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => { errors.push(args); };
+    try {
+      const stream = provider.streamChat({
+        prompt: 'test',
+        sessionId: 'stdout-error-session',
+      });
+      const chunks = await collectStream(stream);
+      const events = parseSSEChunks(chunks);
+      const errorEvents = events.filter(e => e.type === 'error');
+
+      assert.equal(errorEvents.length, 1);
+      assert.match(errorEvents[0].data, /minimal': web_search/);
+      assert.doesNotMatch(errorEvents[0].data, /Reading prompt from stdin/);
+    } finally {
+      console.error = originalError;
+    }
+
+    const diagnostic = errors.find((args) => args[0] === '[codex-provider] Codex exec failed after stdout error:');
+    assert.ok(diagnostic, 'Should log stdout error together with SDK exit stderr');
+    const payload = diagnostic![1] as { stdout_error: string; sdk_exit_error: string };
+    assert.match(payload.stdout_error, /minimal': web_search/);
+    assert.match(payload.sdk_exit_error, /Reading prompt from stdin/);
   });
 
   it('falls back to default message when message field is absent', async () => {

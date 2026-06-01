@@ -222,6 +222,9 @@ function formatCodexExecPreview(
   if (typeof threadOptions.networkAccessEnabled === 'boolean') {
     args.push('--config', `sandbox_workspace_write.network_access=${threadOptions.networkAccessEnabled}`);
   }
+  if (typeof threadOptions.webSearchMode === 'string') {
+    args.push('--config', `web_search="${threadOptions.webSearchMode}"`);
+  }
   if (typeof threadOptions.approvalPolicy === 'string') {
     args.push('--config', `approval_policy="${threadOptions.approvalPolicy}"`);
   }
@@ -269,9 +272,14 @@ function logCodexExecStart(params: {
         : null,
       approval_policy: params.threadOptions.approvalPolicy || null,
       model_reasoning_effort: params.threadOptions.modelReasoningEffort || null,
+      web_search_mode: params.threadOptions.webSearchMode || null,
       skip_git_repo_check: params.threadOptions.skipGitRepoCheck === true,
     },
   });
+}
+
+function isCodexExecExitError(message: string): boolean {
+  return message.startsWith('Codex Exec exited with ');
 }
 
 export class CodexProvider implements LLMProvider {
@@ -351,6 +359,7 @@ export class CodexProvider implements LLMProvider {
                 ? { networkAccessEnabled: params.networkAccessEnabled }
                 : {}),
               ...(modelReasoningEffort ? { modelReasoningEffort } : {}),
+              ...(modelReasoningEffort === 'minimal' ? { webSearchMode: 'disabled' } : {}),
               approvalPolicy,
             };
             const buildErrorContext = (phase: string): CodexErrorContext => ({
@@ -426,6 +435,7 @@ export class CodexProvider implements LLMProvider {
 
               let sawTerminalEvent = false;
               let sawCompletedAssistantContent = false;
+              let lastCodexStdoutError: string | null = null;
               const runAbortController = new AbortController();
               let terminalDrainTimer: NodeJS.Timeout | null = null;
               const clearTerminalDrainTimer = () => {
@@ -523,6 +533,7 @@ export class CodexProvider implements LLMProvider {
 
                     case 'turn.failed': {
                       const error = (event as { error?: { message?: string } }).error?.message;
+                      lastCodexStdoutError = error || 'Turn failed';
                       self.clearCachedThreadId(params.sessionId);
                       controller.enqueue(sseEvent('error', formatCodexErrorMessage(
                         error || 'Turn failed',
@@ -534,6 +545,7 @@ export class CodexProvider implements LLMProvider {
 
                     case 'error': {
                       const error = (event as { message?: string }).message;
+                      lastCodexStdoutError = error || 'Thread error';
                       self.clearCachedThreadId(params.sessionId);
                       controller.enqueue(sseEvent('error', formatCodexErrorMessage(
                         error || 'Thread error',
@@ -578,6 +590,15 @@ export class CodexProvider implements LLMProvider {
                   && isWindowsProcessTerminationParseNoise(message)
                 ) {
                   console.warn('[codex-provider] Suppressed Codex SDK Windows process cleanup parse noise:', message);
+                  break;
+                }
+                if (sawTerminalEvent && lastCodexStdoutError && isCodexExecExitError(message)) {
+                  console.error('[codex-provider] Codex exec failed after stdout error:', {
+                    bridge_session_id: params.sessionId,
+                    codex_thread_id: self.threadIds.get(params.sessionId) || savedThreadId || null,
+                    stdout_error: lastCodexStdoutError,
+                    sdk_exit_error: message,
+                  });
                   break;
                 }
                 self.clearCachedThreadId(params.sessionId);

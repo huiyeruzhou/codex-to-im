@@ -954,6 +954,9 @@ describe('bridge command e2e', () => {
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/sandbox read-only', 'incoming-runtime-sandbox'));
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/network on', 'incoming-runtime-network'));
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/r minimal', 'incoming-runtime-reasoning-minimal'));
+      assert.match(adapter.sent.at(-1)?.text || '', /已更新思考级别/);
+      assert.match(adapter.sent.at(-1)?.text || '', /禁用 web search/);
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/r high', 'incoming-runtime-reasoning'));
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/p tmux', 'incoming-runtime-provider'));
 

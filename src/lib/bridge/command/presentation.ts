@@ -118,6 +118,12 @@ export function formatReasoningEffort(reasoning: string): string {
   }
 }
 
+export function minimalReasoningWebSearchWarning(reasoning: string): string | null {
+  return reasoning === 'minimal'
+    ? '`minimal` 思考级别会禁用 web search；需要联网搜索时请切换到 `low` 或更高。'
+    : null;
+}
+
 export function buildCommandFields(
   title: string,
   fields: Array<[string, string | null | undefined]>,

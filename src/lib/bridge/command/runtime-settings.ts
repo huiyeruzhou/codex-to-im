@@ -13,6 +13,7 @@ import {
 import {
   buildCommandFields,
   formatReasoningEffort,
+  minimalReasoningWebSearchWarning,
 } from './presentation.js';
 import {
   formatDisplayedModel,
@@ -200,10 +201,13 @@ export function handleReasoningCommand(options: {
   options.store.updateSession(session.id, {
     reasoning_effort: reasoning as BridgeSession['reasoning_effort'],
   });
+  const notes = [REASONING_OPTIONS_TEXT];
+  const warning = minimalReasoningWebSearchWarning(reasoning);
+  if (warning) notes.push(warning);
   return buildCommandFields(
     '已更新思考级别',
     [['级别', formatReasoningEffort(reasoning)]],
-    [REASONING_OPTIONS_TEXT],
+    notes,
     options.markdown,
   );
 }

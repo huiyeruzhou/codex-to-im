@@ -1274,6 +1274,20 @@ describe('command-dispatch', () => {
       adapter,
       {
         address,
+        text: '/set codexReasoningEffort minimal',
+        messageId: 'incoming-set-reasoning-minimal',
+      } as any,
+      '/set codexReasoningEffort minimal',
+      deps,
+    );
+    assert.match(sent.at(-1) || '', /Codex 思考级别.*minimal/s);
+    assert.match(sent.at(-1) || '', /禁用 web search/);
+    assert.equal(loadConfig().codexReasoningEffort, 'minimal');
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
         text: '/set historyMessageLimit 12',
         messageId: 'incoming-set-history',
       } as any,

@@ -11,6 +11,7 @@ import { normalizeReasoningEffort } from './aliases.js';
 import {
   buildCommandFields,
   formatReasoningEffort,
+  minimalReasoningWebSearchWarning,
 } from './presentation.js';
 
 type ConfigPayload = ReturnType<typeof configToPayload>;
@@ -319,10 +320,15 @@ export function handleSetCommand(options: {
   const nextConfig = mergeConfig(currentConfig, nextPayload);
   saveConfig(nextConfig);
   const savedPayload = configToPayload(loadConfig());
+  const notes = ['配置已保存到 `~/.codex-to-im/config.env` 与 `config.v2.json`；后续 `/new` 和 Codex 请求会读取新的全局默认值。'];
+  if (definition.key === 'codexReasoningEffort') {
+    const warning = minimalReasoningWebSearchWarning(String(savedPayload.codexReasoningEffort || ''));
+    if (warning) notes.push(warning);
+  }
   return buildCommandFields(
     '已更新全局配置',
     buildSettingsFields(savedPayload, [definition]),
-    ['配置已保存到 `~/.codex-to-im/config.env` 与 `config.v2.json`；后续 `/new` 和 Codex 请求会读取新的全局默认值。'],
+    notes,
     options.markdown,
   );
 }
