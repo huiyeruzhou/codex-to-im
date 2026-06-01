@@ -14,6 +14,7 @@ export type CodexReasoningEffort = RuntimeReasoningEffort;
 export type ChannelProvider = 'feishu' | 'weixin';
 export type FeishuSite = 'feishu' | 'lark';
 export type RuntimeProvider = 'codex';
+export type CodexProviderChoice = 'sdk' | 'tmux';
 
 export function isSupportedChannelProvider(value: unknown): value is ChannelProvider {
   return value === 'feishu' || value === 'weixin';
@@ -23,6 +24,7 @@ export interface RuntimeConfigV2 {
   provider: RuntimeProvider;
   defaultWorkspaceRoot?: string;
   defaultModel?: string;
+  defaultProvider?: CodexProviderChoice;
   defaultMode: string;
   historyMessageLimit?: number;
   streamStatusIdleStartSeconds?: number;
@@ -81,6 +83,7 @@ export interface Config {
   runtime: RuntimeConfigV2['provider'];
   defaultWorkspaceRoot?: string;
   defaultModel?: string;
+  defaultProvider?: CodexProviderChoice;
   defaultMode: string;
   historyMessageLimit?: number;
   streamStatusIdleStartSeconds?: number;
@@ -227,6 +230,13 @@ function normalizeDefaultMode(value: unknown): string {
   return 'normal';
 }
 
+export function normalizeCodexProviderChoice(value: unknown): CodexProviderChoice | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'sdk' || normalized === 'tmux') return normalized;
+  return undefined;
+}
+
 function normalizeChannelInstances(value: unknown): ChannelInstance[] {
   if (!Array.isArray(value)) return [];
 
@@ -325,6 +335,7 @@ function migrateLegacyEnvToV2(env: Map<string, string>): ConfigV2File {
       provider: 'codex',
       defaultWorkspaceRoot: expandHomePath(env.get("CTI_DEFAULT_WORKSPACE_ROOT")) || undefined,
       defaultModel: env.get("CTI_DEFAULT_MODEL") || undefined,
+      defaultProvider: normalizeCodexProviderChoice(env.get("CTI_DEFAULT_PROVIDER")),
       defaultMode: normalizeDefaultMode(env.get("CTI_DEFAULT_MODE")),
       historyMessageLimit: parsePositiveInt(env.get("CTI_HISTORY_MESSAGE_LIMIT")) ?? 8,
       streamStatusIdleStartSeconds: parsePositiveInt(env.get("CTI_STREAM_STATUS_IDLE_START_SECONDS"))
@@ -417,6 +428,9 @@ function applyRuntimeEnvOverlay(runtime: RuntimeConfigV2, env: Map<string, strin
   }
   if (env.has("CTI_DEFAULT_MODEL")) {
     next.defaultModel = env.get("CTI_DEFAULT_MODEL") || undefined;
+  }
+  if (env.has("CTI_DEFAULT_PROVIDER")) {
+    next.defaultProvider = normalizeCodexProviderChoice(env.get("CTI_DEFAULT_PROVIDER"));
   }
   if (env.has("CTI_DEFAULT_MODE")) {
     next.defaultMode = normalizeDefaultMode(env.get("CTI_DEFAULT_MODE"));
@@ -560,6 +574,7 @@ function expandConfig(v2: ConfigV2File): Config {
     )),
     defaultWorkspaceRoot: v2.runtime.defaultWorkspaceRoot,
     defaultModel: v2.runtime.defaultModel,
+    defaultProvider: normalizeCodexProviderChoice(v2.runtime.defaultProvider),
     defaultMode: normalizeDefaultMode(v2.runtime.defaultMode),
     historyMessageLimit: v2.runtime.historyMessageLimit ?? 8,
     streamStatusIdleStartSeconds: v2.runtime.streamStatusIdleStartSeconds ?? DEFAULT_STREAM_STATUS_IDLE_START_SECONDS,
@@ -587,6 +602,7 @@ function buildV2FileFromExpandedConfig(config: Config, current?: ConfigV2File | 
       provider: config.runtime,
       defaultWorkspaceRoot: config.defaultWorkspaceRoot,
       defaultModel: config.defaultModel,
+      defaultProvider: normalizeCodexProviderChoice(config.defaultProvider),
       defaultMode: normalizeDefaultMode(config.defaultMode),
       historyMessageLimit: config.historyMessageLimit,
       streamStatusIdleStartSeconds: config.streamStatusIdleStartSeconds,
@@ -653,6 +669,7 @@ function buildConfigEnvSnapshot(config: ConfigV2File): string {
   );
   out += formatEnvLine("CTI_DEFAULT_WORKSPACE_ROOT", config.runtime.defaultWorkspaceRoot);
   out += formatEnvLine("CTI_DEFAULT_MODEL", config.runtime.defaultModel);
+  out += formatEnvLine("CTI_DEFAULT_PROVIDER", config.runtime.defaultProvider);
   out += formatEnvLine("CTI_DEFAULT_MODE", config.runtime.defaultMode);
   if (config.runtime.historyMessageLimit !== undefined) {
     out += formatEnvLine("CTI_HISTORY_MESSAGE_LIMIT", String(config.runtime.historyMessageLimit));
@@ -778,6 +795,9 @@ export function configToSettings(config: Config): Map<string, string> {
   if (config.defaultModel) {
     m.set("bridge_default_model", config.defaultModel);
     m.set("default_model", config.defaultModel);
+  }
+  if (config.defaultProvider) {
+    m.set("bridge_default_provider", config.defaultProvider);
   }
   m.set("bridge_default_mode", normalizeDefaultMode(config.defaultMode));
   m.set(

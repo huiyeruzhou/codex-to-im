@@ -32,11 +32,12 @@ const baseConfig: Config = {
 describe('Ui config application', () => {
   it('preserves the current default model when an unknown model is submitted', () => {
     const merged = mergeConfig(
-      { ...baseConfig, defaultModel: 'gpt-5.4' },
+      { ...baseConfig, defaultModel: 'gpt-5.4', defaultProvider: 'tmux' },
       { defaultModel: 'unknown-model', historyMessageLimit: 999 },
     );
 
     assert.equal(merged.defaultModel, 'gpt-5.4');
+    assert.equal(merged.defaultProvider, 'tmux');
     assert.equal(merged.historyMessageLimit, 20);
   });
 

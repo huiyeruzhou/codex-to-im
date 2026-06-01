@@ -95,6 +95,25 @@ const SETTING_DEFINITIONS: SettingDefinition[] = [
     write: writeString('defaultModel', { allowDefault: true }),
   },
   {
+    key: 'defaultProvider',
+    aliases: ['provider', 'codexProvider', 'defualtProvider'],
+    label: '默认 Codex Provider',
+    usage: '/set defaultProvider sdk|tmux',
+    read: (payload) => payload.defaultProvider || 'auto',
+    write(payload, rawValue) {
+      const token = rawValue.trim().toLowerCase();
+      if (['default', 'reset', 'unset', 'none', 'auto'].includes(token)) {
+        payload.defaultProvider = '';
+        return { ok: true };
+      }
+      if (token === 'sdk' || token === 'tmux') {
+        payload.defaultProvider = token;
+        return { ok: true };
+      }
+      return { ok: false, message: '默认 Codex Provider 必须是 sdk 或 tmux，也可以用 default/auto 恢复自动选择。' };
+    },
+  },
+  {
     key: 'defaultMode',
     aliases: ['mode'],
     label: '默认模式',
@@ -247,7 +266,7 @@ function buildSettingsFields(payload: ConfigPayload, definitions: SettingDefinit
 function buildUsageNotes(): string[] {
   return [
     '发送 `/set <key> <value>` 或 `/set <key>=<value>` 修改配置；配置保存方式与 UI 设置页相同。',
-    '示例：`/set defaultWorkspaceRoot ~/cx2im`、`/set defaultMode yolo`、`/set codexNetworkAccess off`。',
+    '示例：`/set defaultWorkspaceRoot ~/cx2im`、`/set defaultProvider tmux`、`/set codexNetworkAccess off`。',
     `可用 key：${SETTING_DEFINITIONS.map((definition) => definition.key).join(', ')}`,
   ];
 }

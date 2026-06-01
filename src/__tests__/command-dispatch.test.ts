@@ -1200,6 +1200,7 @@ describe('command-dispatch', () => {
     );
     assert.match(sent.at(-1) || '', /全局配置/);
     assert.match(sent.at(-1) || '', /defaultWorkspaceRoot/);
+    assert.match(sent.at(-1) || '', /defaultProvider/);
     assert.match(sent.at(-1) || '', /codexNetworkAccess/);
     assert.doesNotMatch(sent.at(-1) || '', /channels/);
     assert.equal(store.getChannelBinding(address.channelType, address.chatId), null);
@@ -1229,6 +1230,32 @@ describe('command-dispatch', () => {
       deps,
     );
     assert.match(sent.at(-1) || '', /默认模式.*yolo/s);
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/set defaultProvider tmux',
+        messageId: 'incoming-set-provider',
+      } as any,
+      '/set defaultProvider tmux',
+      deps,
+    );
+    assert.match(sent.at(-1) || '', /默认 Codex Provider.*tmux/s);
+    assert.equal(loadConfig().defaultProvider, 'tmux');
+
+    await handleBridgeCommand(
+      adapter,
+      {
+        address,
+        text: '/set defualtProvider sdk',
+        messageId: 'incoming-set-provider-typo-alias',
+      } as any,
+      '/set defualtProvider sdk',
+      deps,
+    );
+    assert.match(sent.at(-1) || '', /默认 Codex Provider.*sdk/s);
+    assert.equal(loadConfig().defaultProvider, 'sdk');
 
     await handleBridgeCommand(
       adapter,

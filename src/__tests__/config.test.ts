@@ -106,6 +106,7 @@ describe('configToSettings', () => {
     const configured = configToSettings({
       ...base,
       defaultModel: 'gpt-4o',
+      defaultProvider: 'tmux',
       defaultWorkspaceRoot: '/tmp/workspace',
       historyMessageLimit: 12,
       streamStatusIdleStartSeconds: 240,
@@ -119,6 +120,7 @@ describe('configToSettings', () => {
     });
     assert.equal(configured.get('bridge_default_model'), 'gpt-4o');
     assert.equal(configured.get('default_model'), 'gpt-4o');
+    assert.equal(configured.get('bridge_default_provider'), 'tmux');
     assert.equal(configured.get('bridge_default_workspace_root'), '/tmp/workspace');
     assert.equal(configured.get('bridge_history_message_limit'), '12');
     assert.equal(configured.get('bridge_stream_status_idle_start_seconds'), '240');
@@ -299,6 +301,7 @@ describe('loadConfig/saveConfig round-trip', () => {
       CONFIG_PATH,
       [
         'CTI_DEFAULT_MODEL=new-model',
+        'CTI_DEFAULT_PROVIDER=tmux',
         'CTI_HISTORY_MESSAGE_LIMIT=15',
         'CTI_CODEX_SANDBOX_MODE=danger-full-access',
         'CTI_SDK_TOOL_CALL_DETAILS_IN_TEXT=false',
@@ -322,6 +325,7 @@ describe('loadConfig/saveConfig round-trip', () => {
       console.warn = originalWarn;
     }
     assert.equal(loaded.defaultModel, 'new-model');
+    assert.equal(loaded.defaultProvider, 'tmux');
     assert.equal(loaded.historyMessageLimit, 15);
     assert.equal(loaded.codexSandboxMode, 'danger-full-access');
     assert.equal(loaded.sdkToolCallDetailsInText, true);
@@ -345,6 +349,7 @@ describe('loadConfig/saveConfig round-trip', () => {
 
     const persisted = JSON.parse(fs.readFileSync(CONFIG_V2_PATH, 'utf-8')) as any;
     assert.equal(persisted.runtime.defaultModel, 'new-model');
+    assert.equal(persisted.runtime.defaultProvider, 'tmux');
     assert.equal(persisted.runtime.sdkToolCallDetailsInText, true);
     assert.equal(persisted.channels[0].config.appId, 'old-app');
     assert.equal(persisted.channels[2].config.appId, 'env-app');
@@ -547,6 +552,7 @@ describe('loadConfig/saveConfig round-trip', () => {
     saveConfig({
       ...loaded,
       defaultMode: 'yolo',
+      defaultProvider: 'sdk',
       historyMessageLimit: 12,
       streamStatusIdleStartSeconds: 240,
       streamStatusCheckIntervalSeconds: 15,
@@ -577,10 +583,12 @@ describe('loadConfig/saveConfig round-trip', () => {
       ],
     );
     assert.equal(reloaded.defaultMode, 'yolo');
+    assert.equal(reloaded.defaultProvider, 'sdk');
     assert.equal(reloaded.historyMessageLimit, 12);
     assert.equal(reloaded.streamStatusIdleStartSeconds, 240);
     assert.equal(reloaded.streamStatusCheckIntervalSeconds, 15);
     assert.equal(reloaded.sdkToolCallDetailsInText, false);
     assert.doesNotMatch(fs.readFileSync(CONFIG_PATH, 'utf-8'), /CTI_SDK_TOOL_CALL_DETAILS_IN_TEXT/);
+    assert.match(fs.readFileSync(CONFIG_PATH, 'utf-8'), /CTI_DEFAULT_PROVIDER=sdk/);
   });
 });

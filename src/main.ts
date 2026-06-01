@@ -14,7 +14,7 @@ import * as bridgeManager from './lib/bridge/bridge-manager.js';
 import './lib/bridge/adapters/index.js';
 
 import type { LLMProvider } from './lib/bridge/host.js';
-import { loadConfig, configToSettings, CTI_HOME } from './config.js';
+import { loadConfig, configToSettings, CTI_HOME, type CodexProviderChoice } from './config.js';
 import { JsonFileStore } from './store.js';
 import { PendingPermissions } from './permission-gateway.js';
 import { setupLogger } from './logger.js';
@@ -40,9 +40,12 @@ const PROXY_ENV_KEYS = [
   'ws_proxy',
 ];
 
-async function resolveProvider(pendingPerms: PendingPermissions): Promise<LLMProvider> {
+async function resolveProvider(
+  pendingPerms: PendingPermissions,
+  defaultProvider?: CodexProviderChoice,
+): Promise<LLMProvider> {
   const { CodexRoutingProvider } = await import('./codex/routing-provider.js');
-  return new CodexRoutingProvider(pendingPerms);
+  return new CodexRoutingProvider(pendingPerms, defaultProvider);
 }
 
 interface StatusInfo {
@@ -126,8 +129,9 @@ async function main(): Promise<void> {
   const settings = configToSettings(config);
   const store = new JsonFileStore(settings, { dynamicSettings: true });
   const pendingPerms = new PendingPermissions();
-  const llm = await resolveProvider(pendingPerms);
+  const llm = await resolveProvider(pendingPerms, config.defaultProvider);
   console.log(`[codex-to-im] Runtime: ${config.runtime}`);
+  console.log(`[codex-to-im] Default Codex provider: ${config.defaultProvider || 'auto'}`);
 
   const gateway = {
     resolvePendingPermission: (id: string, resolution: { behavior: 'allow' | 'deny'; message?: string }) =>

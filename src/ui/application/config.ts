@@ -56,6 +56,7 @@ export function configToPayload(config: Config) {
     runtime: config.runtime,
     defaultWorkspaceRoot: config.defaultWorkspaceRoot || '',
     defaultModel: config.defaultModel || '',
+    defaultProvider: config.defaultProvider || '',
     codexDefaultModel: readConfiguredCodexModel() || '',
     availableModels: availableCodexModels,
     defaultMode: config.defaultMode,
@@ -79,6 +80,9 @@ export function mergeConfig(current: Config, payload: Record<string, unknown>): 
   const rawDefaultModel = typeof payload.defaultModel === 'string'
     ? payload.defaultModel.trim()
     : undefined;
+  const rawDefaultProvider = typeof payload.defaultProvider === 'string'
+    ? payload.defaultProvider.trim().toLowerCase()
+    : undefined;
   const uiAllowLan = payload.uiAllowLan === true;
   const requestedUiAccessToken = asString(payload.uiAccessToken);
   const uiAccessToken = requestedUiAccessToken
@@ -97,6 +101,11 @@ export function mergeConfig(current: Config, payload: Record<string, unknown>): 
         : availableCodexModelSlugs.has(rawDefaultModel)
           ? rawDefaultModel
           : current.defaultModel,
+    defaultProvider: rawDefaultProvider === undefined
+      ? current.defaultProvider
+      : rawDefaultProvider === 'sdk' || rawDefaultProvider === 'tmux'
+        ? rawDefaultProvider
+        : undefined,
     defaultMode: payload.defaultMode === 'yolo' ? 'yolo' : 'normal',
     historyMessageLimit: clampHistoryMessageLimit(payload.historyMessageLimit, current.historyMessageLimit || 8),
     streamStatusIdleStartSeconds: asPositiveInt(payload.streamStatusIdleStartSeconds)
