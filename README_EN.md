@@ -164,12 +164,15 @@ If the same shared thread is also used from Codex Native, CLI, or TUI, its outpu
 This creates a new thread under the working directory of the current formal session.
 If there is no formal session yet, or the current session is temporary, the command fails.
 
-You can also specify a directory explicitly:
+You can also specify a name, or both a name and a directory:
 
 ```text
-/new my-project
-/new D:\work\my-project
+/new my-thread
+/new my-thread ./my-project
+/new my-thread D:\work\my-project
 ```
+
+If you only want to specify a directory, make it path-like, for example `/new ./my-project`, `/new ~/work/my-project`, or `/new D:\work\my-project`.
 
 ## Common Commands
 
@@ -189,7 +192,8 @@ You can also specify a directory explicitly:
 - Index scope: `/t 1` and `/t add 1` use the global local-Codex-thread list from `/t`; `/t use 1` and `/t rm 1` use the current chat's local binding list from `/t ls`.
 - `/t 0`: switch to the temporary thread for the current chat.
 - `/new`: create a new thread under the current formal session directory.
-- `/new <path or project name>`: create a new thread under the specified directory.
+- `/new <name>`: create a named thread under the current formal session directory; the name must be unique among threads bound to the current chat.
+- `/new <name> <path>`: create a named thread under the specified directory; a single directory argument must be path-like, such as `./proj`, `~/proj`, or an absolute path.
 - `/mode <normal|yolo>`: change the runtime mode (`code` maps to `normal`; other legacy modes are no longer supported).
 - `/provider <sdk|tmux>`: change the Codex provider used by the current IM session.
 - `/tmux-switch`: list tmux sessions that can be attached.

@@ -1104,7 +1104,7 @@ describe('bridge command e2e', () => {
     }
   });
 
-  it('bootstraps a codex thread before starting tmux provider and still allows /new sayhi', async () => {
+  it('bootstraps a codex thread before starting tmux provider and still allows /new ./sayhi', async () => {
     const bootstrapThreadId = '019e81d3-e5b0-7540-ad14-4f3073b2701d';
     const llmCalls: RecordedLlmCall[] = [];
     const store = initBridgeTestContext({
@@ -1169,7 +1169,7 @@ describe('bridge command e2e', () => {
       assert.match(adapter.sent.at(-1)?.text || '', /不能通过 \/\/clear 清空上下文/);
       assert.match(adapter.sent.at(-1)?.text || '', /手动创建新会话/);
 
-      await _testOnly.handleMessage(adapter, inboundMessage(address, '/new sayhi', 'incoming-runtime-new-sayhi'));
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/new ./sayhi', 'incoming-runtime-new-sayhi'));
       const newBinding = store.getChannelBinding(address.channelType, address.chatId);
       assert.ok(newBinding);
       assert.notEqual(newBinding.id, tmuxBinding.id);

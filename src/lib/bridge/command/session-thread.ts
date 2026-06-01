@@ -101,7 +101,9 @@ function readFirstArg(raw: string): { first: string; rest: string } | null {
 }
 
 function looksLikeNewPath(value: string): boolean {
-  return value === '~'
+  return value === '.'
+    || value === '..'
+    || value === '~'
     || value.startsWith('~/')
     || value.startsWith('~\\')
     || value.includes('/')
@@ -109,7 +111,7 @@ function looksLikeNewPath(value: string): boolean {
     || /^[A-Za-z]:/.test(value);
 }
 
-const NEW_SESSION_ARG_RULE_NOTE = '参数规则：`/new <name> <path>` 可指定会话名；name 不能包含 `/` 或 `\\`。如果第一个参数像路径（如 `./hi`、`~/hi`、`/abs/path`、`C:\\work`），会按旧用法 `/new <path>` 处理。';
+const NEW_SESSION_ARG_RULE_NOTE = '参数规则：`/new <name>` 在当前正式会话目录下新建指定名称的线程；`/new <name> <path>` 可同时指定名称和目录。只有第一个参数明显像路径（如 `./hi`、`../hi`、`~/hi`、`/abs/path`、`C:\\work`）时，才按旧用法 `/new <path>` 处理。';
 
 export function parseNewSessionArgs(args: string): { name?: string; pathArgs: string } | { error: string } {
   const trimmed = args.trim();
@@ -117,7 +119,9 @@ export function parseNewSessionArgs(args: string): { name?: string; pathArgs: st
   const firstArg = readFirstArg(trimmed);
   if (!firstArg) return { error: '参数格式无效。名称包含空格时请使用引号，例如 `/new \"项目名\" ~/work/proj`。' };
   if (!firstArg.rest) {
-    return { pathArgs: trimmed };
+    return looksLikeNewPath(firstArg.first)
+      ? { pathArgs: trimmed }
+      : { name: firstArg.first, pathArgs: '' };
   }
   if (looksLikeNewPath(firstArg.first)) {
     return { error: `会话名不能包含路径分隔符或路径前缀。${NEW_SESSION_ARG_RULE_NOTE}` };
@@ -174,6 +178,27 @@ function validateThreadName(raw: string): { ok: true; name: string } | { ok: fal
     return { ok: false, message: '名称不能是纯数字，也不能长得像 binding id 或 thread id。' };
   }
   return { ok: true, name };
+}
+
+function validateNewSessionName(raw: string): { ok: true; name: string } | { ok: false; message: string } {
+  const parsed = validateThreadName(raw);
+  if (parsed.ok) return parsed;
+  return {
+    ok: false,
+    message: parsed.message.replace('用法：/t rename <新名称>。', '用法：/new <name> [path]。'),
+  };
+}
+
+function findDuplicateNewSessionName(
+  store: BridgeStore,
+  threadDisplay: CommandThreadDisplay,
+  address: InboundMessage['address'],
+  name: string,
+): ChannelBinding | null {
+  const normalized = name.trim();
+  if (!normalized) return null;
+  return listBindingsForChat(store, address.channelType, address.chatId)
+    .find((binding) => threadDisplay.binding(binding).title.trim() === normalized) || null;
 }
 
 function selectCodexThreadForCommand(
@@ -449,6 +474,32 @@ export function handleNewSessionCommand(options: {
   if (blocked) return { response: blocked };
   const newSessionArgs = parseNewSessionArgs(parsedArgs.args);
   if ('error' in newSessionArgs) return { response: newSessionArgs.error };
+  let newSessionName = newSessionArgs.name;
+  if (newSessionName !== undefined) {
+    const validatedName = validateNewSessionName(newSessionName);
+    if (!validatedName.ok) return { response: validatedName.message };
+    newSessionName = validatedName.name;
+    const duplicate = findDuplicateNewSessionName(
+      options.store,
+      options.threadDisplay,
+      options.msg.address,
+      newSessionName,
+    );
+    if (duplicate) {
+      return {
+        response: buildCommandFields(
+          '会话名已存在',
+          [
+            ['名称', newSessionName],
+            ['已有 binding_id', options.threadDisplay.bindingShortId(duplicate)],
+            ['已有线程', options.threadDisplay.binding(duplicate).title],
+          ],
+          ['请换一个名称，或发送 `/t ls` 查看现有绑定后用 `/t use <序号|binding-id|thread-id|名称>` 切换。'],
+          options.markdown,
+        ),
+      };
+    }
+  }
 
   const currentSession = options.commandBinding
     ? options.store.getSession(options.commandBinding.bridgeSessionId)
@@ -458,7 +509,7 @@ export function handleNewSessionCommand(options: {
 
   const workDir = resolved.workDir;
   ensureWorkingDirectoryExists(workDir);
-  const binding = router.createBinding(options.msg.address, workDir, newSessionArgs.name);
+  const binding = router.createBinding(options.msg.address, workDir, newSessionName);
   const session = options.store.getSession(binding.bridgeSessionId);
   auditCommandBindingChange(
     options.store,

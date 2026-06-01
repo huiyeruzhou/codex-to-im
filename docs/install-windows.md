@@ -193,7 +193,7 @@ Web 工作台现在只展示自动启动状态；真正的启用和关闭请使�
    - 推荐：`codex`
 2. 设置 `/history` 默认返回条数（可选）
 3. 设置默认工作空间
-   - 用于 `/new proj1` 这类相对项目名
+   - 用于 `/new name ./proj1`、`/new ./proj1` 这类相对项目路径
    - 留空时自动回退到 `~/cx2im`，并按当前系统展开为实际路径
 4. 选择 Codex 文件系统权限
    - 默认推荐 `workspace-write`
@@ -247,7 +247,8 @@ Web 工作台现在只展示自动启动状态；真正的启用和关闭请使�
 - `/h` / `/help` 帮助
 - `/t` / `/threads` 最近 10 条本地 Codex 会话，`/t all` / `/threads all` 最多查看 200 条，`/t n 100` / `/threads n 100` 查看最近 100 条（同样最多 200 条），`/t 1` / `/thread 1` 接管
 - `/n` / `/new` 在当前正式会话目录下新建线程；这类线程当前只保证在 IM 中可继续，不会自动出现在本地 Codex 会话列表中
-- `/n proj1` / `/new proj1` 新建项目会话
+- `/n name` / `/new name` 在当前正式会话目录下新建名为 `name` 的线程；名称不能与当前聊天已绑定线程重名
+- `/n name ./proj1` / `/new name ./proj1` 按指定名称和目录新建项目会话；只指定目录时请使用 `/new ./proj1` 或绝对路径
 - `/m` / `/mode` 查看或切换模式，可选 `normal` / `yolo`（`code` 会映射为 `normal`）
 - `/provider` 查看或切换 Codex Provider，可选 `sdk` / `tmux`
 - `/r` / `/reasoning` 查看或切换思考级别，也支持 `1|2|3|4|5`
