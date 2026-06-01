@@ -391,27 +391,38 @@ export function buildCodexThreadsCommandResponse(
   showAll: boolean,
   limit?: number,
   bindingStates: CodexThreadCardBindingState[] = [],
+  bridgeBindings: BoundThreadCardItem[] = [],
   extraFooter: string[] = [],
 ): string {
   const actualCount = codexSessions.length;
+  const totalCount = actualCount + bridgeBindings.length;
   const title = showAll
-    ? `本地 Codex 会话（当前显示 ${actualCount} 条，最多 ${MAX_CODEX_THREAD_LIST_LIMIT} 条）`
-    : `最近 ${actualCount} 条本地 Codex 会话`;
+    ? `Bridge / Codex 会话（当前显示 ${totalCount} 条，Codex 最多 ${MAX_CODEX_THREAD_LIST_LIMIT} 条）`
+    : bridgeBindings.length
+      ? `Bridge / Codex 会话（当前显示 ${totalCount} 条，其中 Bridge ${bridgeBindings.length} 条）`
+      : `最近 ${actualCount} 条本地 Codex 会话`;
   const limitNotice = buildCodexThreadLimitNotice(actualCount, limit);
   return buildThreadCommandTableResponse(
     title,
-    buildCodexThreadCommandTableRows(codexSessions, bindingStates),
+    [
+      ...buildBoundThreadCommandTableRows(bridgeBindings),
+      ...buildCodexThreadCommandTableRows(codexSessions, bindingStates),
+    ],
     [
       ...(limitNotice ? [limitNotice] : []),
       ...extraFooter,
       ...(showAll
       ? [
-          '发送 `/t 1` 可接管第 1 条本地 Codex 会话。',
+          bridgeBindings.length
+            ? 'Bridge 会话可用 `binding_id` 操作，例如 `/t use <binding_id>` 或 `/t archive <binding_id>`；本地 Codex 会话可用序号接管。'
+            : '发送 `/t 1` 可接管第 1 条本地 Codex 会话。',
           `卡片默认显示最多 ${MAX_CODEX_THREAD_LIST_LIMIT} 条本地 Codex 会话；文本 fallback 默认显示 10 条。`,
           `发送 \`/t n 100\` 可只看最近 100 条本地 Codex 会话（最多 ${MAX_CODEX_THREAD_LIST_LIMIT} 条）。`,
         ]
       : [
-          '发送 `/t 1` 可接管第 1 条本地 Codex 会话。',
+          bridgeBindings.length
+            ? 'Bridge 会话可用 `binding_id` 操作，例如 `/t use <binding_id>` 或 `/t archive <binding_id>`；本地 Codex 会话可用序号接管。'
+            : '发送 `/t 1` 可接管第 1 条本地 Codex 会话。',
           `发送 \`/t\` 或 \`/t all\` 可查看最多 ${MAX_CODEX_THREAD_LIST_LIMIT} 条本地 Codex 会话。`,
         ]),
     ],

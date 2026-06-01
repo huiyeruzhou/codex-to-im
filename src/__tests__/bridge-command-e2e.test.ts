@@ -750,6 +750,47 @@ describe('bridge command e2e', () => {
     assert.match(adapter.sent.at(-1)?.richCardUpdateMessageId || '', /reply-archive-1/);
   });
 
+  it('lists inactive /new bridge sessions in /t and archives one by binding id', async () => {
+    const store = initBridgeTestContext({ dynamicSettings: true });
+    const adapter = new RecordingAdapter();
+    const address = { channelType: 'feishu', chatId: 'chat-bridge-archive-binding-id' } as const;
+    const workDirA = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-bridge-archive-a-'));
+    const workDirB = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-bridge-archive-b-'));
+    const unboundWorkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-bridge-archive-unbound-'));
+    const unboundSession = store.createSession('Unbound bridge session', 'test-model', undefined, unboundWorkDir);
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/new ${workDirA}`, 'incoming-bridge-new-a'));
+    const bindingA = store.getChannelBinding(address.channelType, address.chatId);
+    assert.ok(bindingA);
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/new ${workDirB}`, 'incoming-bridge-new-b'));
+    const bindingB = store.getChannelBinding(address.channelType, address.chatId);
+    assert.ok(bindingB);
+    assert.notEqual(bindingB.id, bindingA.id);
+    assert.equal(store.listChannelBindings().find((binding) => binding.id === bindingA.id)?.active, false);
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, '/t', 'incoming-bridge-thread-list'));
+    const listText = adapter.sent.at(-1)?.text || '';
+    assert.match(listText, /Bridge \/ Codex 会话/);
+    assert.match(listText, new RegExp(bindingA.id.slice(0, 8)));
+    assert.match(listText, new RegExp(bindingB.id.slice(0, 8)));
+    assert.match(listText, new RegExp(unboundSession.id.slice(0, 8)));
+    assert.match(listText, /Unbound bridge session/);
+    assert.match(listText, /\/t archive <binding_id>/);
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/t archive ${bindingA.id.slice(0, 8)}`, 'incoming-bridge-archive'));
+    assert.match(adapter.sent.at(-1)?.text || '', /已归档 Bridge 会话/);
+    assert.equal(store.getSession(bindingA.bridgeSessionId), null);
+    assert.equal(store.listChannelBindings().some((binding) => binding.id === bindingA.id), false);
+    assert.ok(store.getSession(bindingB.bridgeSessionId));
+    assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, bindingB.id);
+
+    await _testOnly.handleMessage(adapter, inboundMessage(address, `/t archive ${unboundSession.id.slice(0, 8)}`, 'incoming-bridge-archive-unbound'));
+    assert.match(adapter.sent.at(-1)?.text || '', /已归档 Bridge 会话/);
+    assert.equal(store.getSession(unboundSession.id), null);
+    assert.equal(store.getChannelBinding(address.channelType, address.chatId)?.id, bindingB.id);
+  });
+
   it('keeps renamed thread titles identical in /current and /t dropdown surfaces', async () => {
     initBridgeTestContext({ dynamicSettings: true });
     const adapter = new RecordingAdapter();
