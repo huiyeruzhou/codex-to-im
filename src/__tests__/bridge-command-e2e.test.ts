@@ -777,6 +777,13 @@ describe('bridge command e2e', () => {
     assert.match(listText, new RegExp(unboundSession.id.slice(0, 8)));
     assert.match(listText, /Unbound bridge session/);
     assert.match(listText, /\/t archive <binding_id>/);
+    const listCard = adapter.sent.at(-1)?.richCard;
+    const listCardJson = JSON.stringify(listCard);
+    assert.match(listCard?.title || '', /Bridge \/ Codex 会话/);
+    assert.match(listCardJson, new RegExp(bindingA.id.slice(0, 8)));
+    assert.match(listCardJson, new RegExp(bindingB.id.slice(0, 8)));
+    assert.match(listCardJson, new RegExp(unboundSession.id.slice(0, 8)));
+    assert.match(listCardJson, /Unbound bridge session/);
 
     await _testOnly.handleMessage(adapter, inboundMessage(address, `/t archive ${bindingA.id.slice(0, 8)}`, 'incoming-bridge-archive'));
     assert.match(adapter.sent.at(-1)?.text || '', /已归档 Bridge 会话/);

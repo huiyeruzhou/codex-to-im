@@ -435,6 +435,7 @@ export function buildCodexThreadsCommandCard(
   showAll: boolean,
   limit?: number,
   bindingStates: CodexThreadCardBindingState[] = [],
+  bridgeBindings: BoundThreadCardItem[] = [],
   options: {
     channelType?: string;
     chatId?: string;
@@ -442,28 +443,44 @@ export function buildCodexThreadsCommandCard(
   } = {},
 ): OutboundRichCard | null {
   const actualCount = codexSessions.length;
+  const totalCount = actualCount + bridgeBindings.length;
   const title = showAll
-    ? `本地 Codex 会话（${actualCount}/${MAX_CODEX_THREAD_LIST_LIMIT}）`
-    : `最近 ${actualCount} 条本地 Codex 会话`;
+    ? bridgeBindings.length
+      ? `Bridge / Codex 会话（${totalCount}，Codex ${actualCount}/${MAX_CODEX_THREAD_LIST_LIMIT}）`
+      : `本地 Codex 会话（${actualCount}/${MAX_CODEX_THREAD_LIST_LIMIT}）`
+    : bridgeBindings.length
+      ? `Bridge / Codex 会话（${totalCount}，Bridge ${bridgeBindings.length}）`
+      : `最近 ${actualCount} 条本地 Codex 会话`;
   const limitNotice = buildCodexThreadLimitNotice(actualCount, limit);
   const selectedCallbackData = options.selectedThreadId
     ? `${THREAD_SELECT_CALLBACK_PREFIX}${encodeURIComponent(options.selectedThreadId)}`
     : undefined;
-  const tableRows = buildCodexThreadCommandTableRows(codexSessions, bindingStates);
+  const tableRows = [
+    ...buildBoundThreadCommandTableRows(bridgeBindings),
+    ...buildCodexThreadCommandTableRows(codexSessions, bindingStates),
+  ];
   const card: OutboundRichCard = {
     title,
-    subtitle: '`binding_id` 非 `-` 表示已绑定。点击按钮会执行对应命令，也可以继续发送纯文本命令。',
+    subtitle: bridgeBindings.length
+      ? 'Bridge 会话可用 `binding_id` 操作；本地 Codex 会话可用序号接管。点击按钮会执行对应命令，也可以继续发送纯文本命令。'
+      : '`binding_id` 非 `-` 表示已绑定。点击按钮会执行对应命令，也可以继续发送纯文本命令。',
     template: 'blue',
     table: buildThreadCommandCardTable(tableRows),
     sections: [],
     selects: [{
       id: 'codex_select',
-      placeholder: '选择本地 Codex 会话',
+      placeholder: bridgeBindings.length ? '选择 Bridge / Codex 会话' : '选择本地 Codex 会话',
       selectedCallbackData,
-      options: codexSessions.map((session, index) => ({
-        text: `${index + 1}. ${session.title || session.cwd || '未命名线程'}`,
-        callbackData: `${THREAD_SELECT_CALLBACK_PREFIX}${encodeURIComponent(session.threadId)}`,
-      })),
+      options: [
+        ...bridgeBindings.map((binding, index) => ({
+          text: `${index + 1}. ${binding.title || binding.cwd || '未命名线程'}`,
+          callbackData: `${THREAD_SELECT_CALLBACK_PREFIX}${encodeURIComponent(binding.bindingId)}`,
+        })),
+        ...codexSessions.map((session, index) => ({
+          text: `${bridgeBindings.length + index + 1}. ${session.title || session.cwd || '未命名线程'}`,
+          callbackData: `${THREAD_SELECT_CALLBACK_PREFIX}${encodeURIComponent(session.threadId)}`,
+        })),
+      ],
     }],
     actions: buildThreadCardActionRows([
       {
@@ -500,12 +517,16 @@ export function buildCodexThreadsCommandCard(
     footer: showAll
       ? [
           ...(limitNotice ? [limitNotice] : []),
-          '纯文本命令：`/t 1` 接管第 1 条，`/t add 1` 添加但不激活，`/t archive 1` 归档第 1 条。',
+          bridgeBindings.length
+            ? '纯文本命令：Bridge 会话可用 `binding_id` 操作，例如 `/t use <binding_id>` 或 `/t archive <binding_id>`；本地 Codex 会话可用序号接管。'
+            : '纯文本命令：`/t 1` 接管第 1 条，`/t add 1` 添加但不激活，`/t archive 1` 归档第 1 条。',
           '`/t`、`/t add` 和 `/t archive` 的序号来自这张全局本地 Codex 会话表；`/t use` 和 `/t rm` 的序号来自 `/t ls` 的局部绑定表。',
         ]
       : [
           ...(limitNotice ? [limitNotice] : []),
-          '纯文本命令：`/t 1` 接管第 1 条，`/t add 1` 添加但不激活。',
+          bridgeBindings.length
+            ? '纯文本命令：Bridge 会话可用 `binding_id` 操作，例如 `/t use <binding_id>` 或 `/t archive <binding_id>`；本地 Codex 会话可用序号接管。'
+            : '纯文本命令：`/t 1` 接管第 1 条，`/t add 1` 添加但不激活。',
           '`/t`、`/t add` 和 `/t archive` 的序号来自这张全局本地 Codex 会话表；`/t use` 和 `/t rm` 的序号来自 `/t ls` 的局部绑定表。',
           `更多：\`/t\` 或 \`/t all\` 最多 ${MAX_CODEX_THREAD_LIST_LIMIT} 条。`,
         ],

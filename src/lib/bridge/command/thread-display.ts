@@ -45,13 +45,15 @@ export class CommandThreadDisplay {
     channelType: string,
     chatId: string,
     selectedThreadId?: string | null,
+    bridgeBindings: BoundThreadCardItem[] = this.bridgeOnlyBoundThreadCardItems(channelType, chatId),
   ): OutboundRichCard | undefined {
-    if (!codexSessions || codexSessions.length === 0) return undefined;
+    if ((!codexSessions || codexSessions.length === 0) && bridgeBindings.length === 0) return undefined;
     return buildCodexThreadsCommandCard(
-      this.decorateCodexSessions(codexSessions, channelType, chatId),
+      this.decorateCodexSessions(codexSessions || [], channelType, chatId),
       showAll,
       limit,
       this.codexBindingStates(channelType, chatId),
+      bridgeBindings,
       { channelType, chatId, selectedThreadId },
     ) || undefined;
   }
