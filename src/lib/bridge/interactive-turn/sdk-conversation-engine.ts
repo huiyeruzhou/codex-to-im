@@ -333,6 +333,21 @@ async function consumeStream(
       return trimmed;
     }
   };
+  const appendCodexStdoutPreview = (line: string) => {
+    if (!onPartialText) return;
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    const snippet = [
+      '#### Codex stdout',
+      '',
+      '```json',
+      trimmed,
+      '```',
+    ].join('\n');
+    previewText = appendStreamPreviewChunk(previewText, snippet, true);
+    separateNextPreviewText = false;
+    try { onPartialText(previewText); } catch { /* non-critical */ }
+  };
 
   try {
     await runtime.consumeSseEvents(stream, async (event: SSEEvent) => {
@@ -468,6 +483,9 @@ async function consumeStream(
                   try { onPartialText(previewText); } catch { /* non-critical */ }
                 }
               }
+            }
+            if (typeof statusData.codex_stdout === 'string') {
+              appendCodexStdoutPreview(statusData.codex_stdout);
             }
           } catch { /* skip */ }
           break;

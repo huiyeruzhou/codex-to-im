@@ -274,6 +274,26 @@ function logCodexExecStart(params: {
   });
 }
 
+function formatCodexStdoutLine(event: ThreadEvent): string {
+  try {
+    return JSON.stringify(event);
+  } catch {
+    return stringifyUnknown(event);
+  }
+}
+
+function logCodexStdoutLine(params: {
+  sessionId: string;
+  threadId?: string;
+  line: string;
+}): void {
+  console.log('[codex-provider] Codex stdout:', {
+    bridge_session_id: params.sessionId,
+    thread_id: params.threadId || null,
+    line: params.line,
+  });
+}
+
 export class CodexProvider implements LLMProvider {
   private sdk: CodexModule | null = null;
   private codex: CodexInstance | null = null;
@@ -462,6 +482,16 @@ export class CodexProvider implements LLMProvider {
                   if (params.abortController?.signal.aborted) {
                     break;
                   }
+
+                  const codexStdoutLine = formatCodexStdoutLine(event);
+                  logCodexStdoutLine({
+                    sessionId: params.sessionId,
+                    threadId: self.threadIds.get(params.sessionId) || savedThreadId,
+                    line: codexStdoutLine,
+                  });
+                  controller.enqueue(sseEvent('status', {
+                    codex_stdout: codexStdoutLine,
+                  }));
 
                   switch (event.type) {
                     case 'thread.started': {
