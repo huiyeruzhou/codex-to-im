@@ -2163,14 +2163,7 @@ export class FeishuAdapter extends BaseChannelAdapter {
           if (this.richCardUpdates.get(updateKey)?.messageId === updateState.messageId) {
             this.richCardUpdates.delete(updateKey);
           }
-          if (updateMessageId) {
-            return this.sendAsPost(chatId, fallbackText, replyToMessageId);
-          }
         }
-      }
-
-      if (updateMessageId) {
-        return this.sendAsPost(chatId, fallbackText, replyToMessageId);
       }
     }
 

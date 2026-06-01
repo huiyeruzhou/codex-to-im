@@ -1485,14 +1485,16 @@ describe('command-dispatch', () => {
     const store = initTestContext();
     const sent: string[] = [];
     const richCards: OutboundRichCard[] = [];
+    const richCardUpdateMessageIds: Array<string | undefined> = [];
     const pinned: string[] = [];
     const unpinned: string[] = [];
     const adapter: any = {
       channelType: 'feishu',
       provider: 'feishu',
-      send: async (message: { text: string; richCard?: OutboundRichCard }) => {
+      send: async (message: { text: string; richCard?: OutboundRichCard; richCardUpdateMessageId?: string }) => {
         sent.push(message.text);
         if (message.richCard) richCards.push(message.richCard);
+        richCardUpdateMessageIds.push(message.richCardUpdateMessageId);
         return { ok: true, messageId: `reply-t-${sent.length}` };
       },
       pinMessage: async (_chatId: string, messageId: string) => {
@@ -1525,6 +1527,7 @@ describe('command-dispatch', () => {
         diagnoseAllActiveSessions: async () => [],
       },
     );
+    assert.equal(richCardUpdateMessageIds.at(-1), undefined);
     assert.match(sent.at(-1) || '', /当前聊天绑定/);
     assert.match(sent.at(-1) || '', /#\s+标题\s+目录\s+上一次活动\s+binding_id\s+thread_id\s+Creator\s+命令/);
     assert.match(sent.at(-1) || '', /first/);
@@ -1578,6 +1581,7 @@ describe('command-dispatch', () => {
         diagnoseAllActiveSessions: async () => [],
       },
     );
+    assert.equal(richCardUpdateMessageIds.at(-1), 'reply-t-1');
     assert.deepEqual(pinned, ['reply-t-1', 'reply-t-2']);
     assert.deepEqual(unpinned, ['reply-t-1']);
     assert.equal(getThreadTableMessageRecord(address)?.messageId, 'reply-t-2');
