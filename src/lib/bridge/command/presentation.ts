@@ -1,5 +1,5 @@
 import type { BridgeSession } from '../host.js';
-import type { OutboundRichCard } from '../types.js';
+import type { OutboundCardActionButton, OutboundRichCard } from '../types.js';
 import { buildCommandCallbackData } from '../command-callbacks.js';
 import { buildFencedCodeBlock } from '../markdown/fence.js';
 import type { CodexSessionSummary } from '../../../codex/session-index.js';
@@ -20,6 +20,7 @@ export {
 } from '../command-callbacks.js';
 
 const BOUND_THREADS_CARD_MAX_ITEMS = 20;
+const THREAD_CARD_ACTIONS_PER_ROW = 3;
 
 export interface CodexThreadCardBindingState {
   threadId: string;
@@ -346,6 +347,14 @@ function buildThreadCommandCardTable(rows: ThreadCommandTableRow[]) {
   };
 }
 
+function buildThreadCardActionRows(buttons: OutboundCardActionButton[]): OutboundCardActionButton[][] {
+  const rows: OutboundCardActionButton[][] = [];
+  for (let index = 0; index < buttons.length; index += THREAD_CARD_ACTIONS_PER_ROW) {
+    rows.push(buttons.slice(index, index + THREAD_CARD_ACTIONS_PER_ROW));
+  }
+  return rows;
+}
+
 export function buildBoundThreadsCommandResponse(
   bindings: BoundThreadCardItem[],
   markdown: boolean,
@@ -439,39 +448,38 @@ export function buildCodexThreadsCommandCard(
         callbackData: `${THREAD_SELECT_CALLBACK_PREFIX}${encodeURIComponent(session.threadId)}`,
       })),
     }],
-    actions: [
-      [
-        {
-          text: '绑定',
-          callbackData: buildThreadActionCallbackData('global', 'bind'),
-          type: 'primary',
-        },
-        {
-          text: '解绑',
-          callbackData: buildThreadActionCallbackData('global', 'rm'),
-          type: 'danger',
-        },
-        {
-          text: '归档',
-          callbackData: buildThreadActionCallbackData('global', 'archive'),
-          type: 'danger',
-        },
-        {
-          text: '激活',
-          callbackData: buildThreadActionCallbackData('global', 'use'),
-          type: 'default',
-        },
-      ],
-      [{
+    actions: buildThreadCardActionRows([
+      {
+        text: '绑定',
+        callbackData: buildThreadActionCallbackData('global', 'bind'),
+        type: 'primary',
+      },
+      {
+        text: '解绑',
+        callbackData: buildThreadActionCallbackData('global', 'rm'),
+        type: 'danger',
+      },
+      {
+        text: '归档',
+        callbackData: buildThreadActionCallbackData('global', 'archive'),
+        type: 'danger',
+      },
+      {
+        text: '激活',
+        callbackData: buildThreadActionCallbackData('global', 'use'),
+        type: 'default',
+      },
+      {
         text: '新建',
         callbackData: buildCommandCallbackData('/new'),
         type: 'primary',
-      }, {
+      },
+      {
         text: '刷新',
         callbackData: buildCommandCallbackData(showAll ? '/t all' : '/t'),
         type: 'default',
-      }],
-    ],
+      },
+    ]),
     footer: showAll
       ? [
           ...(limitNotice ? [limitNotice] : []),
@@ -523,45 +531,41 @@ export function buildBoundThreadsCommandCard(
           }],
         }
       : {}),
-    actions: bindings.length > 0
+    actions: buildThreadCardActionRows(bindings.length > 0
       ? [
-          [
-            {
-              text: '解绑',
-              callbackData: buildThreadActionCallbackData('bound', 'rm'),
-              type: 'danger',
-            },
-            {
-              text: '归档',
-              callbackData: buildThreadActionCallbackData('bound', 'archive'),
-              type: 'danger',
-            },
-            {
-              text: '激活',
-              callbackData: buildThreadActionCallbackData('bound', 'use'),
-              type: 'primary',
-            },
-          ],
-          [{
+          {
+            text: '解绑',
+            callbackData: buildThreadActionCallbackData('bound', 'rm'),
+            type: 'danger',
+          },
+          {
+            text: '归档',
+            callbackData: buildThreadActionCallbackData('bound', 'archive'),
+            type: 'danger',
+          },
+          {
+            text: '激活',
+            callbackData: buildThreadActionCallbackData('bound', 'use'),
+            type: 'primary',
+          },
+          {
             text: '刷新',
             callbackData: buildCommandCallbackData('/t ls'),
             type: 'default',
-          }],
+          },
         ]
       : [
-          [
-            {
-              text: '新建',
-              callbackData: buildCommandCallbackData('/new'),
-              type: 'primary',
-            },
-            {
-              text: '刷新',
-              callbackData: buildCommandCallbackData('/t ls'),
-              type: 'default',
-            },
-          ],
-        ],
+          {
+            text: '新建',
+            callbackData: buildCommandCallbackData('/new'),
+            type: 'primary',
+          },
+          {
+            text: '刷新',
+            callbackData: buildCommandCallbackData('/t ls'),
+            type: 'default',
+          },
+        ]),
     footer: [
       '纯文本命令：`/t use 1` 激活第 1 个绑定线程，`/t rm 1` 移除第 1 个绑定线程。',
       '`/t use` 和 `/t rm` 的序号来自这张局部绑定表；`/t` 和 `/t add` 的序号来自全局本地 Codex 会话表。',

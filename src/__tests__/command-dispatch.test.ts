@@ -1464,6 +1464,10 @@ describe('command-dispatch', () => {
       richCards.at(-1)?.actions?.flat().map((action) => action.text),
       ['解绑', '归档', '激活', '刷新'],
     );
+    assert.deepEqual(
+      richCards.at(-1)?.actions?.map((row) => row.map((action) => action.text)),
+      [['解绑', '归档', '激活'], ['刷新']],
+    );
     assert.equal(richCards.at(-1)?.table?.columns[0]?.horizontalAlign, 'center');
     assert.equal(richCards.at(-1)?.table?.rows[0]?.index, "<number_tag background_color='grey-500' font_color='white'>1</number_tag>");
     assert.doesNotMatch(String(richCards.at(-1)?.table?.rows[0]?.title || ''), /^<font color=/);
@@ -1615,6 +1619,11 @@ describe('command-dispatch', () => {
     assert.equal(message?.richCard?.title, '本地 Codex 会话（200/200）');
     assert.equal(message?.richCard?.table?.rows.length, 200);
     assert.equal(message?.richCard?.selects?.[0]?.options.length, 200);
+    assert.deepEqual(
+      message?.richCard?.actions?.map((row) => row.map((action) => action.text)),
+      [['绑定', '解绑', '归档'], ['激活', '新建', '刷新']],
+    );
+    assert.equal(message?.richCard?.actions?.every((row) => row.length <= 3), true);
     assert.match(message?.richCard?.footer?.[0] || '', /已达到 200 条显示上限/);
 
     fs.rmSync(path.join(process.env.CODEX_HOME!, 'sessions'), { recursive: true, force: true });
