@@ -949,7 +949,7 @@ describe('bridge command e2e', () => {
       const binding = store.getChannelBinding(address.channelType, address.chatId);
       assert.ok(binding);
       const normalThreadId = '019e46bc-f466-71d3-a186-a2ce89051958';
-      const normalTmuxSession = `codex-${normalThreadId}`;
+      const normalTmuxSession = `codex-binding-${binding.id}`;
       store.updateSessionCodexThreadId(binding.bridgeSessionId, normalThreadId);
 
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/sandbox read-only', 'incoming-runtime-sandbox'));
@@ -1023,7 +1023,7 @@ describe('bridge command e2e', () => {
       assert.equal(store.getSession(binding.bridgeSessionId)?.preferred_mode, 'yolo');
 
       const yoloThreadId = '019e46bc-f466-71d3-a186-a2ce89051959';
-      const yoloTmuxSession = `codex-${yoloThreadId}`;
+      const yoloTmuxSession = normalTmuxSession;
       store.updateSessionCodexThreadId(binding.bridgeSessionId, yoloThreadId);
       const beforeYoloLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
       await _testOnly.handleMessage(adapter, inboundMessage(address, '/provider tmux', 'incoming-runtime-provider-tmux-yolo'));
@@ -1046,6 +1046,55 @@ describe('bridge command e2e', () => {
       assert.match(statusText, /当前聊天正在使用 IM 会话/);
       assert.doesNotMatch(statusText, /当前聊天已绑定到一条共享会话/);
       assert.doesNotMatch(statusText, /还没有绑定本地 Codex 会话/);
+    } finally {
+      process.env.PATH = oldPath;
+      if (oldFakeLog === undefined) delete process.env.TMUX_FAKE_LOG;
+      else process.env.TMUX_FAKE_LOG = oldFakeLog;
+      if (oldFakeState === undefined) delete process.env.TMUX_FAKE_STATE;
+      else process.env.TMUX_FAKE_STATE = oldFakeState;
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+    }
+  });
+
+  it('starts tmux provider by binding id before a codex thread exists and still allows /new sayhi', async () => {
+    const store = initBridgeTestContext({
+      dynamicSettings: true,
+      settings: makeBridgeSettings(),
+    });
+    const fakeTmux = installFakeTmux();
+    const oldPath = process.env.PATH || '';
+    const oldFakeLog = process.env.TMUX_FAKE_LOG;
+    const oldFakeState = process.env.TMUX_FAKE_STATE;
+    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${oldPath}`;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+    process.env.TMUX_FAKE_STATE = fakeTmux.statePath;
+
+    const adapter = new RecordingAdapter();
+    const address = { channelType: 'feishu', chatId: 'chat-runtime-tmux-before-thread-e2e' } as const;
+
+    try {
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/p tmux', 'incoming-runtime-provider-first'));
+      const tmuxBinding = store.getChannelBinding(address.channelType, address.chatId);
+      assert.ok(tmuxBinding);
+      const tmuxSessionName = `codex-binding-${tmuxBinding.id}`;
+      const tmuxSession = store.getSession(tmuxBinding.bridgeSessionId);
+      assert.equal(tmuxSession?.codex_provider, 'tmux');
+      assert.equal(tmuxSession?.tmux_session_name, tmuxSessionName);
+      assert.equal(tmuxSession?.tmux_auto_enter, true);
+      assert.equal(tmuxSession?.codex_thread_id, undefined);
+
+      const startLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      assert.match(startLog, new RegExp(`new-session -d -s ${tmuxSessionName}`));
+      assert.doesNotMatch(startLog, / resume /);
+      assert.match(adapter.sent.at(-1)?.text || '', /binding_id/);
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/new sayhi', 'incoming-runtime-new-sayhi'));
+      const newBinding = store.getChannelBinding(address.channelType, address.chatId);
+      assert.ok(newBinding);
+      assert.notEqual(newBinding.id, tmuxBinding.id);
+      assert.equal(store.getSession(newBinding.bridgeSessionId)?.codex_thread_id, undefined);
+      assert.match(adapter.sent.at(-1)?.text || '', /已新建会话/);
+      assert.match(adapter.sent.at(-1)?.text || '', /sayhi/);
     } finally {
       process.env.PATH = oldPath;
       if (oldFakeLog === undefined) delete process.env.TMUX_FAKE_LOG;

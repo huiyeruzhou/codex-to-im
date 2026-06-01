@@ -28,7 +28,7 @@ import {
 import type { BridgeSession, BridgeStore } from '../host.js';
 import { parseMode } from '../security/validators.js';
 import {
-  codexTmuxSessionName,
+  codexTmuxBindingSessionName,
   startCodexResumeTmuxSession,
 } from '../tmux/runtime.js';
 import { getCodexThreadId } from '../turns/turn-classifier.js';
@@ -311,17 +311,9 @@ export async function handleProviderCommand(options: {
     );
   }
 
-  const threadId = getCodexThreadId(session, binding);
-  if (!threadId) {
-    return buildCommandFields(
-      '无法进入 tmux Provider',
-      [],
-      ['当前会话还没有 codex_thread_id。请先用 SDK Provider 发送一条普通消息创建 Codex thread，再发送 `/provider tmux`。'],
-      options.markdown,
-    );
-  }
+  const threadId = getCodexThreadId(session, binding) || undefined;
   const mode = formatSessionMode(binding, session);
-  const tmuxSessionName = codexTmuxSessionName(threadId);
+  const tmuxSessionName = codexTmuxBindingSessionName(binding.id);
   const startResult = await startCodexResumeTmuxSession({
     sessionName: tmuxSessionName,
     threadId,
@@ -334,12 +326,11 @@ export async function handleProviderCommand(options: {
     codexMode: mode === 'yolo' ? 'yolo' : 'normal',
     permissionMode: mode === 'yolo' ? 'never' : 'acceptEdits',
   });
-  options.store.updateSessionCodexThreadId(session.id, threadId);
   options.store.updateSession(session.id, {
     codex_provider: 'tmux',
     tmux_session_name: tmuxSessionName,
     tmux_auto_enter: true,
-    codex_thread_id: threadId,
+    ...(threadId ? { codex_thread_id: threadId } : {}),
   });
   await reconcileMirrorSubscriptionsBestEffort(options.deps, 'provider tmux switch');
   return buildCommandFields(
@@ -347,14 +338,17 @@ export async function handleProviderCommand(options: {
     [
       ['模式', mode],
       ['Provider', 'tmux'],
-      ['codex_thread_id', threadId],
+      ['binding_id', binding.id],
+      ['codex_thread_id', threadId || '-'],
       ['tmux session', tmuxSessionName],
       ['自动回车', 'on'],
     ],
     [
       startResult.existed
         ? '同名 tmux session 已存在，已先销毁并重新启动 Codex TUI。'
-        : '已启动 Codex TUI 并 resume 当前 thread。',
+        : threadId
+          ? '已启动 Codex TUI 并 resume 当前 thread。'
+          : '已启动 Codex TUI；当前会话尚无 codex_thread_id，将作为新 Codex TUI 会话运行。',
       '之后普通消息会发送到这个 tmux session；回复由 mirror 机制从 Codex session JSONL 自动同步。',
     ],
     options.markdown,

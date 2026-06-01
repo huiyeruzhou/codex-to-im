@@ -18,7 +18,7 @@ export {
 
 export interface StartCodexResumeTmuxSessionParams {
   sessionName: string;
-  threadId: string;
+  threadId?: string;
   bridgeSessionId: string;
   workingDirectory?: string;
   model?: string;
@@ -41,6 +41,11 @@ export interface StartCodexResumeTmuxSessionResult {
 export function codexTmuxSessionName(threadId: string): string {
   const safe = threadId.trim().replace(/[^A-Za-z0-9_.-]/g, '-').slice(0, 180);
   return `codex-${safe || 'thread'}`;
+}
+
+export function codexTmuxBindingSessionName(bindingId: string): string {
+  const safe = bindingId.trim().replace(/[^A-Za-z0-9_.-]/g, '-').slice(0, 180);
+  return `codex-binding-${safe || 'binding'}`;
 }
 
 export function buildCodexResumeTmuxCommand(params: StartCodexResumeTmuxSessionParams): {
