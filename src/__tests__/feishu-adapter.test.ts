@@ -1361,7 +1361,7 @@ describe('feishu-adapter structured streaming regions', () => {
     assert.deepEqual(cardUpdateCalls[0]?.path, { card_id: 'card-old' });
   });
 
-  it('does not create a replacement /t rich card when callback card recovery fails', async () => {
+  it('creates a replacement /t rich card when callback card recovery fails', async () => {
     const cardCreateCalls: Array<Record<string, any>> = [];
     const messageCreateCalls: Array<Record<string, any>> = [];
     const messageReplyCalls: Array<Record<string, any>> = [];
@@ -1418,10 +1418,11 @@ describe('feishu-adapter structured streaming regions', () => {
     });
 
     assert.equal(result.ok, true);
-    assert.equal(cardCreateCalls.length, 0);
+    assert.equal(result.messageId, 'msg-reply');
+    assert.equal(cardCreateCalls.length, 1);
     assert.equal(messageCreateCalls.length, 0);
     assert.equal(messageReplyCalls.length, 1);
-    assert.equal(messageReplyCalls[0]?.data?.msg_type, 'post');
+    assert.equal(messageReplyCalls[0]?.data?.msg_type, 'interactive');
     assert.deepEqual(messageReplyCalls[0]?.path, { message_id: 'card-message-1' });
   });
 

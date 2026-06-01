@@ -44,7 +44,10 @@ import {
   CommandThreadDisplay,
   type ThreadCardScope,
 } from './thread-display.js';
-import { persistAndPinLatestThreadTableMessage } from './thread-table-message-pins.js';
+import {
+  getThreadTableMessageRecord,
+  persistAndPinLatestThreadTableMessage,
+} from './thread-table-message-pins.js';
 import {
   handleTmuxBridgeCommand,
 } from './tmux.js';
@@ -548,11 +551,13 @@ export async function handleBridgeCommand(
   }
 
   if (response) {
+    const richCardUpdateMessageId = msg.callbackMessageId
+      || (threadTableCardScope ? getThreadTableMessageRecord(msg.address, threadTableCardScope)?.messageId : undefined);
     const result = await deliverBridgeNotice(adapter, msg.address, response, {
       replyToMessageId: msg.messageId,
       audit: auditResponse,
       richCard: responseRichCard,
-      richCardUpdateMessageId: msg.callbackMessageId,
+      richCardUpdateMessageId,
     });
     if (result.ok && threadTableCardScope && result.messageId) {
       await persistAndPinLatestThreadTableMessage(adapter, msg.address, threadTableCardScope, result.messageId);
