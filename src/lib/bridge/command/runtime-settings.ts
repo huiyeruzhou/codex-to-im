@@ -21,9 +21,12 @@ import {
   getCodexSessionByThreadIdSafe,
   getSelectableCodexModel,
   resolveDisplayedModel,
+  resolveEffectiveCodexProvider,
+  resolveEffectiveMode,
   resolveEffectiveNetworkAccess,
   resolveEffectiveReasoningEffort,
   resolveEffectiveSandboxMode,
+  resolveSessionRuntimeConfig,
 } from '../bridge-session-support.js';
 import type { BridgeSession, BridgeStore, LLMProvider, SSEEvent } from '../host.js';
 import { parseMode } from '../security/validators.js';
@@ -31,7 +34,6 @@ import {
   codexTmuxSessionName,
   startCodexResumeTmuxSession,
 } from '../tmux/runtime.js';
-import { shouldUseCodexTmuxTui } from '../../../codex/tmux-provider.js';
 import { getCodexThreadId } from '../turns/turn-classifier.js';
 import { getBridgeContext } from '../context.js';
 import type { ChannelBinding, InboundMessage } from '../types.js';
@@ -220,25 +222,18 @@ function parseCodexProviderArg(raw: string): 'sdk' | 'tmux' | null {
 }
 
 export function formatSessionMode(binding: ChannelBinding | null | undefined, session?: BridgeSession | null): string {
-  return parseMode(binding?.mode || session?.preferred_mode || '') || 'normal';
-}
-
-export function resolveEffectiveCodexProvider(store: BridgeStore, session?: BridgeSession | null): 'sdk' | 'tmux' {
-  if (session?.codex_provider === 'sdk' || session?.codex_provider === 'tmux') return session.codex_provider;
-  const configured = store.getSetting('bridge_default_provider');
-  if (configured === 'sdk' || configured === 'tmux') return configured;
-  return shouldUseCodexTmuxTui() ? 'tmux' : 'sdk';
+  return resolveEffectiveMode(binding, session);
 }
 
 export function formatSessionCodexProvider(store: BridgeStore, session?: BridgeSession | null): string {
-  const effective = resolveEffectiveCodexProvider(store, session);
+  const effective = resolveEffectiveCodexProvider(session);
   return session?.codex_provider
     ? effective
     : `${effective} (全局默认)`;
 }
 
 function isTmuxProviderSession(session?: BridgeSession | null): boolean {
-  return session?.codex_provider === 'tmux';
+  return resolveEffectiveCodexProvider(session) === 'tmux';
 }
 
 function buildTmuxProviderModeBlockedResponse(markdown: boolean): string {
@@ -430,11 +425,12 @@ export async function handleProviderCommand(options: {
     );
   }
 
-  const mode = formatSessionMode(binding, session);
-  const sandboxMode = resolveEffectiveSandboxMode(session) as CodexSandboxMode;
-  const networkAccessEnabled = resolveEffectiveNetworkAccess(session);
-  const modelReasoningEffort = resolveEffectiveReasoningEffort(session) as CodexReasoningEffort;
-  const skipGitRepoCheck = (options.store.getSetting('bridge_codex_skip_git_repo_check') || '').toLowerCase() === 'true';
+  const runtimeConfig = resolveSessionRuntimeConfig(binding, session);
+  const mode = runtimeConfig.mode;
+  const sandboxMode = runtimeConfig.sandboxMode as CodexSandboxMode;
+  const networkAccessEnabled = runtimeConfig.networkAccessEnabled;
+  const modelReasoningEffort = runtimeConfig.reasoningEffort as CodexReasoningEffort;
+  const skipGitRepoCheck = runtimeConfig.skipGitRepoCheck;
   let threadId = getCodexThreadId(session, binding) || undefined;
   let didBootstrapThread = false;
   if (!threadId) {

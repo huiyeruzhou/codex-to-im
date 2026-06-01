@@ -5,6 +5,7 @@ import * as broker from '../permission-broker.js';
 import * as router from '../channel-router.js';
 import type { BridgeSession, BridgeStore } from '../host.js';
 import { sendTmuxInterrupt } from '../tmux/runtime.js';
+import { resolveEffectiveCodexProvider } from '../bridge-session-support.js';
 import type { CommandThreadDisplay } from './thread-display.js';
 import type { ChannelBinding, InboundMessage } from '../types.js';
 
@@ -30,7 +31,8 @@ function sessionLooksRunning(session: BridgeSession | null | undefined): boolean
 }
 
 function shouldMapStopToTmuxInterrupt(session: BridgeSession | null | undefined): session is BridgeSession & { tmux_session_name: string } {
-  return session?.codex_provider === 'tmux'
+  if (!session) return false;
+  return resolveEffectiveCodexProvider(session) === 'tmux'
     && Boolean(session.tmux_session_name)
     && session.mirror_status === 'watching'
     && sessionLooksRunning(session);

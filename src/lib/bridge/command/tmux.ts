@@ -7,9 +7,14 @@ import { buildFencedCodeBlock } from '../markdown/fence.js';
 import { sanitizeInput } from '../security/validators.js';
 import {
   tmuxCore,
+  codexTmuxSessionName,
+  startCodexResumeTmuxSession,
+  type StartCodexResumeTmuxSessionParams,
   type TmuxSendAction,
   type TmuxSessionInfo,
 } from '../tmux/runtime.js';
+import { resolveEffectiveCodexProvider, resolveSessionRuntimeConfig } from '../bridge-session-support.js';
+import { getCodexThreadId } from '../turns/turn-classifier.js';
 export {
   buildCodexResumeTmuxCommand,
   codexTmuxSessionName,
@@ -60,6 +65,7 @@ export interface HandleTmuxBridgeCommandParams {
     };
   };
   richCard?: (card: OutboundRichCard) => void;
+  autoRecoverProviderSession?: boolean;
 }
 
 interface TmuxScreenArgs {
@@ -69,7 +75,7 @@ interface TmuxScreenArgs {
 }
 
 interface TmuxScreenMonitor {
-  timer: ReturnType<typeof setInterval>;
+  timer: ReturnType<typeof setTimeout>;
   target: string;
   lines: number;
   intervalSeconds: number;
@@ -82,6 +88,7 @@ interface TmuxScreenMonitor {
     finish: (status: 'completed' | 'interrupted' | 'error', text: string) => Promise<boolean>;
   };
   busy: boolean;
+  stopped: boolean;
 }
 
 const screenMonitors = new Map<string, TmuxScreenMonitor>();
@@ -89,6 +96,21 @@ const screenMonitors = new Map<string, TmuxScreenMonitor>();
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+function stopAllTmuxScreenMonitors(): number {
+  const monitors = [...screenMonitors.values()];
+  for (const monitor of monitors) {
+    monitor.stopped = true;
+    clearTimeout(monitor.timer);
+  }
+  screenMonitors.clear();
+  return monitors.length;
+}
+
+export const _testOnlyTmuxScreenMonitors = {
+  activeCount: () => screenMonitors.size,
+  stopAll: stopAllTmuxScreenMonitors,
+};
 
 function buildTmuxCommandPreview(commands: string[], markdown: boolean): string {
   const normalized = commands.map((command) => command.trim()).filter(Boolean);
@@ -309,7 +331,6 @@ function canonicalBaseKey(raw: string): string | null {
   if (named[lower]) return named[lower];
   if (/^f(?:[1-9]|1[0-2])$/i.test(normalized)) return normalized.toUpperCase();
   if (/^[A-Za-z0-9]$/.test(normalized)) return normalized.toLowerCase();
-  if (/^[A-Za-z][A-Za-z0-9_-]*$/.test(normalized)) return normalized;
   return null;
 }
 
@@ -378,6 +399,11 @@ function parseTmuxKeySequence(raw: string): TmuxSendAction[] | null {
   return actions.length > 0 ? actions : null;
 }
 
+function isPureSpecialKeySyntax(raw: string): boolean {
+  const trimmed = raw.trim();
+  return Boolean(trimmed) && /^(?:<[^<>]+>\s*)+$/.test(trimmed);
+}
+
 function shouldAppendAutoEnter(actions: TmuxSendAction[], session: BridgeSession): boolean {
   if (!getAutoEnter(session)) return false;
   const lastAction = actions.at(-1);
@@ -437,6 +463,73 @@ function buildTmuxScreenResponse(
     screenBlock + suffix,
   ].join('\n').trim();
   return appendTmuxCommandPreview(response, options?.commands || [], markdown);
+}
+
+async function ensureCodexTmuxSessionForProvider(
+  params: Pick<HandleTmuxBridgeCommandParams, 'store' | 'binding' | 'session' | 'autoRecoverProviderSession'>,
+): Promise<{ target: string | undefined; commands: string[]; recovered: boolean; error?: string }> {
+  const { store, binding, session } = params;
+  const configuredTarget = session.tmux_session_name?.trim() || '';
+  if (resolveEffectiveCodexProvider(session) !== 'tmux') {
+    return { target: configuredTarget || undefined, commands: [], recovered: false };
+  }
+
+  const threadId = getCodexThreadId(session, binding);
+  const target = configuredTarget || (threadId ? codexTmuxSessionName(threadId) : '');
+  if (!target) {
+    return {
+      target: undefined,
+      commands: [],
+      recovered: false,
+      error: 'tmux Provider 缺少 codex_thread_id，无法自动恢复 Codex TUI。请先发送 `/provider tmux` 重新初始化。',
+    };
+  }
+
+  const exists = await tmuxCore.hasSession(target);
+  if (exists.exists) {
+    if (!configuredTarget) store.updateSession(session.id, { tmux_session_name: target });
+    return { target, commands: [exists.command], recovered: false };
+  }
+
+  if (params.autoRecoverProviderSession !== true) {
+    return {
+      target,
+      commands: [exists.command],
+      recovered: false,
+      error: `tmux session 不存在：${target}。请先发送 \`/provider tmux\` 重新启动 Codex TUI，或发送 \`/tmux-new ${target}\` 手动创建。`,
+    };
+  }
+
+  if (!threadId) {
+    return {
+      target,
+      commands: [exists.command],
+      recovered: false,
+      error: 'tmux Provider 缺少 codex_thread_id，无法自动恢复 Codex TUI。请先发送 `/provider tmux` 重新初始化。',
+    };
+  }
+
+  const runtimeConfig = resolveSessionRuntimeConfig(binding, session);
+  const started = await startCodexResumeTmuxSession({
+    sessionName: target,
+    threadId,
+    bridgeSessionId: session.id,
+    workingDirectory: binding.workingDirectory || session.working_directory,
+    model: runtimeConfig.model || undefined,
+    sandboxMode: runtimeConfig.sandboxMode as StartCodexResumeTmuxSessionParams['sandboxMode'],
+    networkAccessEnabled: runtimeConfig.networkAccessEnabled,
+    modelReasoningEffort: runtimeConfig.reasoningEffort as StartCodexResumeTmuxSessionParams['modelReasoningEffort'],
+    skipGitRepoCheck: runtimeConfig.skipGitRepoCheck,
+    codexMode: runtimeConfig.mode === 'yolo' ? 'yolo' : 'normal',
+    permissionMode: runtimeConfig.mode === 'yolo' ? 'never' : 'acceptEdits',
+  });
+  store.updateSession(session.id, {
+    codex_provider: 'tmux',
+    tmux_session_name: target,
+    tmux_auto_enter: session.tmux_auto_enter === true,
+    codex_thread_id: threadId,
+  });
+  return { target, commands: [exists.command, ...started.commands], recovered: true };
 }
 
 function formatTmuxScreenCardStatus(target: string, lines: number, intervalSeconds: number): string {
@@ -537,7 +630,8 @@ function parseTmuxScreenArgs(args: string): TmuxScreenArgs | null {
 function stopTmuxScreenMonitor(key: string): TmuxScreenMonitor | null {
   const existing = screenMonitors.get(key);
   if (!existing) return null;
-  clearInterval(existing.timer);
+  existing.stopped = true;
+  clearTimeout(existing.timer);
   screenMonitors.delete(key);
   return existing;
 }
@@ -558,11 +652,29 @@ function startTmuxScreenMonitor(params: {
 }): void {
   stopTmuxScreenMonitor(params.key);
   const monitor: TmuxScreenMonitor = {
-    timer: setInterval(async () => {
-      if (monitor.busy) return;
+    timer: setTimeout(() => {}, params.intervalSeconds * 1000),
+    target: params.target,
+    lines: params.lines,
+    intervalSeconds: params.intervalSeconds,
+    markdown: params.markdown,
+    deliver: params.deliver,
+    stopCallbackData: params.stopCallbackData,
+    card: params.card,
+    busy: false,
+    stopped: false,
+  };
+  const scheduleNext = () => {
+    if (monitor.stopped) return;
+    monitor.timer = setTimeout(async () => {
+      if (monitor.stopped) return;
+      if (monitor.busy) {
+        scheduleNext();
+        return;
+      }
       monitor.busy = true;
       try {
         const capture = await tmuxCore.capturePane(monitor.target, monitor.lines);
+        if (monitor.stopped) return;
         const text = buildTmuxScreenResponse(
           monitor.target,
           capture.screen,
@@ -579,6 +691,7 @@ function startTmuxScreenMonitor(params: {
           await monitor.deliver(text);
         }
       } catch (error) {
+        if (monitor.stopped) return;
         const text = formatTmuxError(error);
         if (monitor.card) {
           monitor.card.update(text, `tmux ${monitor.target} · refresh failed`);
@@ -587,17 +700,13 @@ function startTmuxScreenMonitor(params: {
         }
       } finally {
         monitor.busy = false;
+        scheduleNext();
       }
-    }, params.intervalSeconds * 1000),
-    target: params.target,
-    lines: params.lines,
-    intervalSeconds: params.intervalSeconds,
-    markdown: params.markdown,
-    deliver: params.deliver,
-    stopCallbackData: params.stopCallbackData,
-    card: params.card,
-    busy: false,
+    }, monitor.intervalSeconds * 1000);
+    monitor.timer.unref?.();
   };
+  clearTimeout(monitor.timer);
+  scheduleNext();
   screenMonitors.set(params.key, monitor);
 }
 
@@ -648,29 +757,31 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
         return '已停止 tmux 屏幕定时刷新。';
       }
 
-      const target = session.tmux_session_name;
-      if (!target) {
+      const ensured = await ensureCodexTmuxSessionForProvider(params);
+      if (ensured.error) return ensured.error;
+      const captureTarget = ensured.target || session.tmux_session_name;
+      if (!captureTarget) {
         return 'tmux 未绑定。先发送 `/tmux-switch` 查看 session，或 `/tmux-attach <session>` / `/tmux-new <session>` 绑定。';
       }
       const lines = parsed.lines ?? getCaptureLines(session);
-      const capture = await tmuxCore.capturePane(target, lines);
+      const capture = await tmuxCore.capturePane(captureTarget, lines);
       if (parsed.intervalSeconds) {
         if (!params.screenMonitor) return appendTmuxCommandPreview('当前环境不支持 tmux 屏幕定时刷新。', [capture.command], markdown);
         const card = params.screenMonitor.card;
-        const initialText = buildTmuxScreenResponse(target, capture.screen, lines, markdown, {
+        const initialText = buildTmuxScreenResponse(captureTarget, capture.screen, lines, markdown, {
           intervalSeconds: parsed.intervalSeconds,
           monitorStarted: true,
-          commands: card ? [] : [capture.command],
+          commands: card ? [] : [...ensured.commands, capture.command],
         });
         if (card) {
           if (params.screenMonitor.stopCallbackData) {
             card.actions?.(buildTmuxScreenStopActions(params.screenMonitor.stopCallbackData, false));
           }
-          card.update(initialText, formatTmuxScreenCardStatus(target, lines, parsed.intervalSeconds));
+          card.update(initialText, formatTmuxScreenCardStatus(captureTarget, lines, parsed.intervalSeconds));
         }
         startTmuxScreenMonitor({
           key: params.screenMonitor.key,
-          target,
+          target: captureTarget,
           lines,
           intervalSeconds: parsed.intervalSeconds,
           markdown,
@@ -680,10 +791,10 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
         });
         if (card) return '';
       }
-      return buildTmuxScreenResponse(target, capture.screen, lines, markdown, {
+      return buildTmuxScreenResponse(captureTarget, capture.screen, lines, markdown, {
         intervalSeconds: parsed.intervalSeconds,
         monitorStarted: Boolean(parsed.intervalSeconds),
-        commands: [capture.command],
+        commands: [...ensured.commands, capture.command],
       });
     }
 
@@ -774,10 +885,12 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
     }
 
     if (command === '/tmux' || command === '/tmux-key') {
-      const target = session.tmux_session_name;
       if (!args.trim()) {
         return buildTmuxOverviewResponse(session, markdown);
       }
+      const ensured = await ensureCodexTmuxSessionForProvider(params);
+      const target = ensured.target || session.tmux_session_name;
+      if (ensured.error) return ensured.error;
       if (!target) {
         return buildCommandFields(
           'tmux 未绑定',
@@ -787,6 +900,15 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
         );
       }
       const keySequenceActions = command === '/tmux' ? parseTmuxKeySequence(args) : null;
+      if (command === '/tmux' && !keySequenceActions && isPureSpecialKeySyntax(args)) {
+        const invalid = parseTmuxSendActions(args);
+        return buildCommandFields(
+          'tmux 按键用法',
+          [['错误', invalid.error || '特殊键序列不合法。']],
+          ['`/tmux` 单独发送尖括号序列时只接受合法控制键，例如 `/tmux <C-c><Enter>`；普通文本请不要写成单独的尖括号 token。'],
+          markdown,
+        );
+      }
       const parsed = command === '/tmux-key'
         ? parseTmuxSendActions(args)
         : { actions: keySequenceActions || [{ type: 'literal', text: args }] as TmuxSendAction[] };
@@ -806,7 +928,7 @@ export async function handleTmuxBridgeCommand(params: HandleTmuxBridgeCommandPar
       await delay(CAPTURE_AFTER_SEND_DELAY_MS);
       const lines = getCaptureLines(session);
       const capture = await tmuxCore.capturePane(target, lines);
-      return buildTmuxCaptureResponse(capture.screen, lines, [...sendResult.commands, capture.command], markdown);
+      return buildTmuxCaptureResponse(capture.screen, lines, [...ensured.commands, ...sendResult.commands, capture.command], markdown);
     }
 
     return `未知 tmux 命令：${command}`;

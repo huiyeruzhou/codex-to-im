@@ -91,6 +91,7 @@ import {
   formatDisplayedModel,
   getCodexSessionByThreadIdSafe,
   resolveDisplayedModel,
+  resolveEffectiveCodexProvider,
   resolveNewWorkingDirectory,
   resolveNewSessionWorkingDirectory,
 } from './bridge-session-support.js';
@@ -1478,7 +1479,7 @@ async function handleMessage(
 
   const tmuxProviderBinding = store.getChannelBinding(msg.address.channelType, msg.address.chatId);
   const tmuxProviderSession = tmuxProviderBinding ? store.getSession(tmuxProviderBinding.bridgeSessionId) : null;
-  if (tmuxProviderSession?.codex_provider === 'tmux') {
+  if (tmuxProviderSession && resolveEffectiveCodexProvider(tmuxProviderSession) === 'tmux') {
     if (rawText.trim().toLowerCase() === '//clear') {
       await deliverBridgeNotice(adapter, msg.address, '当前处于 tmux Provider，不能通过 `//clear` 清空上下文。请通过 codex-to-im 手动创建新会话。', {
         replyToMessageId: msg.messageId,
@@ -1522,7 +1523,7 @@ async function handleMessage(
     }
     if (text) {
       try {
-        await handleCommand(adapter, msg, `/tmux ${text}`);
+        await handleCommand(adapter, msg, `/tmux ${text}`, { tmuxProviderAutoForward: true });
       } catch (error) {
         console.error('[bridge-manager] tmux provider command forwarding failed: /tmux', error);
         await deliverBridgeNotice(adapter, msg.address, toUserVisibleCommandError('/tmux', error), {
@@ -1635,6 +1636,7 @@ async function handleCommand(
     threadCardSelectedId?: string | null;
     selectedAutoTaskId?: string | null;
     selectedAutoTaskAction?: AutoTaskCardAction | null;
+    tmuxProviderAutoForward?: boolean;
   } = {},
 ): Promise<void> {
   await handleBridgeCommand(adapter, msg, text, {
@@ -1649,6 +1651,7 @@ async function handleCommand(
     threadCardSelectedId: options.threadCardSelectedId,
     selectedAutoTaskId: options.selectedAutoTaskId,
     selectedAutoTaskAction: options.selectedAutoTaskAction,
+    tmuxProviderAutoForward: options.tmuxProviderAutoForward,
     startAutoTask,
     stopAutoTask,
     onBindingRemoved: handleBindingRemovedForAutoTasks,

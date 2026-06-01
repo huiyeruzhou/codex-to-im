@@ -1330,6 +1330,127 @@ describe('bridge command e2e', () => {
     }
   });
 
+  it('uses the default tmux provider for new sessions and recovers the provider tmux session after it is killed', async () => {
+    const bootstrapThreadId = '019e824e-10ef-7430-985d-4349ce6a15f9';
+    const llmCalls: RecordedLlmCall[] = [];
+    const store = initBridgeTestContext({
+      dynamicSettings: true,
+      settings: makeBridgeSettings({ bridge_default_provider: 'tmux' }),
+      llm: {
+        streamChat(params: StreamChatParams): ReadableStream<string> {
+          llmCalls.push({
+            sessionId: params.sessionId,
+            codexThreadId: params.codexThreadId || '',
+            prompt: params.prompt,
+          });
+          return new ReadableStream({
+            start(controller) {
+              controller.enqueue(`data: ${JSON.stringify({ type: 'status', data: JSON.stringify({ session_id: bootstrapThreadId }) })}\n`);
+              controller.close();
+            },
+          });
+        },
+      },
+    });
+    const fakeTmux = installFakeTmux();
+    const oldPath = process.env.PATH || '';
+    const oldFakeLog = process.env.TMUX_FAKE_LOG;
+    const oldFakeState = process.env.TMUX_FAKE_STATE;
+    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${oldPath}`;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+    process.env.TMUX_FAKE_STATE = fakeTmux.statePath;
+
+    const adapter = new RecordingAdapter();
+    registerAdapter(adapter);
+    const bridgeState = (globalThis as unknown as Record<string, any>).__bridge_manager__;
+    bridgeState.running = true;
+    const address = { channelType: 'feishu', chatId: 'chat-runtime-tmux-default-recover-e2e' } as const;
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-runtime-tmux-default-recover-'));
+    const tmuxSession = `codex_${bootstrapThreadId}`;
+    const fixture = writeCodexSessionJsonlFixture({
+      threadId: bootstrapThreadId,
+      workDir,
+      lines: [{
+        timestamp: '2026-05-28T00:00:00.000Z',
+        type: 'session_meta',
+        payload: {
+          id: bootstrapThreadId,
+          timestamp: '2026-05-28T00:00:00.000Z',
+          cwd: workDir,
+          originator: 'Codex CLI',
+        },
+      }],
+    });
+
+    try {
+      await _testOnly.handleMessage(adapter, inboundMessage(address, `/new ${workDir}`, 'incoming-tmux-default-new'));
+      const binding = store.getChannelBinding(address.channelType, address.chatId);
+      assert.ok(binding);
+      assert.equal(store.getSession(binding.bridgeSessionId)?.codex_provider, undefined);
+      assert.match(adapter.sent.at(-1)?.text || '', /Provider.*tmux \(全局默认\)/s);
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/p tmux', 'incoming-tmux-default-provider'));
+      assert.equal(store.getSession(binding.bridgeSessionId)?.codex_provider, 'tmux');
+      assert.equal(store.getSession(binding.bridgeSessionId)?.tmux_session_name, tmuxSession);
+      assert.deepEqual(llmCalls.map((call) => ({
+        sessionId: call.sessionId,
+        codexThreadId: call.codexThreadId,
+        prompt: call.prompt,
+      })), [{
+        sessionId: binding.bridgeSessionId,
+        codexThreadId: '',
+        prompt: 'Initialize this Codex session and wait for the next instruction.',
+      }]);
+
+      const beforeFirstMessageLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '第一条', 'incoming-tmux-default-first'));
+      const firstMessageLog = fs.readFileSync(fakeTmux.logPath, 'utf-8').slice(beforeFirstMessageLog.length);
+      assert.match(firstMessageLog, new RegExp(`has-session -t ${tmuxSession}`));
+      assert.match(firstMessageLog, new RegExp(`send-keys -t ${tmuxSession} -l 第一条`));
+      appendCodexMirrorTurn(fixture.sessionPath, {
+        timestampPrefix: '2026-05-28T00:01',
+        turnId: 'turn-tmux-default-first',
+        userText: '第一条',
+        assistantText: '第一条响应',
+      });
+      await _testOnly.reconcileMirrorSubscriptions();
+      assert.match(adapter.sent.map((message) => message.text).join('\n\n'), /第一条响应/);
+
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/tmux manual after start', 'incoming-tmux-default-manual'));
+      assert.doesNotMatch(adapter.sent.at(-1)?.text || '', /tmux session 不存在/);
+
+      fs.writeFileSync(fakeTmux.statePath, '', 'utf-8');
+      const beforeManualMissingLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '/tmux manual missing', 'incoming-tmux-default-manual-missing'));
+      const manualMissingLog = fs.readFileSync(fakeTmux.logPath, 'utf-8').slice(beforeManualMissingLog.length);
+      assert.match(adapter.sent.at(-1)?.text || '', /tmux session 不存在/);
+      assert.doesNotMatch(manualMissingLog, new RegExp(`new-session -d -s ${tmuxSession}`));
+
+      const beforeRecoveredMessageLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      await _testOnly.handleMessage(adapter, inboundMessage(address, '第二条', 'incoming-tmux-default-second'));
+      const recoveredMessageLog = fs.readFileSync(fakeTmux.logPath, 'utf-8').slice(beforeRecoveredMessageLog.length);
+      assert.match(recoveredMessageLog, new RegExp(`has-session -t ${tmuxSession}`));
+      assert.match(recoveredMessageLog, new RegExp(`new-session -d -s ${tmuxSession}`));
+      assert.match(recoveredMessageLog, new RegExp(`resume ${bootstrapThreadId}`));
+      assert.match(recoveredMessageLog, new RegExp(`send-keys -t ${tmuxSession} -l 第二条`));
+      appendCodexMirrorTurn(fixture.sessionPath, {
+        timestampPrefix: '2026-05-28T00:02',
+        turnId: 'turn-tmux-default-second',
+        userText: '第二条',
+        assistantText: '第二条响应',
+      });
+      await _testOnly.reconcileMirrorSubscriptions();
+      assert.match(adapter.sent.map((message) => message.text).join('\n\n'), /第二条响应/);
+    } finally {
+      process.env.PATH = oldPath;
+      if (oldFakeLog === undefined) delete process.env.TMUX_FAKE_LOG;
+      else process.env.TMUX_FAKE_LOG = oldFakeLog;
+      if (oldFakeState === undefined) delete process.env.TMUX_FAKE_STATE;
+      else process.env.TMUX_FAKE_STATE = oldFakeState;
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+    }
+  });
+
   it('surfaces the SDK bootstrap error when /p tmux cannot create a codex thread', async () => {
     const store = initBridgeTestContext({
       dynamicSettings: true,

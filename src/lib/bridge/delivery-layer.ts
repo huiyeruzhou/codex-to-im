@@ -17,6 +17,7 @@ const BASE_DELAY_MS = 1000;
 const JITTER_MAX_MS = 500;
 /** Delay between sending multiple chunks to avoid rate limits. */
 const INTER_CHUNK_DELAY_MS = 300;
+const DISABLE_OUTBOUND_RATE_LIMIT_ENV = 'CTI_DISABLE_OUTBOUND_RATE_LIMIT';
 
 /** Shared rate limiter instance (20 messages/minute per chat). */
 const rateLimiter = new ChatRateLimiter();
@@ -24,6 +25,10 @@ const rateLimiter = new ChatRateLimiter();
 // Periodically clean up idle rate limiter buckets (every 5 minutes).
 // unref() so the timer doesn't prevent Node.js process exit (e.g. in tests).
 setInterval(() => { rateLimiter.cleanup(); }, 5 * 60_000).unref();
+
+function isOutboundRateLimitDisabled(): boolean {
+  return process.env[DISABLE_OUTBOUND_RATE_LIMIT_ENV] === '1';
+}
 
 /**
  * Split text into chunks that fit within a platform's message size limit.
@@ -160,7 +165,9 @@ export async function deliver(
 
   for (let i = 0; i < chunks.length; i++) {
     // Rate limit: wait if this chat is sending too fast
-    await rateLimiter.acquire(message.address.chatId);
+    if (!isOutboundRateLimitDisabled()) {
+      await rateLimiter.acquire(message.address.chatId);
+    }
 
     // Inter-chunk delay to avoid hitting rate limits on multi-chunk messages
     if (i > 0) {

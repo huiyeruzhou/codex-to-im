@@ -10,6 +10,7 @@ import { CONFIG_PATH, CONFIG_V2_PATH, CTI_HOME, loadConfig } from '../config.js'
 import { JsonFileStore } from '../store.js';
 import { initBridgeContext } from '../lib/bridge/context.js';
 import { handleBridgeCommand } from '../lib/bridge/command.js';
+import { _testOnlyTmuxScreenMonitors } from '../lib/bridge/command/tmux.js';
 import { buildCommandCallbackData, parseCommandCallbackData } from '../lib/bridge/command-callbacks.js';
 import * as router from '../lib/bridge/channel-router.js';
 import { getThreadTableMessageRecord } from '../lib/bridge/command/thread-table-message-pins.js';
@@ -2748,6 +2749,22 @@ describe('command-dispatch', () => {
       assert.match(keySequenceLogDelta, /send-keys -t alpha Enter/);
       assert.doesNotMatch(keySequenceLogDelta, /send-keys -t alpha -l <C-c><Enter>/);
 
+      const beforeInvalidKeyLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/tmux <entent>',
+          messageId: 'incoming-tmux-invalid-direct-key',
+        } as any,
+        '/tmux <entent>',
+        deps,
+      );
+      const invalidKeyResponse = sent.at(-1) || '';
+      assert.match(invalidKeyResponse, /特殊键序列不合法|不支持的特殊键/);
+      const invalidKeyLogDelta = fs.readFileSync(fakeTmux.logPath, 'utf-8').slice(beforeInvalidKeyLog.length);
+      assert.doesNotMatch(invalidKeyLogDelta, /send-keys/);
+
       const beforeMixedDirectLog = fs.readFileSync(fakeTmux.logPath, 'utf-8');
       await handleBridgeCommand(
         adapter,
@@ -2893,6 +2910,7 @@ describe('command-dispatch', () => {
       );
       assert.match(sent.at(-1) || '', /已停止 tmux 屏幕定时刷新/);
       assert.doesNotMatch(sent.at(-1) || '', /真实 tmux 底层命令/);
+      assert.equal(_testOnlyTmuxScreenMonitors.activeCount(), 0);
 
       await handleBridgeCommand(
         adapter,
@@ -2961,12 +2979,90 @@ describe('command-dispatch', () => {
       assert.match(log, /capture-pane -t alpha -p -S -42/);
       assert.match(log, /capture-pane -t alpha -p -S -30/);
     } finally {
+      _testOnlyTmuxScreenMonitors.stopAll();
       process.env.PATH = oldPath;
       if (oldFakeLog === undefined) {
         delete process.env.TMUX_FAKE_LOG;
       } else {
         process.env.TMUX_FAKE_LOG = oldFakeLog;
       }
+      fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not recover missing tmux provider sessions for manual /tmux commands', async () => {
+    const settings = makeSettings();
+    settings.set('bridge_default_provider', 'tmux');
+    const store = new JsonFileStore(settings, { dynamicSettings: true });
+    initBridgeContext({
+      store,
+      llm: noopLlm,
+      permissions: { resolvePendingPermission: () => false },
+      lifecycle: {},
+    });
+    const fakeTmux = installFakeTmux();
+    const oldPath = process.env.PATH || '';
+    const oldFakeLog = process.env.TMUX_FAKE_LOG;
+    process.env.PATH = `${fakeTmux.binDir}${path.delimiter}${oldPath}`;
+    process.env.TMUX_FAKE_LOG = fakeTmux.logPath;
+
+    try {
+      const sent: string[] = [];
+      const adapter: any = {
+        channelType: 'feishu',
+        send: async (message: { text: string }) => {
+          sent.push(message.text);
+          return { ok: true, messageId: `reply-tmux-recover-${sent.length}` };
+        },
+      };
+      const address = { channelType: 'feishu', chatId: 'chat-tmux-provider-recover' } as const;
+      const deps = {
+        getActiveTask: () => undefined,
+        diagnoseSessionHealth: async () => null,
+        diagnoseAllActiveSessions: async () => [],
+      };
+      const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cti-tmux-provider-recover-'));
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: `/new ${workDir}`,
+          messageId: 'incoming-tmux-recover-new',
+        } as any,
+        `/new ${workDir}`,
+        deps,
+      );
+      const binding = store.getChannelBinding(address.channelType, address.chatId);
+      assert.ok(binding);
+      assert.equal(store.getSession(binding.bridgeSessionId)?.codex_provider, undefined);
+
+      const threadId = '019e824e-10ef-7430-985d-4349ce6a15f9';
+      const tmuxSession = `codex_${threadId}`;
+      store.updateSessionCodexThreadId(binding.bridgeSessionId, threadId);
+
+      await handleBridgeCommand(
+        adapter,
+        {
+          address,
+          text: '/tmux hi manual',
+          messageId: 'incoming-tmux-recover-manual',
+        } as any,
+        '/tmux hi manual',
+        deps,
+      );
+      assert.match(sent.at(-1) || '', /tmux session 不存在/);
+      let log = fs.readFileSync(fakeTmux.logPath, 'utf-8');
+      assert.match(log, new RegExp(`has-session -t ${tmuxSession}`));
+      assert.doesNotMatch(log, new RegExp(`new-session -d -s ${tmuxSession}`));
+      assert.doesNotMatch(log, new RegExp(`send-keys -t ${tmuxSession}`));
+
+      assert.equal(store.getSession(binding.bridgeSessionId)?.codex_provider, undefined);
+      assert.equal(store.getSession(binding.bridgeSessionId)?.tmux_session_name, undefined);
+    } finally {
+      process.env.PATH = oldPath;
+      if (oldFakeLog === undefined) delete process.env.TMUX_FAKE_LOG;
+      else process.env.TMUX_FAKE_LOG = oldFakeLog;
       fs.rmSync(fakeTmux.binDir, { recursive: true, force: true });
     }
   });

@@ -23,6 +23,8 @@ if (
   process.env.CTI_HOME = createdTempHome;
 }
 
+process.env.CTI_DISABLE_OUTBOUND_RATE_LIMIT = process.env.CTI_DISABLE_OUTBOUND_RATE_LIMIT || '1';
+
 if (!process.env.CODEX_HOME) {
   const codexHome = path.join(process.env.CTI_HOME!, 'codex-home');
   fs.mkdirSync(codexHome, { recursive: true });

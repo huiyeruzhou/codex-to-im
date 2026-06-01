@@ -20,7 +20,9 @@ import {
   normalizeReasoningEffort as normalizeStoredReasoningEffort,
   normalizeSandboxMode,
 } from '../../runtime-options.js';
+import { shouldUseCodexTmuxTui } from '../../codex/tmux-provider.js';
 import { getBridgeContext } from './context.js';
+import type { ChannelBinding } from './types.js';
 import type { BridgeSession } from './host.js';
 import { validateWorkingDirectory } from './security/validators.js';
 
@@ -74,6 +76,64 @@ export function resolveEffectiveNetworkAccess(session?: BridgeSession | null): b
     return session.codex_network_access;
   }
   return (store.getSetting('bridge_codex_network_access') || '').toLowerCase() === 'true';
+}
+
+export type SessionRuntimeCodexProvider = 'sdk' | 'tmux';
+
+export const sessionRuntimeConfigBrand: unique symbol = Symbol('SessionRuntimeConfig');
+
+export interface SessionRuntimeConfig {
+  /**
+   * Brand marker: runtime execution must use config returned by
+   * resolveSessionRuntimeConfig(), not ad-hoc raw BridgeSession fields.
+   */
+  readonly [sessionRuntimeConfigBrand]: true;
+  mode: 'normal' | 'yolo';
+  model: string;
+  codexProvider: SessionRuntimeCodexProvider;
+  sandboxMode: string;
+  networkAccessEnabled: boolean;
+  reasoningEffort: string;
+  skipGitRepoCheck: boolean;
+}
+
+export function resolveEffectiveMode(
+  binding?: Pick<ChannelBinding, 'mode'> | null,
+  session?: BridgeSession | null,
+): 'normal' | 'yolo' {
+  return (binding?.mode || session?.preferred_mode || getBridgeContext().store.getSetting('bridge_default_mode')) === 'yolo'
+    ? 'yolo'
+    : 'normal';
+}
+
+export function resolveEffectiveCodexProvider(session?: BridgeSession | null): SessionRuntimeCodexProvider {
+  const { store } = getBridgeContext();
+  if (session?.codex_provider === 'sdk' || session?.codex_provider === 'tmux') return session.codex_provider;
+  const configured = store.getSetting('bridge_default_provider');
+  if (configured === 'sdk' || configured === 'tmux') return configured;
+  return shouldUseCodexTmuxTui() ? 'tmux' : 'sdk';
+}
+
+export function resolveEffectiveSkipGitRepoCheck(): boolean {
+  return (getBridgeContext().store.getSetting('bridge_codex_skip_git_repo_check') || '').toLowerCase() === 'true';
+}
+
+export function resolveSessionRuntimeConfig(
+  binding?: Pick<ChannelBinding, 'mode' | 'model'> | null,
+  session?: BridgeSession | null,
+): SessionRuntimeConfig {
+  const { store } = getBridgeContext();
+  const mode = resolveEffectiveMode(binding, session);
+  return {
+    [sessionRuntimeConfigBrand]: true,
+    mode,
+    model: binding?.model || session?.model || store.getSetting('bridge_default_model') || '',
+    codexProvider: resolveEffectiveCodexProvider(session),
+    sandboxMode: mode === 'yolo' ? 'danger-full-access' : resolveEffectiveSandboxMode(session),
+    networkAccessEnabled: resolveEffectiveNetworkAccess(session),
+    reasoningEffort: resolveEffectiveReasoningEffort(session),
+    skipGitRepoCheck: resolveEffectiveSkipGitRepoCheck(),
+  };
 }
 
 export function resolveDisplayedModel(

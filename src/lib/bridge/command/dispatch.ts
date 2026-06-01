@@ -94,6 +94,7 @@ export interface BridgeCommandDispatchDeps {
   hotUpdateEnv?: NodeJS.ProcessEnv;
   hotUpdateLogRefreshIntervalMs?: number;
   shellRunner?: ShellCommandRunner;
+  tmuxProviderAutoForward?: boolean;
 }
 
 export async function handleBridgeCommand(
@@ -264,6 +265,7 @@ export async function handleBridgeCommand(
         binding,
         session,
         markdown: responseParseMode === 'Markdown',
+        autoRecoverProviderSession: deps.tmuxProviderAutoForward === true,
         screenMonitor: command === '/tmux-screen'
           ? {
               key: `${msg.address.channelType}:${msg.address.chatId}:${binding.bridgeSessionId}`,

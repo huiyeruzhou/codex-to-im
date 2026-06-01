@@ -35,6 +35,7 @@ import {
   parseContextUsageInfo,
   type ContextUsageInfo,
 } from '../context-usage.js';
+import { resolveSessionRuntimeConfig } from '../bridge-session-support.js';
 
 export interface PermissionRequestInfo {
   permissionRequestId: string;
@@ -100,24 +101,6 @@ export interface SdkConversationRuntime {
   normalizeReasoningEffort(value: unknown): NonNullable<StreamChatParams['modelReasoningEffort']>;
 }
 
-function resolveReasoningEffort(
-  runtime: SdkConversationRuntime,
-  session: BridgeSession | null,
-): 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' {
-  return runtime.normalizeReasoningEffort(
-    session?.reasoning_effort || runtime.store.getSetting('bridge_codex_reasoning_effort'),
-  );
-}
-
-function normalizeRuntimeMode(mode: unknown): 'normal' | 'yolo' {
-  return mode === 'yolo' ? 'yolo' : 'normal';
-}
-
-function normalizeCodexProvider(provider: unknown): 'sdk' | 'tmux' | undefined {
-  if (provider === 'sdk' || provider === 'tmux') return provider;
-  return undefined;
-}
-
 /**
  * Process an inbound message: send to the LLM provider, consume the response stream,
  * save to DB, and return the result.
@@ -174,15 +157,7 @@ export async function processMessage(
     // Resolve session early — needed for workingDirectory and provider resolution
     const session = store.getSession(sessionId);
     const workDir = binding.workingDirectory || session?.working_directory || '';
-    const codexMode = normalizeRuntimeMode(binding.mode || session?.preferred_mode);
-    const sandboxMode = codexMode === 'yolo'
-      ? 'danger-full-access'
-      : runtime.normalizeSandboxMode(session?.codex_sandbox_mode || store.getSetting('bridge_codex_sandbox_mode'));
-    const networkAccessEnabled = typeof session?.codex_network_access === 'boolean'
-      ? session.codex_network_access
-      : (store.getSetting('bridge_codex_network_access') || '').toLowerCase() === 'true';
-    const modelReasoningEffort = resolveReasoningEffort(runtime, session);
-    const skipGitRepoCheck = (store.getSetting('bridge_codex_skip_git_repo_check') || '').toLowerCase() === 'true';
+    const runtimeConfig = resolveSessionRuntimeConfig(binding, session);
 
     const { savedContent, llmFiles, persistedFileMeta } = prepareSdkMessageAttachments({ text, files, workDir });
     store.addMessage(sessionId, 'user', savedContent);
@@ -201,10 +176,10 @@ export async function processMessage(
     }
 
     // Effective model
-    const effectiveModel = binding.model || session?.model || store.getSetting('default_model') || undefined;
+    const effectiveModel = runtimeConfig.model || undefined;
     const codexThreadId = session?.codex_thread_id?.trim() || undefined;
 
-    const permissionMode = codexMode === 'yolo' ? 'never' : 'acceptEdits';
+    const permissionMode = runtimeConfig.mode === 'yolo' ? 'never' : 'acceptEdits';
 
     // Load conversation history for context
     const { messages: recentMsgs } = store.getMessages(sessionId, { limit: 50 });
@@ -228,16 +203,16 @@ export async function processMessage(
       codexThreadId: codexThreadId,
       model: effectiveModel,
       forceModel: !codexThreadId && Boolean(effectiveModel),
-      sandboxMode,
-      networkAccessEnabled,
-      modelReasoningEffort,
-      skipGitRepoCheck,
+      sandboxMode: runtimeConfig.sandboxMode as StreamChatParams['sandboxMode'],
+      networkAccessEnabled: runtimeConfig.networkAccessEnabled,
+      modelReasoningEffort: runtimeConfig.reasoningEffort as StreamChatParams['modelReasoningEffort'],
+      skipGitRepoCheck: runtimeConfig.skipGitRepoCheck,
       systemPrompt: session?.system_prompt || undefined,
       workingDirectory: workDir || undefined,
       abortController,
       permissionMode,
-      codexMode,
-      codexProvider: normalizeCodexProvider(session?.codex_provider),
+      codexMode: runtimeConfig.mode,
+      codexProvider: runtimeConfig.codexProvider,
       provider: resolvedProvider,
       conversationHistory: historyMsgs,
       files: llmFiles,
