@@ -157,8 +157,9 @@ describe('command-dispatch', () => {
         hotUpdateRunner: async (request) => {
           capturedRuns.push(request);
           assert.equal(request.env.CTI_HOT_UPDATE_TEST_MARKER, 'from-current-bridge-env');
-          assert.equal(path.basename(request.cwd), 'codex-to-im');
           assert.equal(request.scriptPath, path.join(request.cwd, 'scripts', 'hot-update-bridge.sh'));
+          assert.equal(fs.existsSync(request.scriptPath), true);
+          assert.equal(JSON.parse(fs.readFileSync(path.join(request.cwd, 'package.json'), 'utf-8')).name, 'codex-to-im');
           assert.deepEqual(request.args, ['--dry-run', '--pull', '--skip-tests']);
           return {
             stdout: [

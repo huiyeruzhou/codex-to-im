@@ -2,6 +2,7 @@ import './test-setup.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -12,6 +13,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 test('hot-update script dry-run validates cwd, node runtime, env paths, and safe order without dispatching', async () => {
   const projectRoot = path.resolve(__dirname, '..', '..');
   const ctiHome = path.join(process.env.CODEX_HOME || projectRoot, 'hot-update-dry-run-home');
+  const packageJson = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf-8')) as { name?: string };
+
+  assert.equal(packageJson.name, 'codex-to-im');
+  assert.equal(fs.existsSync(path.join(projectRoot, 'scripts', 'hot-update-bridge.sh')), true);
 
   const result = await execFileAsync(
     'bash',

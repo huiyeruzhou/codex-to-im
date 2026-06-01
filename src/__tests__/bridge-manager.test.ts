@@ -509,6 +509,25 @@ describe('bridge-manager resolveCommandAlias', () => {
     assert.equal(activeCard?.table?.rows?.[0]?.binding_id, '**binding-**');
     assert.equal(activeCard?.table?.rows?.[0]?.thread_id, '**thread-1**');
     assert.match(String(activeCard?.table?.rows?.[1]?.title || ''), /^<font color='grey-500'>/);
+
+    const bridgeCard = buildCodexThreadsCommandCard(sessions.slice(0, 1), false, undefined, [], [{
+      title: 'Bridge Draft',
+      cwd: '/tmp/bridge-draft',
+      lastActiveAt: '2026-03-31T00:00:00.000Z',
+      threadId: '',
+      bindingId: 'bridge-binding-1',
+      active: true,
+      originator: 'Bridge',
+    }]);
+    assert.match(bridgeCard?.title || '', /Bridge \/ Codex 会话/);
+    assert.equal(bridgeCard?.table?.rows.length, 2);
+    assert.match(String(bridgeCard?.table?.rows?.[0]?.title || ''), /Bridge Draft/);
+    assert.match(String(bridgeCard?.table?.rows?.[0]?.binding_id || ''), /bridge-b/);
+    assert.match(String(bridgeCard?.table?.rows?.[0]?.thread_id || ''), /-/);
+    assert.equal(
+      bridgeCard?.selects?.[0]?.options?.[0]?.callbackData,
+      'cti-thread-select:bridge-binding-1',
+    );
   });
 
   it('maps numeric reasoning aliases to supported effort levels', () => {

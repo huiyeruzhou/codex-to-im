@@ -55,7 +55,14 @@ while [ "$#" -gt 0 ]; do
 done
 
 validate_project_dir() {
-  if [ "$(basename "$PROJECT_DIR")" != "codex-to-im" ]; then
+  if [ ! -f "$PROJECT_DIR/package.json" ] || [ ! -f "$PROJECT_DIR/scripts/hot-update-bridge.sh" ]; then
+    echo "[hot-update] refusing to run outside a codex-to-im project directory" >&2
+    exit 1
+  fi
+
+  local package_name
+  package_name="$(node -e "const fs = require('fs'); const pkg = JSON.parse(fs.readFileSync(process.argv[1], 'utf8')); process.stdout.write(String(pkg.name || ''));" "$PROJECT_DIR/package.json" 2>/dev/null || true)"
+  if [ "$package_name" != "codex-to-im" ]; then
     echo "[hot-update] refusing to run outside a codex-to-im project directory" >&2
     exit 1
   fi

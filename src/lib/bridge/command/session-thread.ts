@@ -387,6 +387,7 @@ function buildThreadCardRefresh(
     return threadDisplay.refreshedBoundThreadsCard(address.channelType, address.chatId, selectedId);
   }
   if (scope === 'global') {
+    const bridgeBindings = threadDisplay.bridgeOnlyBoundThreadCardItems(address.channelType, address.chatId);
     return threadDisplay.refreshedCodexThreadsCard(
       listCommandCodexThreads(MAX_CODEX_THREAD_LIST_LIMIT),
       true,
@@ -394,6 +395,7 @@ function buildThreadCardRefresh(
       address.channelType,
       address.chatId,
       selectedId,
+      bridgeBindings,
     );
   }
   return undefined;
@@ -970,6 +972,8 @@ export async function handleThreadSwitchCommand(options: {
         MAX_CODEX_THREAD_LIST_LIMIT,
         options.msg.address.channelType,
         options.msg.address.chatId,
+        undefined,
+        bridgeBindings,
       ),
       threadTableCardScope: 'global',
     };
@@ -1139,15 +1143,15 @@ export function handleCodexThreadsCommand(options: {
   const cardLimitNotice = decoratedCardSessions && cardLimit !== limit
     ? buildCodexThreadLimitNotice(decoratedCardSessions.length, cardLimit)
     : null;
-  const richCard = decoratedCardSessions
-    ? options.threadDisplay.refreshedCodexThreadsCard(
-        decoratedCardSessions,
-        cardShowAll,
-        cardLimit,
-        options.msg.address.channelType,
-        options.msg.address.chatId,
-      )
-    : undefined;
+  const richCard = options.threadDisplay.refreshedCodexThreadsCard(
+    decoratedCardSessions || [],
+    cardShowAll,
+    cardLimit,
+    options.msg.address.channelType,
+    options.msg.address.chatId,
+    undefined,
+    bridgeBindings,
+  );
   return {
     response: buildCodexThreadsCommandResponse(
       decoratedTextSessions,
