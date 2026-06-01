@@ -452,7 +452,7 @@ describe('bridge-manager resolveCommandAlias', () => {
       true,
       200,
     );
-    assert.match(response, /^本地 Codex 会话（当前显示 1 条，最多 200 条）/);
+    assert.match(response, /^Bridge \/ Codex 会话（当前显示 1 条，Codex 最多 200 条）/);
   });
 
   it('adds a visible notice when the Codex thread text list reaches its limit', () => {

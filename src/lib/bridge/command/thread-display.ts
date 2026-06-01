@@ -1,6 +1,7 @@
 import type { CodexSessionSummary } from '../../../codex/session-index.js';
 import { listBindingsForChat } from '../session-registry.js';
 import type { BridgeStore } from '../host.js';
+import { getBridgeSessionCodexThreadId } from '../display/session-display-query.js';
 import {
   ThreadDisplayService,
   type ThreadTitleOptions,
@@ -140,6 +141,32 @@ export class CommandThreadDisplay {
         originator: display.originator,
       };
     });
+  }
+
+  bridgeOnlyBoundThreadCardItems(channelType: string, chatId: string): BoundThreadCardItem[] {
+    const currentChatBindingsBySessionId = new Map(
+      listBindingsForChat(this.store, channelType, chatId)
+        .map((binding) => [binding.bridgeSessionId, binding]),
+    );
+    return this.store.listSessions()
+      .filter((session) => (
+        session.hidden !== true
+        && session.session_type !== 'draft'
+        && !getBridgeSessionCodexThreadId(session)
+      ))
+      .map((session) => {
+        const binding = currentChatBindingsBySessionId.get(session.id);
+        const display = binding ? this.binding(binding) : this.display.thread('', session.id);
+        return {
+          title: display.title,
+          cwd: display.cwd || session.working_directory,
+          lastActiveAt: display.lastActiveAt || session.updated_at,
+          threadId: '',
+          bindingId: binding ? binding.id : session.id,
+          active: binding?.active !== false && Boolean(binding),
+          originator: binding ? display.originator : 'Bridge',
+        };
+      });
   }
 }
 
